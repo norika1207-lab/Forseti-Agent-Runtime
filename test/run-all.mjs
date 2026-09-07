@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process';
 // capture 排最前面:它是其他五個的資料入口,它壞了後面全部的答案都不算數。
 // integration 排最後:前面每支只證明零件自己對,那支證明它們接得起來。
-const suites = ['conformance', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'runtime', 'integration'];
+const suites = ['conformance', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'runtime', 'integration'];
 let bad = 0;
 for (const s of suites) {
   console.log(`\n──── ${s} ────`);

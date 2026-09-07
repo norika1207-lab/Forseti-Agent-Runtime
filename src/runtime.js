@@ -58,6 +58,7 @@ import {
 } from './thermometer.js';
 import { expandBashEvent } from './shell.js';
 import { buildImportRecords } from './imports.js';
+import { verifyClaim, artifactNullity, summarize as summarizeArtifacts } from './artifact.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -127,6 +128,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     /** 依賴圖。沒有它就算不出改一個檔案的代價。 */
     graph: null,
     graphStats: null,
+    /** 產物驗證結果。這是 heartbeat 的 verified_progress 的唯一合格來源。 */
+    artifacts: [],
+    /** 上一輪心跳時已驗證的產物數,用來算這一輪新增了幾項。 */
+    lastVerifiedMark: 0,
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -537,6 +542,11 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         evidence: mix,
         /** 燒了資源卻零產出的委派。 */
         barren: checkBarrenInvestment(state.investments),
+        /** 宣稱的產物有多少站得住。沒驗過任何東西時 total 為 0。 */
+        artifacts: Object.freeze({
+          ...summarizeArtifacts(state.artifacts),
+          nullity: artifactNullity(state.artifacts),
+        }),
         /** context 幾度。沒讀數就 null,這個量測只有 runtime 做得到。 */
         temperature: state.readings.length
           ? Object.freeze({ ...state.readings.at(-1), zone: zoneOf(state.readings.at(-1)) })
@@ -551,12 +561,43 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           ...(state.anchor ? [] : ['No goal declared; drift is measured against an inferred anchor and is weaker for it']),
           ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
           ...(state.readings.length ? [] : ['No temperature reading; the share of context that is checked evidence is unknown']),
+          ...(state.artifacts.length ? [] : ['No artifact claims verified; idle detection is off because activity is not accepted as proof of progress']),
           ...(state.graph ? [] : ['No dependency graph indexed; the cost of changing a file cannot be computed']),
           ...(state.budget ? [] : ['No context budget set; nothing is tracking what agent output costs the main session']),
           ...(state.opaqueCommands > 0
             ? [`${state.opaqueCommands} shell command(s) were opaque to static analysis; whatever files they touched are invisible here`]
             : []),
         ]),
+      });
+    },
+
+    // ── 產物實在性(規格書第 6 節)──────────────────────
+
+    /**
+     * 驗一個宣稱。宿主去看過之後把觀測傳進來,這裡判斷它夠不夠格。
+     *
+     * 沒去看就傳 null:結果是 UNKNOWN,不是失敗。
+     * 規格書第 1 節:UNKNOWN 不可以被轉換成成功或失敗。
+     *
+     * 這是 verified_progress 的唯一合格來源。心跳的空轉偵測靠它才打得開,
+     * 因為「寫了幾個檔」在規格書 0.2 是明文禁止當進度證據的。
+     */
+    verifyArtifact(claim, observation) {
+      const r = verifyClaim(claim, observation);
+      state.artifacts = [...state.artifacts, Object.freeze({ ...r, at: now(), target: claim.target ?? null })];
+      return r;
+    },
+
+    /**
+     * 產物實在性的整體狀況。
+     *
+     * unchecked_ratio 一定要跟結果一起看:一份「零個被推翻」的報告,
+     * 如果其實八成沒查過,跟一份真的查完都沒事的報告長得一模一樣。
+     */
+    artifactHealth() {
+      return Object.freeze({
+        ...summarizeArtifacts(state.artifacts),
+        nullity: artifactNullity(state.artifacts),
       });
     },
 
@@ -790,8 +831,16 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
 
       // v0.2:不再拿寫入檔案數當產出。規格書 0.2 明令
       // MUST NOT treat activity, tool calls, or file names as proof of progress。
-      // 宿主拿得到驗證資料就傳進來,拿不到就是 null,空轉偵測整個關掉。
-      const verifiedNow = produced ?? null;
+      //
+      // 合格的來源只有一個:經過 verifyArtifact 確認的產物。
+      // 宿主自己傳 produced 也可以,但沒傳而且沒驗過任何產物時就是 null,
+      // 空轉偵測整個關掉並明說 —— 那比拿活動量頂替誠實。
+      let verifiedNow = produced ?? null;
+      if (verifiedNow === null && state.artifacts.length > 0) {
+        const done = state.artifacts.filter((a) => a.verdict === 'VERIFIED').length;
+        verifiedNow = done - state.lastVerifiedMark;
+        state.lastVerifiedMark = done;
+      }
 
       const drift = this.driftCheck({ config });
       const health = captureHealth({
@@ -859,6 +908,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           lastProducedMark: state.lastProducedMark,
           readings: state.readings,
           compactions: state.compactions,
+          artifacts: state.artifacts,
+          lastVerifiedMark: state.lastVerifiedMark,
           contracts: [...state.contracts.values()],
           declaredTurns: state.declaredTurns,
           failures: state.failures,
@@ -899,6 +950,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.lastProducedMark = sig.lastProducedMark ?? 0;
       state.readings = [...(sig.readings ?? [])];
       state.compactions = [...(sig.compactions ?? [])];
+      state.artifacts = [...(sig.artifacts ?? [])];
+      state.lastVerifiedMark = sig.lastVerifiedMark ?? 0;
       state.budget = r.state.budget ?? null;
       state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
       return r;

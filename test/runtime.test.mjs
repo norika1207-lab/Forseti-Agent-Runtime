@@ -754,5 +754,57 @@ t('存檔只留最近的事件,不無限長大', () => {
   assert.ok(!files.includes('old.js'), '一小時前的事件不該留在狀態檔裡');
 });
 
+// ---- 產物實在性接線(規格書第 6 節)----
+t('零位元組的產物宣稱站不住', () => {
+  const r = rt();
+  const v = r.verifyArtifact({ kind: 'FILE_CREATED', target: 'out.md' }, { exists: true, bytes: 0 });
+  assert.equal(v.verdict, 'REFUTED');
+  assert.equal(r.artifactHealth().REFUTED, 1);
+});
+
+t('沒去看就是 UNKNOWN,而且總結會講出來', () => {
+  const r = rt();
+  r.verifyArtifact({ kind: 'FILE_CREATED', target: 'out.md' }, null);
+  const h = r.artifactHealth();
+  assert.equal(h.UNKNOWN, 1);
+  assert.match(h.note, /Zero refutations does not mean everything is fine/);
+});
+
+t('驗過的產物成為心跳的 verified_progress,空轉偵測因此打開', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', -100)]);
+  assert.equal(r.beat().idle_detection_active, false, '沒驗過任何產物時防線是關的');
+
+  r.verifyArtifact({ kind: 'FILE_CREATED', target: 'src/auth/a.js' }, { exists: true, bytes: 900, hash: 'x' });
+  const b = r.beat();
+  assert.equal(b.idle_detection_active, true);
+  assert.equal(b.verified_progress, 1);
+});
+
+t('連續沒有新的已驗證產物,心跳才數得出空轉', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 900, hash: 'x' });
+  r.beat();
+  let last;
+  for (let i = 0; i < 3; i++) last = r.beat();
+  assert.equal(last.verdict, 'STOP');
+});
+
+t('沒驗過產物會列在缺口清單,並說明為什麼防線是關的', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Write', 'a.js', -100)]);
+  assert.ok(r.status().unavailable.some((x) => /idle detection is off/.test(x)));
+});
+
+t('產物驗證結果跨重啟活著', () => {
+  const a = rt();
+  a.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 0 });
+  const b = rt();
+  b.restore(a.save());
+  assert.equal(b.artifactHealth().REFUTED, 1);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

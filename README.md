@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 542 assertions, all green.
+`npm test` → 583 assertions, all green.
 
 </div>
 
@@ -334,6 +334,27 @@ Running the detectors against the transcript that built them found three violati
 
 **The thermometer measured the wrong object.** Run after the fact it reported a comfortable 86.5% checked evidence. That is the transcript's composition, not the live window's, and `thermometer.js` says so in its own opening paragraph. The reading was false comfort, and only running it produced the demonstration.
 
+### `artifact.js` — a filename is not a deliverable
+
+The specification's section 6 opens with the sentence this module exists for: *a file name, a terminal line, a model claim, or a tool-start event is not evidence of completion.* It then pairs each kind of claim with the minimum that would actually verify it.
+
+```
+File created        exists + size above expected minimum + hash or readability
+Code modified       a diff on disk + parser/build/test contract where applicable
+Test passed         the command + exit code + captured output + test identity
+External object     a remote identifier or a receipt
+Task complete       all acceptance evidence linked, no hidden blocker
+Process running     a live process or heartbeat, not historical PID text
+```
+
+**It reads no filesystem.** The host looks, and passes back what it saw. That keeps remote objects verifiable, keeps already-deleted artifacts analysable, and leaves the host in control of whether to spend the IO. No observation supplied means `UNKNOWN` — never failure. Absence of evidence is not evidence of absence, and the spec is explicit that `UNKNOWN` may not be converted into success or failure.
+
+Two distinctions the module refuses to blur. A file that exists at a plausible size is `OBSERVED`, not `VERIFIED`, until something checked its content. And a process claim backed only by earlier `ps` output is `UNKNOWN`: a PID printed ten minutes ago does not prove anything is alive now.
+
+`summarize()` always reports the unchecked ratio alongside the result, because a report showing zero refutations looks identical whether everything was checked and fine, or four fifths of it was never looked at.
+
+**This is also what reopens idle detection.** `heartbeat` v0.2 refuses activity as a proxy for progress, which left it unable to stop a loop on a host with no verification contract. Verified artifacts are the qualifying source: count them, and the check works again — on evidence rather than on motion.
+
 ---
 
 ## Design rules
@@ -389,6 +410,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | Module | Assertions | State |
 |---|---|---|
 | `conformance.js` | 21 | Verified |
+| `artifact.js` | 35 | Verified |
 | `capture.js` | 46 | Verified |
 | `shell.js` | 30 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
@@ -403,7 +425,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 85 | Verified |
+| `runtime.js` | 91 | Verified |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.
