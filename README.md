@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 305 assertions, all green.
+`npm test` → 374 assertions, all green.
 
 </div>
 
@@ -20,7 +20,7 @@ Two agents edit the same file and silently overwrite each other. An agent claims
 
 None of these are model problems. They are runtime problems, and they need runtime answers.
 
-Forseti is a set of answers, each small enough to adopt on its own.
+Forseti is a set of answers, each small enough to adopt on its own. Two of them were not designed at all — they were transcribed from field evidence and then verified against it.
 
 ---
 
@@ -198,6 +198,40 @@ node example/host.mjs
 
 It walks the whole lifecycle and prints what each step returns, including the restart, where a scope held by an agent that may or may not still exist keeps blocking until you confirm.
 
+### `drift.js` — the north star turning south
+
+Every mechanism above assumes you are still building the thing you set out to build. This one checks that assumption.
+
+The first version of this module was wrong, and real data is what showed it. It looked for cliffs: a sharp drop in overlap between adjacent time segments. But drift is *defined* by the absence of a cliff. Every step resembles the last, every step is defensible, and a hundred steps later the work is somewhere else entirely. Measured across a three-month conversation: mean similarity between adjacent segments was 16%, while alignment with the starting point fell from 100% to zero — and not one segment looked like a turn.
+
+So it measures **distance from an anchor**, never distance from the previous step. That correction is written into the source and asserted by a test.
+
+**Drift is not itself a failure.** People change their minds, and that is usually right. What the module separates is an *announced* turn from an unannounced one, and it surfaces abandoned work whose final moment sits next to a failure signal — the shape of escaping a problem rather than deciding to leave it. It does not read anyone's messages to decide what counts as friction; the host supplies those timestamps, because a zero-dependency module doing sentiment analysis would produce exactly the confident, wrong output this repo exists to prevent.
+
+### `provenance.js` — which side of the line the evidence came from
+
+This module's specification was not designed. It was taken from a confession document, one of a series an operator required from the AI systems that had misled them over several months.
+
+One of those documents abstracts six incidents into seven recurring *shapes*, and states plainly that the next session should defend against the shapes rather than the incidents. Three of the seven have unambiguous criteria in an event stream. This implements those three, and names the other four as permanently out of scope rather than as future work — they require semantic judgment, and a semantic judge is precisely the confident, high-error artifact being defended against.
+
+The technical core is a single line from another of those documents:
+
+> I have no reliable boundary between what I actually checked and what I generated, so I pick up my own fabrications and use them as evidence.
+
+That boundary is completely unambiguous in an event stream. Tool results are checked. Assistant text is generated. A subagent's report is *someone else's* check, not yours. Reading back a file you wrote earlier in the same session is your own output returning as evidence. The model cannot see this line; the event stream can. The module answers only which side a claim's evidence came from — never whether it is true, never whether anyone meant to mislead.
+
+The three shapes:
+
+| Shape | Criterion |
+|---|---|
+| Source erasure | A claim names specific files that were never opened first-hand |
+| Scope inflation | A claim covers N items against far fewer actual tool calls |
+| Barren investment | Delegated work burned real resources and produced nothing |
+
+**Validated against the transcript that confession describes.** It flagged the exact moments: a report citing 22 files with zero first-hand reads and six delegations nearby, presented as "every line traced to file:line"; a claimed 288-file review against 9 reads in the preceding window; two further claims of 35 and 200 files against zero reads.
+
+The number worth stopping on: across that entire session, 98.2% of evidence was first-hand. At the four claims that mattered, it was 0%. **No aggregate can find this.** Averages dilute exactly the moments you need, which is why the check runs per claim and why five earlier attempts at session-level statistics found nothing at all.
+
 ---
 
 ## What happened when it met real data
@@ -285,6 +319,8 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `coverage.js` | 30 | Verified |
 | `handoff.js` | 38 | Verified |
 | `persist.js` | 31 | Verified |
+| `drift.js` | 37 | Verified |
+| `provenance.js` | 32 | Verified |
 | `runtime.js` | 26 | Verified |
 | end-to-end | 17 | Verified |
 
