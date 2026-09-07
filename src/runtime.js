@@ -57,6 +57,11 @@ import {
   reading, zoneOf, compactionDelta, curve, advice,
 } from './thermometer.js';
 import { expandBashEvent } from './shell.js';
+import {
+  createCapsule, createBudget, createContract, remainingBudget,
+  previewCapsule, acceptCapsule, rejectCapsule, validateReturnShape,
+  shouldAutoAccept, manualReviewRate, blockedRawTokens,
+} from './capsule.js';
 
 /**
  * 建一個 runtime。
@@ -104,6 +109,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     compactions: [],
     /** 看不透的 shell 命令次數。它們動了什麼看不出來,但看得出來有這件事。 */
     opaqueCommands: 0,
+    /** context 預算。宿主要餵 provider 的真實用量,拿不到就標 ESTIMATED。 */
+    budget: null,
+    /** 契約,以 contract_id 索引。 */
+    contracts: new Map(),
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -502,10 +511,118 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           ...(state.anchor ? [] : ['No goal declared; drift is measured against an inferred anchor and is weaker for it']),
           ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
           ...(state.readings.length ? [] : ['No temperature reading; the share of context that is checked evidence is unknown']),
+          ...(state.budget ? [] : ['No context budget set; nothing is tracking what agent output costs the main session']),
           ...(state.opaqueCommands > 0
             ? [`${state.opaqueCommands} shell command(s) were opaque to static analysis; whatever files they touched are invisible here`]
             : []),
         ]),
+      });
+    },
+
+    // ── context 收銀台(M1)────────────────────────────
+
+    /**
+     * 設定 context 預算。
+     *
+     * source 必須明講是 provider 回報的還是估的。拿不到真值就標 ESTIMATED,
+     * 不准不標也不准假裝是真值 —— 兩者差一個量級的時候,
+     * 所有基於預算的判斷會整個歪掉,而且沒有人會發現。
+     */
+    setBudget(fields) {
+      state.budget = createBudget({ ...fields, measured_at: fields.measured_at ?? now() });
+      return Object.freeze({ ...state.budget, remaining: remainingBudget(state.budget) });
+    },
+
+    /** 登記一份契約。膠囊要符合它的 return_shape 跟 token 上限才收。 */
+    setContract(fields) {
+      const c = createContract(fields);
+      state.contracts.set(c.contract_id, c);
+      return c;
+    },
+
+    /**
+     * 把一份 agent 產出包成膠囊,並且報價。
+     *
+     * 不做這一步的話,agent 的原始輸出會直接灌進主 session 的 context,
+     * 而主 session 的 context 是有限且不可退款的資源。
+     * 報價的意思是:在它進來之前,先看得到它要花多少。
+     */
+    quote(fields) {
+      if (!state.budget) {
+        return Object.freeze({
+          capsule: null,
+          quote: null,
+          note: 'No budget set. Call setBudget() with the provider usage numbers before quoting.',
+        });
+      }
+      const cap = createCapsule({ ...fields, produced_at: fields.produced_at ?? now() });
+      const contract = state.contracts.get(cap.contract_ref) ?? null;
+      // 報價本身就是 PENDING → PREVIEWED 那一步。回傳的膠囊已經是 PREVIEWED,
+      // 這樣呼叫端拿到的東西可以直接 accept 或 reject,不用自己補一步。
+      const p = previewCapsule(cap, state.budget);
+      return Object.freeze({
+        capsule: p.capsule,
+        quote: p.quote,
+        /** 便宜的膠囊自動放行,免得收銀台自己變成新的瓶頸。 */
+        auto: contract ? shouldAutoAccept(cap, state.budget, contract) : false,
+        contract_found: contract !== null,
+      });
+    },
+
+    /**
+     * 收下一份膠囊,扣預算。
+     *
+     * 契約不符會拋錯,那是刻意的。狀態機本身允許「人看過價錢就收下」,
+     * 但 max_return_tokens 是硬上限 —— 超過的東西該先摘要再送,
+     * 不是給人一個「我看過了」的按鈕就放行。所以這裡明確擋。
+     */
+    accept(capsule) {
+      if (!state.budget) throw new TypeError('No budget set; call setBudget() first.');
+      const contract = state.contracts.get(capsule.contract_ref);
+      if (!contract) throw new TypeError(`Unknown contract: ${capsule.contract_ref}`);
+      const shape = validateReturnShape(capsule, contract);
+      if (!shape.ok) {
+        throw new Error(`Capsule violates its contract: ${shape.reasons.join('; ')}`);
+      }
+      const out = acceptCapsule(capsule, state.budget, contract);
+      state.budget = out.budget;
+      state.capsules = [...state.capsules, out.capsule];
+      return out;
+    },
+
+    /**
+     * 退回一份膠囊。原始輸出留在外面,預算不動。
+     * 只能退 quote() 回來的膠囊 —— 狀態機不允許跳過報價直接否決,
+     * 因為沒看過價錢就否決,跟沒看過價錢就收下一樣是盲目的。
+     */
+    reject(capsule) {
+      const c = rejectCapsule(capsule);
+      state.capsules = [...state.capsules, c];
+      return c;
+    },
+
+    /**
+     * 收銀台現在的狀況。
+     *
+     * manual_review_rate 是這個機制有沒有反而變成瓶頸的唯一硬指標:
+     * 人要親自看的比例太高,表示自動放行的門檻設錯了。
+     */
+    register() {
+      if (!state.budget) {
+        return Object.freeze({ budget: null, note: 'No budget set; context spending is not being tracked.' });
+      }
+      const contractsById = Object.fromEntries(state.contracts);
+      return Object.freeze({
+        budget: Object.freeze({ ...state.budget, remaining: remainingBudget(state.budget) }),
+        capsules: state.capsules.length,
+        /**
+         * 收下的 token 進 reserved 而不是 consumed。
+         * consumed 要等 provider 回報才算數 —— 這裡不假裝那件事已經發生。
+         */
+        reserved: state.budget.reserved,
+        manual_review_rate: manualReviewRate(state.capsules, { budget: state.budget, contractsById }),
+        /** 被擋在外面的原始 token 量。這是這個機制實際擋下多少東西的量。 */
+        blocked_raw_tokens: blockedRawTokens(state.capsules),
       });
     },
 
@@ -638,6 +755,7 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         scopes: state.scopes,
         locks: state.locks,
         capsules: state.capsules,
+        budget: state.budget,
         coverages: [...state.coverages.values()],
         stats: state.stats,
         edges: state.edges,
@@ -649,6 +767,7 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           lastProducedMark: state.lastProducedMark,
           readings: state.readings,
           compactions: state.compactions,
+          contracts: [...state.contracts.values()],
           declaredTurns: state.declaredTurns,
           failures: state.failures,
           friction: state.friction,
@@ -686,6 +805,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.lastProducedMark = sig.lastProducedMark ?? 0;
       state.readings = [...(sig.readings ?? [])];
       state.compactions = [...(sig.compactions ?? [])];
+      state.budget = r.state.budget ?? null;
+      state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
       return r;
     },
 

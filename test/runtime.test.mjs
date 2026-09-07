@@ -571,5 +571,93 @@ t('shell 展開的寫入會進佔用範圍的越界偵測', () => {
   assert.deepEqual([...r.closeScope('t').out_of_scope], ['src/secret.js']);
 });
 
+// ---- context 收銀台接線(M1)----
+const BUDGET = { session_id: 's', window_total: 100_000, consumed: 10_000, source: 'PROVIDER_REPORTED' };
+const CONTRACT = { contract_id: 'c1', max_return_tokens: 5000 };
+const CAP = (over = {}) => ({
+  capsule_id: 'cap1', produced_by: 'w1', task_ref: 't1', payload_ref: 'p1',
+  summary: 'done', token_cost: 500, raw_token_size: 50_000, contract_ref: 'c1', ...over,
+});
+
+t('沒設預算就不報價,而且說得出怎麼補', () => {
+  const q = rt().quote(CAP());
+  assert.equal(q.quote, null);
+  assert.match(q.note, /setBudget/);
+});
+
+t('預算的來源必須明講是真值還是估的', () => {
+  assert.throws(() => rt().setBudget({ ...BUDGET, source: undefined }), /PROVIDER_REPORTED or ESTIMATED/);
+});
+
+t('報價:在東西進來之前先看得到它要花多少', () => {
+  const r = rt();
+  r.setBudget(BUDGET);
+  r.setContract(CONTRACT);
+  const q = r.quote(CAP());
+  assert.equal(q.quote.token_cost, 500);
+  assert.equal(q.contract_found, true);
+  assert.ok(q.quote.budget_after < q.quote.budget_before);
+  assert.equal(q.capsule.state, 'PREVIEWED', '報價本身就是看過價錢那一步');
+});
+
+t('收下之後預算真的被扣', () => {
+  const r = rt();
+  r.setBudget(BUDGET);
+  r.setContract(CONTRACT);
+  const before = r.register().budget.remaining;
+  r.accept(r.quote(CAP()).capsule);
+  assert.equal(r.register().budget.remaining, before - 500);
+  assert.equal(r.register().reserved, 500, '進 reserved 不是 consumed:真正花掉要等 provider 回報');
+});
+
+t('退回的膠囊不進 context,預算不動', () => {
+  const r = rt();
+  r.setBudget(BUDGET);
+  r.setContract(CONTRACT);
+  const before = r.register().budget.remaining;
+  r.reject(r.quote(CAP()).capsule);
+  assert.equal(r.register().budget.remaining, before);
+});
+
+t('超過契約上限的膠囊收不下,那是刻意的', () => {
+  const r = rt();
+  r.setBudget(BUDGET);
+  r.setContract(CONTRACT);
+  assert.throws(() => r.accept(r.quote(CAP({ token_cost: 9999 })).capsule), /max_return_tokens/);
+});
+
+t('不認得的契約要拋錯,不默默收下', () => {
+  const r = rt();
+  r.setBudget(BUDGET);
+  assert.throws(() => r.accept(r.quote(CAP({ contract_ref: 'nope' })).capsule), /Unknown contract/);
+});
+
+t('擋下了多少原始 token,算得出來', () => {
+  const r = rt();
+  r.setBudget(BUDGET);
+  r.setContract(CONTRACT);
+  r.accept(r.quote(CAP()).capsule);
+  assert.equal(r.register().blocked_raw_tokens, 49_500, '五萬的原始輸出只放五百進來');
+});
+
+t('沒設預算會出現在缺口清單', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Write', 'a.js', -100)]);
+  assert.ok(r.status().unavailable.some((x) => /No context budget set/.test(x)));
+});
+
+t('預算與契約跨重啟活著', () => {
+  const a = rt();
+  a.setBudget(BUDGET);
+  a.setContract(CONTRACT);
+  a.accept(a.quote(CAP()).capsule);
+  const text = a.save();
+  const b = rt();
+  b.restore(text);
+  assert.equal(b.register().budget.consumed, 10_000, 'consumed 不該被自己改');
+  assert.equal(b.register().reserved, 500);
+  assert.equal(b.register().capsules, 1);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);
