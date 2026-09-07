@@ -47,7 +47,10 @@ export const DEFAULT_CONFIG = Object.freeze({
   silentToleranceMs: 60 * 1000,  // 多久沒有使用者看得見的動靜算沉默
   stagnationFullMs: 30 * 60 * 1000, // 停滯多久算滿分
   retrySimilarity: 0.8,          // 動作相似度門檻
-  healthyOutputChars: 400,       // S3 的健康基線,應由每個使用者自己的歷史推出來
+  // 【已校準】126 = 真實每則輸出字數的 p50(130 份 transcript,n=43246)。
+  // 原本 400,而 p50 只有 126 —— 那會讓一半的正常回覆被判成「輸出壓縮」。
+  // 一個人的資料,不是通用常數。別的團隊請跑 tools/calibrate.mjs 用自己的分佈。
+  healthyOutputChars: 126,
 });
 
 const clamp01 = (x) => (x < 0 ? 0 : (x > 1 ? 1 : x));

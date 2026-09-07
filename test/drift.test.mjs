@@ -41,6 +41,35 @@ t('宿主宣告的目標優先,而且不標成推測', () => {
   assert.equal(a.inferred, false);
   assert.ok(a.topics.has('src/auth'));
 });
+t('目標清不清楚看集中度,不看主題數', () => {
+  // 真實資料:一個 session 平均碰 24 個主題,但前三個常常佔七成。
+  // 用主題數當判準會讓每個 session 都是 AMBIGUOUS,這個功能等於不存在。
+  const focused = [];
+  for (let i = 0; i < 150; i++) focused.push(ev(i < 120 ? 'proj/core/a.js' : `proj/x${i}/b.js`, i));
+  const segs = segment(run(focused.map((e) => e.file_path)), { size: 50 });
+  const a = createAnchor({ segments: segs });
+  assert.ok(a.topics.size > 4, '主題數超過舊門檻');
+  assert.equal(a.goal_state, 'DERIVED', '但集中度夠高,目標是清楚的');
+  assert.ok(a.concentration >= 0.5);
+});
+
+t('真的分散時才是 AMBIGUOUS', () => {
+  const spread = [];
+  for (let i = 0; i < 150; i++) spread.push(`proj/area${i}/sub/f.js`);
+  const segs = segment(run(spread), { size: 50 });
+  const a = createAnchor({ segments: segs });
+  assert.equal(a.goal_state, 'AMBIGUOUS');
+  assert.ok(a.concentration < 0.5);
+});
+
+t('集中度門檻可調', () => {
+  const spread = [];
+  for (let i = 0; i < 150; i++) spread.push(`proj/area${i % 6}/sub/f.js`);
+  const segs = segment(run(spread), { size: 50 });
+  assert.equal(createAnchor({ segments: segs, config: { goalConcentration: 0.9 } }).goal_state, 'AMBIGUOUS');
+  assert.equal(createAnchor({ segments: segs, config: { goalConcentration: 0.1 } }).goal_state, 'DERIVED');
+});
+
 t('沒人宣告時從前幾段推,並且誠實標成推測', () => {
   const segs = segment(run(Array(150).fill('src/auth/a.js')), { size: 50 });
   const a = createAnchor({ segments: segs, warmup: 2 });
@@ -125,24 +154,24 @@ const DAY = 24 * 3600 * 1000;
 // 路徑要夠深,主題才是「在做哪件事」而不是單一檔案
 const abandonEvents = [
   ...Array(30).fill(0).map((_, i) => ({ file_path: 'proj/old/mod/a.js', at: T0 + i * 1000, action: 'WRITE' })),
-  ...Array(30).fill(0).map((_, i) => ({ file_path: 'proj/new/mod/b.js', at: T0 + 30 * DAY + i * 1000, action: 'WRITE' })),
+  ...Array(30).fill(0).map((_, i) => ({ file_path: 'proj/new/mod/b.js', at: T0 + 40 * DAY + i * 1000, action: 'WRITE' })),
 ];
 
 t('密集做過然後長期不碰 = 被放棄', () => {
-  // now 落在新主題還熱的時候:只有舊的算被放棄
-  const out = findAbandoned(abandonEvents, { now: T0 + 33 * DAY });
+  // now 落在新主題還熱的時候:只有舊的算被放棄(校準後的門檻是 13 天)
+  const out = findAbandoned(abandonEvents, { now: T0 + 45 * DAY });
   assert.equal(out.length, 1);
   assert.equal(out[0].topic, 'proj/old/mod');
   assert.equal(out[0].writes, 30);
 });
 
 t('還在做的不算被放棄', () => {
-  const out = findAbandoned(abandonEvents, { now: T0 + 30 * DAY + 60_000 });
+  const out = findAbandoned(abandonEvents, { now: T0 + 40 * DAY + 60_000 });
   assert.deepEqual(out.map((x) => x.topic), ['proj/old/mod']);
 });
 
 t('兩個都沉默夠久時,兩個都算', () => {
-  assert.equal(findAbandoned(abandonEvents, { now: T0 + 40 * DAY }).length, 2);
+  assert.equal(findAbandoned(abandonEvents, { now: T0 + 60 * DAY }).length, 2);
 });
 
 t('只碰過幾次的不算,那是路過不是投入', () => {
@@ -154,27 +183,27 @@ t('沒有 now 就拋錯,不拿系統時鐘偷偷補', () =>
   assert.throws(() => findAbandoned(abandonEvents, {}), /now is required/));
 
 t('放棄本身不下判斷,只列事實', () => {
-  const [a] = findAbandoned(abandonEvents, { now: T0 + 33 * DAY });
+  const [a] = findAbandoned(abandonEvents, { now: T0 + 45 * DAY });
   for (const k of ['events', 'writes', 'active_ms', 'silent_ms']) assert.ok(k in a);
   assert.ok(!('failed' in a) && !('is_escape' in a), '判斷留給 escapeSignals');
 });
 
 // ---- 逃逸訊號 ----
 t('放棄點旁邊有失敗訊號 = 逃逸的形狀', () => {
-  const ab = findAbandoned(abandonEvents, { now: T0 + 33 * DAY });
+  const ab = findAbandoned(abandonEvents, { now: T0 + 45 * DAY });
   const out = escapeSignals(ab, { failures: [ab[0].last_touch + 60_000] });
   assert.equal(out[0].failures_near_abandonment, 1);
   assert.equal(out[0].looks_like_escape, true);
 });
 
 t('做完了就換下一件:附近沒有任何失敗訊號', () => {
-  const ab = findAbandoned(abandonEvents, { now: T0 + 33 * DAY });
+  const ab = findAbandoned(abandonEvents, { now: T0 + 45 * DAY });
   const out = escapeSignals(ab, { failures: [T0 + 99 * DAY] });
   assert.equal(out[0].looks_like_escape, false);
 });
 
 t('使用者的不滿也算訊號,但時間點由宿主提供', () => {
-  const ab = findAbandoned(abandonEvents, { now: T0 + 33 * DAY });
+  const ab = findAbandoned(abandonEvents, { now: T0 + 45 * DAY });
   assert.equal(escapeSignals(ab, { friction: [ab[0].last_touch] })[0].friction_near_abandonment, 1);
 });
 

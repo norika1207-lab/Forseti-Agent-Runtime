@@ -66,7 +66,19 @@ export const DEFAULT_CONFIG = Object.freeze({
    * 【七天不是實測值。】它是一個保守的起點,宿主應該依專案節奏調整:
    * 週更的專案七天太短,日更的專案七天太長。
    */
-  abandonedAfterMs: 7 * 24 * 60 * 60 * 1000,
+  // 【已校準】13 天 = 真實「主題最後接觸到 session 結束」的 p50
+  // (130 份 transcript,n=6443)。原本 7 天,而 p50 就有 13 天 ——
+  // 那會把一半的正常主題都判成被放棄。
+  // 一個人的資料,不是通用常數。別的團隊請跑 tools/calibrate.mjs 用自己的分佈。
+  abandonedAfterMs: 13 * 24 * 60 * 60 * 1000,
+  // 錨點窗口裡前三個主題要佔多少比例,才算目標清楚。
+  //
+  // 原本用「主題數超過 4 就 AMBIGUOUS」,而真實主題數 p50 是 24、p90 是 180 ——
+  // 那個判準會讓幾乎每個 session 都判成目標模糊,等於這個功能永遠不作用。
+  // 主題數本來就不是好判準:一個專案碰很多目錄是正常的。
+  // 改看集中度:前三個佔大部分 = 說得出在做什麼,分散在幾十個上 = 說不出來。
+  // 0.5 這個門檻是判斷,不是從資料算出來的。
+  goalConcentration: 0.5,
   /** 放棄點前後多久內的失敗訊號算相關 */
   signalWindowMs: 2 * 60 * 60 * 1000,
 });
@@ -119,12 +131,13 @@ export function segment(events, { size = 50, depth = 3 } = {}) {
  *
  * 推出來的錨點會標 inferred: true,不冒充成宣告過的目標。
  */
-export function createAnchor({ declared = null, segments = [], warmup = 3 } = {}) {
+export function createAnchor({ declared = null, segments = [], warmup = 3, config = DEFAULT_CONFIG } = {}) {
   if (declared && declared.length) {
     return Object.freeze({
       topics: Object.freeze(new Set(declared)),
       inferred: false,
       goal_state: 'EXPLICIT',
+      concentration: 1,
       warmup_segments: 0,
     });
   }
@@ -134,16 +147,21 @@ export function createAnchor({ declared = null, segments = [], warmup = 3 } = {}
   }
   const topics = new Set(acc.keys());
 
-  // 推出來的錨點分兩種情況,而且它們允許的判斷不同。
-  // 前幾段就在做很多不同的事,代表同時有多個說得通的目標,
-  // 那時候不准下硬結論 —— 規格書 4.1 的 AMBIGUOUS。
+  // 目標清不清楚,看集中度不看主題數。真實主題數 p50 是 24,
+  // 用數量當判準會讓每個 session 都是 AMBIGUOUS。
+  const total = [...acc.values()].reduce((a, b) => a + b, 0);
+  const top3 = [...acc.values()].sort((a, b) => b - a).slice(0, 3).reduce((a, b) => a + b, 0);
+  const concentration = total === 0 ? 0 : top3 / total;
+  const threshold = config?.goalConcentration ?? DEFAULT_CONFIG.goalConcentration;
   const state = topics.size === 0 ? 'MISSING'
-    : (topics.size > 4 ? 'AMBIGUOUS' : 'DERIVED');
+    : (concentration < threshold ? 'AMBIGUOUS' : 'DERIVED');
 
   return Object.freeze({
     topics: Object.freeze(topics),
     inferred: true,
     goal_state: state,
+    /** 前三個主題佔了多少。這是 goal_state 的依據,要看得到。 */
+    concentration,
     warmup_segments: Math.min(warmup, segments.length),
   });
 }

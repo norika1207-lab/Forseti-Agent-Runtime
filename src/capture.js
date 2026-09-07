@@ -53,7 +53,10 @@ export const DEFAULT_CONFIG = Object.freeze({
    * 推出來的，不是量出來的。宿主如果拿得到明確的回合結束訊號，
    * 應該直接用 markTurnEnd() 而不是靠這個推。
    */
-  turn_gap_ms: 30_000,
+  // 【已校準】230 秒 = 真實工具間隔的 p90(130 份 transcript,n=53054)。
+  // 原本 30 秒,而真實 p50 就有 21.8 秒 —— 那會把大量同一輪的動作切成不同輪。
+  // 一個人的資料,不是通用常數。別的團隊請跑 tools/calibrate.mjs 用自己的分佈。
+  turn_gap_ms: 230_000,
 });
 
 // ---------------------------------------------------------------------------
@@ -125,7 +128,9 @@ export function defaultAdapter(raw) {
   const input = raw.input ?? raw.tool_input ?? raw.params ?? {};
   const file_path = raw.file_path ?? input.file_path ?? input.path
     ?? input.notebook_path ?? input.file ?? null;
-  if (!file_path) return { skip: 'NO_FILE' };
+  // 真實資料裡有工具把 file_path 傳成陣列或物件。非字串一律當成沒有檔案,
+  // 不然它會一路流到下游,直到某個 .split() 才炸,而且是在別人的機器上。
+  if (typeof file_path !== 'string' || !file_path) return { skip: 'NO_FILE' };
 
   let action;
   if (WRITE_TOOLS.test(tool)) action = 'WRITE';

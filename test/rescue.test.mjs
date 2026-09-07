@@ -62,7 +62,8 @@ t('空陣列是有效值,不算缺', () => {
 
 // ---- 沉默執行 ----
 t('完全沒有心跳時,使用者整段時間都在猜', () => {
-  const r = silentExecutionRatio([], { activeFrom: T, activeTo: T + 10 * M });
+  // 窗口要遠大於校準後的心跳間隔(230 秒),不然扣掉容忍值之後比例算不出來
+  const r = silentExecutionRatio([], { activeFrom: T, activeTo: T + 60 * M });
   assert.ok(r.ratio > 0.8);
   assert.match(r.note, /could not tell alive from hung/);
 });
@@ -75,9 +76,10 @@ t('心跳夠密時沉默比接近零', () => {
 });
 
 t('長沉默會被數成事件', () => {
-  const r = silentExecutionRatio([T + 9 * M], { activeFrom: T, activeTo: T + 10 * M });
+  // 校準後一次沉默事件的門檻是 10 分鐘
+  const r = silentExecutionRatio([T + 15 * M], { activeFrom: T, activeTo: T + 20 * M });
   assert.ok(r.episodes >= 1);
-  assert.ok(r.longest_ms >= 9 * M);
+  assert.ok(r.longest_ms >= 15 * M);
 });
 
 t('沒有執行區間就直說,不硬算', () =>

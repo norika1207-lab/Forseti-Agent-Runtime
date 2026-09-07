@@ -104,6 +104,14 @@ t('無時間戳 → NO_TIMESTAMP', () =>
 t('沒動到檔案 → NO_FILE', () =>
   assert.equal(defaultAdapter({ name: 'Bash', attributed_agent: 'a', at: 1, input: {} }).skip, 'NO_FILE'));
 
+t('真實資料抓到的:file_path 不是字串時當成沒有檔案', () => {
+  // 有工具把它傳成陣列或物件。放行的話會一路流到下游,
+  // 直到某個 .split() 才炸,而且是在別人的機器上。
+  for (const bad of [['a.js'], { path: 'a.js' }, 123]) {
+    assert.equal(defaultAdapter(raw({ input: { file_path: bad } })).skip, 'NO_FILE');
+  }
+});
+
 // ---- normalizeStream ----
 t('被跳過的事件一律計數並附原因，不靜默丟棄', () => {
   const r = normalizeStream([raw(), 'garbage', { name: 'Read', at: 1, input: { file_path: 'x' } }]);
@@ -226,8 +234,15 @@ t('同一人連續動作算同一輪', () => {
 });
 
 t('間隔超過門檻就切成兩輪', () => {
-  const { events } = normalizeStream([raw({ at: 1000 }), raw({ at: 1000 + 60_000 })]);
+  // 校準後的門檻是 230 秒(真實工具間隔的 p90)
+  const { events } = normalizeStream([raw({ at: 1000 }), raw({ at: 1000 + 300_000 })]);
   assert.equal(inferTurns(events).length, 2);
+});
+
+t('校準後的門檻不會把正常的思考間隔切成新的一輪', () => {
+  // 真實工具間隔 p50 是 21.8 秒。舊的 30 秒門檻會把它切開。
+  const { events } = normalizeStream([raw({ at: 1000 }), raw({ at: 1000 + 60_000 })]);
+  assert.equal(inferTurns(events).length, 1, '一分鐘的間隔仍在同一輪內');
 });
 
 t('不同人的動作不會混成同一輪', () => {
@@ -247,8 +262,8 @@ t('回合邊界一律標明是推算的，不可冒充 provider 給的事實', (
 
 t('門檻可覆寫，不是硬編碼', () => {
   const { events } = normalizeStream([raw({ at: 1000 }), raw({ at: 1000 + 40_000 })]);
-  assert.equal(inferTurns(events).length, 2);
-  assert.equal(inferTurns(events, { turn_gap_ms: 120_000 }).length, 1);
+  assert.equal(inferTurns(events).length, 1, '校準後的預設門檻涵蓋這個間隔');
+  assert.equal(inferTurns(events, { turn_gap_ms: 30_000 }).length, 2, '調回舊值就切開');
 });
 
 t('一輪記下碰過哪些檔，M2 判斷要不要往下送就靠這個', () => {

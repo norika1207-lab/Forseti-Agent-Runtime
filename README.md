@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 736 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 741 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -443,6 +443,27 @@ AT-RSC-01   critical score from one weak heuristic → no hard action
 
 Three scenarios in the spec have an interface half this repo does not build — the desktop sidecar, inline annotation, and rescue card. The tests cover the judgment underneath those surfaces, and the suite says so in its own output rather than quietly reporting ten out of ten.
 
+### Calibration against 130 real transcripts
+
+Section 15 of the spec lists ten things that must be fitted to data rather than guessed, and the constants in this repo were engineering defaults. `tools/calibrate.mjs` reads a transcript directory and reports the distributions.
+
+Run on 130 real transcripts, it overturned five of six:
+
+| Constant | Was | Real p50 | Real p90 | Now |
+|---|---|---|---|---|
+| Turn gap | 30s | 21.8s | 3.8m | 230s (p90) |
+| Output baseline | 400 chars | 126 | 673 | 126 (p50) |
+| Heartbeat interval | 60s | — | 3.8m | 230s (p90) |
+| Abandonment | 7 days | 13 days | 86 days | 13 days (p50) |
+| Ambiguous-goal test | >4 topics | 24 topics | 180 | replaced |
+| Shell opacity | — | 55% | 82% | (bounds everything) |
+
+Two of those were doing active harm. A 7-day abandonment threshold flags half of all normal topics as abandoned — the median topic sits untouched for 13 days. And the ambiguous-goal rule fired above four topics while the median session touches 24, meaning it fired essentially always: the entire GoalState gate had been passing `AMBIGUOUS` on nearly every real session, and the drift verdict was permanently `null`.
+
+**The topic-count rule was not just mistuned, it was the wrong measurement.** A project touching many directories is normal. What distinguishes a clear goal from a muddled one is concentration: on this repo's own session the top three topics hold 72% of activity across 35 distinct topics. Counting topics said AMBIGUOUS; measuring concentration says DERIVED, and DERIVED is right — the direction here was clear and changed deliberately several times.
+
+**These numbers are one person's working rhythm, not universal constants.** Every calibrated field says so in its own comment and points at the tool. Adopting another team's distribution is only marginally better than guessing.
+
 ---
 
 ## Design rules
@@ -503,7 +524,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `windows.js` | 25 | Verified |
 | `rescue.js` | 27 | Verified |
 | `intervention.js` | 31 | Verified |
-| `capture.js` | 46 | Verified |
+| `capture.js` | 47 | Verified |
 | `shell.js` | 33 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
 | `imports.js` | 28 | Verified |
@@ -513,7 +534,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `coverage.js` | 30 | Verified |
 | `handoff.js` | 38 | Verified |
 | `persist.js` | 31 | Verified |
-| `drift.js` | 37 | Verified |
+| `drift.js` | 40 | Verified |
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
