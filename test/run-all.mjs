@@ -1,6 +1,6 @@
 // 一次跑完全部模組的測試。任何一支非零退出就整體失敗。
 import { execFileSync } from 'node:child_process';
-const suites = ['cost', 'capsule', 'admission', 'coverage'];
+const suites = ['cost', 'capsule', 'admission', 'coverage', 'handoff'];
 let bad = 0;
 for (const s of suites) {
   console.log(`\n──── ${s} ────`);

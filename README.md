@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 92 assertions, all green.
+`npm test` → 130 assertions, all green.
 
 </div>
 
@@ -20,7 +20,7 @@ Two agents edit the same file and silently overwrite each other. An agent claims
 
 None of these are model problems. They are runtime problems, and they need runtime answers.
 
-Forseti is four such answers, each small enough to adopt on its own.
+Forseti is five such answers, each small enough to adopt on its own.
 
 ---
 
@@ -105,6 +105,27 @@ Depth has four levels (`MENTIONED` → `READ_PARTIAL` → `READ_FULL` → `EDITE
 
 `is_upper_bound` is permanently true and cannot be turned off: a session that compacted remembers less than it read, and this module has no way to know how much less.
 
+### `handoff.js` — stop being the wire
+
+Agent A finishes. Its output needs to reach Agent B. Only you can carry it. Four agents running at full speed all bottleneck on whether you click a button.
+
+This module turns that one-time click into a standing rule:
+
+```js
+planHandoff({ fromNode: 'PM', edges, chain: ['PM'] })
+// → { dispatch: [...], gates: [...], blocked: [...] }
+```
+
+Three edge types: send straight through, hold at a gate for a human, or send and let it come back once.
+
+**The loop guard is not optional.** Every rule-triggered run carries a chain of nodes it has passed through. Before forwarding, three checks: is the target already in the chain, is the chain too long, is the target already busy. Blocked hops are always counted, never silently dropped.
+
+The roundtrip counter has a bug in it that only a real run could find. The obvious implementation counts how many times the target appears in the chain — but the origin is in the chain too, so `A→B→A→B` runs one hop further than "at most one round trip" claims, spending real money on that extra hop. Counting *transitions* instead of *appearances* fixes it. The reason is written into the source, and a test asserts that explanation is still there.
+
+One more thing that only showed up in production: **if the upstream turn produced nothing actionable, no edge fires.** A connectivity test that answers "ack" used to get auto-forwarded, and the downstream agent would reply "there is no executable task here" — twice in a row, both sides burning tokens on nothing.
+
+`automationRate()` is the one number that matters: how much of your handoff traffic is rules versus your own hands. It should climb. If it doesn't, this mechanism isn't earning its keep.
+
 ---
 
 ## Design rules
@@ -119,7 +140,7 @@ These are enforced by the test suite. Deleting an honesty annotation makes a tes
 
 **Every returned object is frozen.** State changes go through the API or not at all.
 
-**Zero dependencies.** Three of the four modules import nothing at all. The fourth imports one sibling.
+**Zero dependencies.** Four of the five modules import nothing at all. The fifth imports one sibling.
 
 ---
 
@@ -138,6 +159,7 @@ import { computeCostVector } from './src/cost.js';
 import { decideAdmission }   from './src/admission.js';
 import { handoffDelta }      from './src/coverage.js';
 import { previewCapsule }    from './src/capsule.js';
+import { planHandoff }       from './src/handoff.js';
 ```
 
 Each module works standalone. Adopt one, ignore the rest.
@@ -154,10 +176,11 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `capsule.js` | 18 | Verified |
 | `admission.js` | 28 | Verified |
 | `coverage.js` | 30 | Verified |
+| `handoff.js` | 38 | Verified |
 
 **Honest about what's missing.** These are pure functions with no input source. Nothing yet feeds them a live event stream, nothing persists their state across restarts, and nothing calls them at dispatch time. Two constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window) are documented as unmeasured rather than claimed.
 
-A fifth mechanism, persistent handoff rules, is specified but not yet extracted into this repo.
+`handoff.js` is the one module here whose logic ran in production before being extracted. Nine of its assertions are regression baselines carried over from that environment, including the roundtrip counter fix.
 
 ---
 
