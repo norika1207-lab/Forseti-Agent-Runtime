@@ -10,6 +10,8 @@ Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
 </div>
 
+**New here?** [QUICKSTART.md](QUICKSTART.md) — clone to running against your own transcripts in five minutes.
+
 ---
 
 ## The problem
