@@ -50,6 +50,9 @@ import {
   originMix, checkSourceErasure, checkScopeInflation, checkBarrenInvestment, audit,
   SHAPES, OUT_OF_SCOPE,
 } from './provenance.js';
+import {
+  createBeatState, planBeat, judgeBeat, applyBeat, nextInterval, dispatchPlan,
+} from './heartbeat.js';
 
 /**
  * 建一個 runtime。
@@ -87,6 +90,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
      * 所以這裡另外留一份,不經過採集層的檔案篩選。
      */
     toolCalls: [],
+    /** 心跳狀態。空轉計數要跨輪活著,不然「連續空轉」永遠數不到。 */
+    beat: createBeatState(),
+    /** 上一輪心跳時的產出基準,用來算這一輪產出了什麼。 */
+    lastProducedMark: 0,
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -467,6 +474,70 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       });
     },
 
+    // ── 心跳(M9)──────────────────────────────────────
+
+    /**
+     * 跑一輪心跳。宿主的排程器叫它,它不自己排程。
+     *
+     * 回傳裡有三件事:這一輪的結論、下一次該多久之後再來、
+     * 以及要派哪些 agent 去查。派出去的東西走 recordInvestment,
+     * 沒交東西下一輪就會被零產出偵測抓到,這條迴路是閉的。
+     *
+     * @param {object} opts
+     * @param {number} opts.produced 這一輪實際產出了什麼(宿主定義單位)。
+     *   不給的話用「自上次心跳以來寫入的檔案數」當代理值。
+     * @param {string[]} opts.agents 現在有哪些 agent 可派
+     */
+    beat({ produced = null, agents = [], config = {} } = {}) {
+      const at = now();
+      const plan = planBeat(state.beat, {
+        hasGoal: state.anchor !== null,
+        hasSignals: state.failures.length > 0 || state.friction.length > 0,
+      });
+
+      // 產出的代理值:自上次心跳以來,實際寫入的檔案數。
+      // 這是刻意選的:寫了東西才算做了事,講了話不算。
+      const writesNow = state.events.filter((e) => e.action === 'WRITE').length;
+      const producedNow = produced ?? (writesNow - state.lastProducedMark);
+      state.lastProducedMark = writesNow;
+
+      const drift = this.driftCheck({ config });
+      const health = captureHealth({
+        total: state.capture.total,
+        skipped: state.capture.skipped,
+        skipped_by_reason: state.capture.skipped_by_reason,
+      });
+      const barren = checkBarrenInvestment(state.investments, config.provenance);
+
+      const judged = judgeBeat({
+        capture_rate: health.capture_rate,
+        drift_level: drift.level,
+        drift_unannounced: drift.is_unannounced ?? false,
+        barren_count: barren.length,
+        new_provenance: 0,   // 宿主要查宣稱的話自己叫 checkClaim,心跳不猜有哪些宣稱
+        produced: producedNow,
+      }, state.beat, config.heartbeat);
+
+      state.beat = applyBeat(state.beat, plan, judged, at);
+
+      return Object.freeze({
+        beat: plan.beat,
+        checked: plan.checks,
+        weakened: plan.weakened,
+        verdict: judged.verdict,
+        reasons: judged.reasons,
+        note: judged.note,
+        produced: producedNow,
+        barren_streak: judged.barren_streak,
+        next: nextInterval(judged, config.interval),
+        dispatch: dispatchPlan(judged, { available: agents }),
+        drift,
+      });
+    },
+
+    /** 心跳的歷史。連續空轉幾輪、上一輪結論是什麼,看這裡。 */
+    beatLog() { return state.beat; },
+
     /** 存檔用的字串。宿主自己決定放哪裡。 */
     save() {
       return serialize(createSnapshot({
@@ -480,6 +551,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         // 北極星必須跨重啟活著。忘了目標之後,飄移就再也量不出來了。
         goal: state.anchor ? { topics: [...state.anchor.topics], inferred: state.anchor.inferred } : null,
         signals: {
+          beat: state.beat,
+          lastProducedMark: state.lastProducedMark,
           declaredTurns: state.declaredTurns,
           failures: state.failures,
           friction: state.friction,
@@ -513,6 +586,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.friction = [...(sig.friction ?? [])];
       state.selfWritten = sig.selfWritten instanceof Set ? new Set(sig.selfWritten) : new Set(sig.selfWritten ?? []);
       state.investments = [...(sig.investments ?? [])];
+      state.beat = sig.beat ?? createBeatState();
+      state.lastProducedMark = sig.lastProducedMark ?? 0;
       return r;
     },
 

@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 374 assertions, all green.
+`npm test` → 433 assertions, all green.
 
 </div>
 
@@ -256,6 +256,30 @@ node tools/analyze-transcripts.mjs ~/.claude/projects/<your-project>
 
 Everything stays local. It reports your capture rate, how many of your shell commands are opaque, whether any two of your sessions ever wrote the same file at the same moment, and which of them are paying twice to read the same code.
 
+### `heartbeat.js` — the checks wake themselves
+
+Everything above waits to be asked. That puts the last line of defence on the user remembering to check, and the user is the party being kept in the dark.
+
+This lets the checks wake on their own: schedule a beat, run one round, speak only if something tripped, otherwise stay quiet. It never schedules anything itself — no timers, no clock reads, asserted by a test. The host owns the scheduler; this module answers what to check and whether the result is worth waking someone for.
+
+**One rule is why this module exists.** A confession records more than thirteen consecutive wake-ups that produced nothing, each reporting "scheduled the next wake-up" as evidence of ongoing work. The schedule had become a stand-in for progress.
+
+So every beat must produce something, consecutive empty beats are counted, and hitting the limit returns `STOP` rather than another interval:
+
+```js
+{ verdict: 'STOP',
+  reasons: ['3 beats in a row produced nothing. A scheduled wake-up is not
+             progress; stop the loop and say what is actually blocked.'],
+  next: { delay_ms: null, stop: true,
+          reason: 'Continuing would burn budget to look busy.' } }
+```
+
+Production is measured as files actually written, not turns taken. Talking is not doing.
+
+`dispatchPlan()` sends agents after findings, and what they produce returns through the same investment path the barren-run detector watches — so an agent dispatched and never delivering is caught on the next beat. The loop is closed. Findings with no matching agent are listed as `unhandled` rather than dropped.
+
+The empty-beat counter is persisted. Reset it on restart and the loop can never stop itself.
+
 ---
 
 ## Design rules
@@ -321,10 +345,11 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `persist.js` | 31 | Verified |
 | `drift.js` | 37 | Verified |
 | `provenance.js` | 32 | Verified |
-| `runtime.js` | 26 | Verified |
+| `heartbeat.js` | 31 | Verified |
+| `runtime.js` | 53 | Verified |
 | end-to-end | 17 | Verified |
 
-**Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()` or forwarded work on `completeTurn()`. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. `cost.js` also still has no input source: nothing here builds an import graph yet.
+**Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()`, forwarded work on `completeTurn()`, or stopped a loop on a `STOP` verdict. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. `cost.js` also still has no input source: nothing here builds an import graph yet.
 
 `handoff.js` and `capture.js` carry logic that ran in production before being extracted. Nine of handoff's assertions are regression baselines from that environment.
 

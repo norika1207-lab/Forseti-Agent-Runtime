@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRuntime } from '../src/runtime.js';
 import { createEdge } from '../src/handoff.js';
+import { VERDICTS as VERD } from '../src/heartbeat.js';
 
 let pass = 0, fail = 0;
 function t(name, fn) {
@@ -395,6 +396,95 @@ t('北極星跨重啟活著,忘了目標飄移就永遠量不出來', () => {
   assert.deepEqual([...b.inspect().anchor.topics], ['src/auth']);
   assert.equal(b.inspect().anchor.inferred, false);
   assert.ok(b.inspect().self_written.includes('src/auth/x.js'), '自己寫過什麼也要活過重啟');
+});
+
+// ---- 心跳接線(M9)----
+t('跑一輪心跳,拿回結論跟下次間隔', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', 0)]);
+  const b = r.beat();
+  assert.equal(b.beat, 1);
+  assert.ok(b.checked.includes('capture'));
+  assert.ok(VERD.includes(b.verdict));
+  assert.ok(b.next.delay_ms > 0 || b.next.stop);
+});
+
+t('產出用「寫了幾個檔」當代理值:講話不算做事', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', 0), ev('w1', 'Write', 'src/auth/b.js', 10)]);
+  assert.equal(r.beat().produced, 2);
+  // 第二輪沒有新寫入,產出就是 0
+  assert.equal(r.beat().produced, 0);
+});
+
+t('連續空轉到上限,心跳回 STOP 而不是排下一輪', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Read', 'src/auth/a.js', 0)]);
+  let last;
+  for (let i = 0; i < 3; i++) last = r.beat();
+  assert.equal(last.verdict, 'STOP');
+  assert.equal(last.next.stop, true);
+  assert.equal(last.next.delay_ms, null);
+  assert.ok(last.reasons.some((x) => /not progress/.test(x)));
+});
+
+t('有產出就把空轉計數歸零,不會誤停', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Read', 'src/auth/a.js', 0)]);
+  r.beat(); r.beat();
+  r.ingest([ev('w1', 'Write', 'src/auth/new.js', 100)]);
+  const b = r.beat();
+  assert.equal(b.barren_streak, 0);
+  assert.notEqual(b.verdict, 'STOP');
+});
+
+t('零產出的委派會讓心跳叫人', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', 0)]);
+  r.recordInvestment({ id: 'wf1', agents: 8 });
+  r.closeInvestment('wf1', []);
+  const b = r.beat();
+  assert.equal(b.verdict, 'WAKE');
+  assert.ok(b.reasons.some((x) => /produced nothing/.test(x)));
+});
+
+t('心跳依結論派工,派出去的走同一條投入路徑', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', 0)]);
+  r.recordInvestment({ id: 'wf1', agents: 8 });
+  r.closeInvestment('wf1', []);
+  const b = r.beat({ agents: ['investment-audit'] });
+  assert.deepEqual(b.dispatch.dispatch.map((x) => x.agent), ['investment-audit']);
+});
+
+t('沒有可派的 agent 時要講,不靜默略過', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', 0)]);
+  r.recordInvestment({ id: 'wf1', agents: 8 });
+  r.closeInvestment('wf1', []);
+  const b = r.beat({ agents: [] });
+  assert.equal(b.dispatch.dispatch.length, 0);
+  assert.ok(b.dispatch.unhandled.length > 0);
+});
+
+t('空轉計數跨重啟活著,不然連續空轉永遠數不到', () => {
+  const a = rt();
+  a.setGoal(['src/auth']);
+  a.ingest([ev('w1', 'Read', 'src/auth/a.js', 0)]);
+  a.beat(); a.beat();
+  const text = a.save();
+
+  const b = rt();
+  b.restore(text);
+  assert.equal(b.beatLog().barren_streak, 2);
+  assert.equal(b.beat().verdict, 'STOP', '重啟不該讓計數歸零,那等於永遠停不下來');
 });
 
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
