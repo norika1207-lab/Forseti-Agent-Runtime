@@ -72,6 +72,15 @@ import {
  * @param {() => number} [p.now]  拿現在時間。預設用系統時鐘,測試時請注入。
  * @param {object} [p.config]     各模組的設定覆寫,依模組名分組
  */
+/**
+ * 存檔保留多久的事件。
+ * 【十分鐘沒有實測校準。】它只需要比最長的時間窗寬就夠,
+ * 目前最長的是撞車偵測的十五秒。留寬一點是為了讓宿主自己調窗口時不會突然失效。
+ */
+const EVENT_RETENTION_MS = 10 * 60 * 1000;
+/** 存檔最多留幾筆事件。狀態檔不該無限長大。 */
+const MAX_KEPT_EVENTS = 2000;
+
 export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
   const state = {
     events: [],        // 中性事件,累積用
@@ -224,6 +233,32 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         candidateFiles, importCounts, graph,
         config: config.admission,
       });
+    },
+
+    /**
+     * 最近有誰寫過這個檔案。
+     *
+     * 這是不靠顯式宣告的撞車偵測。宿主如果是 hook 這種無狀態的短命程序,
+     * 沒有人會去 openScope,但「最近誰動過這個檔」在事件流裡一直都在。
+     * 真實資料上唯一抓到的一次跨 session 撞車就是這樣看到的:
+     * 兩邊在十幾秒內寫同一個協調檔。
+     *
+     * @returns {Array<{agent_id, at, seconds_ago}>} 不含自己,最近的排前面
+     */
+    recentWritersOf(file, { windowMs = 15_000, excludeAgent = null, at = null } = {}) {
+      const t = at ?? now();
+      const hits = state.events.filter((e) =>
+        e.action === 'WRITE' && e.file_path === file &&
+        e.at <= t && e.at >= t - windowMs &&
+        (excludeAgent === null || e.agent_id !== excludeAgent));
+      const seen = new Map();
+      for (const e of hits) {
+        const prev = seen.get(e.agent_id);
+        if (!prev || e.at > prev.at) seen.set(e.agent_id, e);
+      }
+      return Object.freeze([...seen.values()]
+        .sort((a, b) => b.at - a.at)
+        .map((e) => Object.freeze({ agent_id: e.agent_id, at: e.at, seconds_ago: (t - e.at) / 1000 })));
     },
 
     /** 登記一段佔用。requestWrite 放行之後才做。 */
@@ -812,6 +847,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         coverages: [...state.coverages.values()],
         stats: state.stats,
         edges: state.edges,
+        // 只留最近的事件。撞車偵測只看得到最近幾十秒,而狀態檔不該無限長大。
+        // 保留期比任何一個時間窗都寬,但不是全部歷史 —— 那是 transcript 的工作。
+        events: state.events.filter((e) => e.at >= now() - EVENT_RETENTION_MS).slice(-MAX_KEPT_EVENTS),
         at: now(),
         // 北極星必須跨重啟活著。忘了目標之後,飄移就再也量不出來了。
         goal: state.anchor ? { topics: [...state.anchor.topics], inferred: state.anchor.inferred } : null,
@@ -845,6 +883,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.capsules = [...(r.state.capsules ?? [])];
       state.edges = [...(r.state.edges ?? [])];
       state.stats = r.state.stats ?? createStats();
+      state.events = [...(r.state.events ?? [])];
+      state.toolCalls = state.events.map((e) => ({ at: e.at, name: e.tool, file_path: e.file_path }));
       state.coverages = new Map((r.state.coverages ?? []).map((c) => [c.agent_id, c]));
       const g = r.state.goal;
       state.anchor = g ? createAnchor({ declared: g.inferred ? null : g.topics }) : null;

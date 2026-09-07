@@ -1,0 +1,68 @@
+# Forseti as a Claude Code hook
+
+This is where Forseti stops explaining what already went wrong and starts running against live work.
+
+## What it does
+
+**Before a write** it checks whether another session wrote that same file in the last 15 seconds. If so, the write pauses and asks, naming who and how long ago.
+
+**After every tool call** it feeds the event in — coverage, evidence provenance, and the write history the check above depends on.
+
+That is the whole surface for now. Everything else Forseti computes (drift, temperature, cost, the context register) needs input the hook interface does not carry, and shipping a check that cannot see its inputs would be theatre.
+
+## The rule that outranks every check
+
+A hook that gets in the way gets uninstalled, and an uninstalled guard protects nobody.
+
+So every internal failure exits 0 and lets the work through. A crash in Forseti must never become a crash in your editor. Corrupt state file, missing module, malformed input — all of it exits 0. The only non-zero exit is a deliberate, explained decision about a real conflict, and even that returns `ask`, never `deny`: you decide, it just makes sure you know.
+
+## Install
+
+Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          { "type": "command", "command": "node /absolute/path/to/forseti/hooks/forseti-hook.mjs" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "node /absolute/path/to/forseti/hooks/forseti-hook.mjs" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Restart Claude Code. Node 22+, no dependencies to install.
+
+## State
+
+One JSON file per project at `<project>/.forseti/state.json`. Each hook invocation is a fresh process with no memory of the last one, so the file is how the check on your next write knows what happened on the previous one.
+
+It keeps the last 10 minutes of events, capped at 2000, because collision detection only looks at the last few seconds and a state file should not grow without bound. Full history is the transcript's job, not this file's.
+
+Add `.forseti/` to `.gitignore`.
+
+## What it cannot see
+
+Writes made through opaque shell commands. `python3 - <<'PY'` with `open(p,'w')` inside carries no file path on the command line, and roughly half of real shell commands are opaque to static analysis. The hook says so in its own warning rather than implying its silence means safety.
+
+## Verifying it works
+
+```bash
+rm -rf /tmp/fh && \
+echo '{"hook_event_name":"PostToolUse","session_id":"A","cwd":"/tmp/fh","tool_name":"Write","tool_input":{"file_path":"/tmp/x.js"}}' | node hooks/forseti-hook.mjs && \
+echo '{"hook_event_name":"PreToolUse","session_id":"B","cwd":"/tmp/fh","tool_name":"Write","tool_input":{"file_path":"/tmp/x.js"}}' | node hooks/forseti-hook.mjs
+```
+
+The second call should exit 2 and print a message naming session A.

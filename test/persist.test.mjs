@@ -128,7 +128,7 @@ t('打包一定要有時間，沒有就拋錯不補假的', () =>
 
 t('區塊清單一字不改', () =>
   assert.deepEqual([...SECTIONS],
-    ['capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges', 'goal', 'signals']));
+    ['capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges', 'goal', 'signals', 'events']));
 
 t('北極星與訊號跨重啟活著,忘了目標就永遠量不出飄移', () => {
   const snap = createSnapshot({

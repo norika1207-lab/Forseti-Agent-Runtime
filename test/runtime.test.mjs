@@ -701,5 +701,51 @@ t('波及範圍裡有別人正在寫的檔案,那一維算得出來', () => {
 t('沒建圖會出現在缺口清單', () =>
   assert.ok(rt().status().unavailable.some((x) => /No dependency graph/.test(x))));
 
+// ---- 跨程序撞車(hook 場景)----
+t('最近誰寫過這個檔,查得到,不含自己', () => {
+  const r = rt();
+  r.ingest([
+    { attributed_agent: 'A', name: 'Write', at: clock - 3000, input: { file_path: 'shared.js' } },
+    { attributed_agent: 'B', name: 'Write', at: clock - 1000, input: { file_path: 'shared.js' } },
+  ]);
+  const w = r.recentWritersOf('shared.js', { excludeAgent: 'B', at: clock });
+  assert.deepEqual(w.map((x) => x.agent_id), ['A']);
+  assert.equal(w[0].seconds_ago, 3);
+});
+
+t('時間窗外的不算,不然會一直誤攔', () => {
+  const r = rt();
+  r.ingest([{ attributed_agent: 'A', name: 'Write', at: clock - 60_000, input: { file_path: 'shared.js' } }]);
+  assert.equal(r.recentWritersOf('shared.js', { excludeAgent: 'B', at: clock }).length, 0);
+});
+
+t('只讀不寫不算撞車', () => {
+  const r = rt();
+  r.ingest([{ attributed_agent: 'A', name: 'Read', at: clock - 1000, input: { file_path: 'shared.js' } }]);
+  assert.equal(r.recentWritersOf('shared.js', { excludeAgent: 'B', at: clock }).length, 0);
+});
+
+t('事件流跨重啟活著,不然無狀態的宿主永遠查不到撞車', () => {
+  const a = rt();
+  a.ingest([{ attributed_agent: 'A', name: 'Write', at: clock - 2000, input: { file_path: 'shared.js' } }]);
+  const text = a.save();
+
+  const b = rt();
+  b.restore(text);
+  assert.equal(b.recentWritersOf('shared.js', { excludeAgent: 'B', at: clock }).length, 1,
+    'hook 每次都是新程序,沒有這一段就永遠擋不下任何東西');
+});
+
+t('存檔只留最近的事件,不無限長大', () => {
+  const a = rt();
+  a.ingest([{ attributed_agent: 'A', name: 'Write', at: clock - 60 * 60 * 1000, input: { file_path: 'old.js' } }]);
+  a.ingest([{ attributed_agent: 'A', name: 'Write', at: clock - 1000, input: { file_path: 'new.js' } }]);
+  const b = rt();
+  b.restore(a.save());
+  const files = b.inspect().events.map((e) => e.file_path);
+  assert.ok(files.includes('new.js'));
+  assert.ok(!files.includes('old.js'), '一小時前的事件不該留在狀態檔裡');
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

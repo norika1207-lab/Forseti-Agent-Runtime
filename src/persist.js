@@ -35,6 +35,10 @@ export const SECTIONS = Object.freeze([
   'capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges',
   // 北極星與訊號。忘了目標,飄移就永遠量不出來,所以它必須跨重啟活著。
   'goal', 'signals',
+  // 最近的事件。接上真實宿主才發現這一段沒存:hook 是無狀態的短命程序,
+  // 每一次都是新的,而「最近誰寫過這個檔」全部在事件流裡。
+  // 沒有它,跨程序的撞車偵測永遠查不到東西。
+  'events',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -94,7 +98,8 @@ function decodeValue(v) {
  */
 export function createSnapshot({
   capsules = [], budget = null, scopes = [], locks = [],
-  coverages = [], stats = null, edges = [], goal = null, signals = null, at = null,
+  coverages = [], stats = null, edges = [], goal = null, signals = null,
+  events = [], at = null,
 } = {}) {
   if (typeof at !== 'number' || !Number.isFinite(at)) {
     throw new TypeError('at is required and must be a millisecond timestamp. Without a pack time, lock expiry cannot be judged.');
@@ -102,7 +107,7 @@ export function createSnapshot({
   return Object.freeze({
     schema_version: SCHEMA_VERSION,
     at,
-    capsules, budget, scopes, locks, coverages, stats, edges, goal, signals,
+    capsules, budget, scopes, locks, coverages, stats, edges, goal, signals, events,
   });
 }
 
@@ -268,6 +273,7 @@ export function restore(snapshot, { now } = {}) {
       edges: snapshot?.edges ?? [],
       goal: snapshot?.goal ?? null,
       signals: snapshot?.signals ?? null,
+      events: snapshot?.events ?? [],
     }),
     stale_scopes: Object.freeze(stale),
     expired_locks: Object.freeze(expired),
