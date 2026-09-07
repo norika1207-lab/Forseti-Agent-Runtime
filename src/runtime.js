@@ -69,6 +69,9 @@ import {
   createSnapshot as createRecoverySnapshot, silentExecutionRatio, unsafeInterruptRate,
   interruptReadiness, livenessReport,
 } from './rescue.js';
+import {
+  buildProbe, evaluateProbe, canIntervene, recordIntervention, interventionRate,
+} from './intervention.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -148,6 +151,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     interruptions: [],
     /** 目前這一輪的復原快照。中斷前要能拿得出來。 */
     snapshot: null,
+    /** 介入紀錄。有注入的會污染後續觀測,所以一定要記。 */
+    interventions: [],
+    /** 使用者的回合數,用來算實際介入率。 */
+    turns: 0,
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -651,6 +658,77 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       return composite(this.signals(extra), config.signals);
     },
 
+    // ── 介入(規格書第 9、10、11 節)────────────────────
+
+    /**
+     * 這個介入動作現在可不可以做。
+     *
+     * 高溫從來不是單獨的理由。一個只看溫度就出手的系統,
+     * 會在第一次誤判之後被關掉,而被關掉的防線保護不了任何人。
+     */
+    mayIntervene(action, extra = {}) {
+      const temp = this.runtimeTemperature();
+      const lv = [...state.artifacts].filter((a) => a.verdict === 'VERIFIED').sort((a, b) => b.at - a.at)[0];
+      const stagnant = lv
+        ? (now() - lv.at) > (config.signals?.stagnationFullMs ?? 30 * 60 * 1000)
+        : undefined;
+      return canIntervene(action, {
+        temperature: temp.temperature,
+        progress_stagnation: extra.progress_stagnation ?? stagnant,
+        checkpoint_available: extra.checkpoint_available ?? (state.snapshot?.usable === true),
+        ...extra,
+      });
+    },
+
+    /**
+     * 產生一個診斷探針。
+     *
+     * 它不問「你是不是飄移了」—— 那只會拿到流利的否認,而流利不是證據。
+     * 它問連結與證據,而且問這件事本身就是一次介入,所以會自動記錄。
+     */
+    probe({ reason = null, windowRef = null } = {}) {
+      const p = buildProbe({ reason, windowRef });
+      state.interventions = recordIntervention(state.interventions, {
+        at: now(), action: 'PROBE', reason, injected: true,
+      });
+      return p;
+    },
+
+    /**
+     * 評估探針回答。
+     *
+     * 自述跟可觀測記錄衝突時,可觀測的勝出。規格書 AT-PROBE-01。
+     */
+    evaluateProbeAnswers(answers, extra = {}) {
+      const lv = [...state.artifacts].filter((a) => a.verdict === 'VERIFIED').length;
+      const recent = [...new Set(state.events.slice(-200).map((e) => e.file_path))];
+      return evaluateProbe(answers, { verified_progress: lv, recent_files: recent, ...extra });
+    },
+
+    /** 記一次非注入式的介入(標註、建議),不污染觀測但仍要記。 */
+    noteIntervention(action, reason = null) {
+      state.interventions = recordIntervention(state.interventions, {
+        at: now(), action, reason, injected: false,
+      });
+      return state.interventions.length;
+    },
+
+    /** 使用者說了一句話。用來算實際介入率的分母。 */
+    countTurn() { state.turns += 1; return state.turns; },
+
+    /**
+     * 實際的介入率。
+     *
+     * 規格書第 9 節:OBSERVE 99% / INTERRUPT 1% 是哲學不是常數,
+     * 實作必須量實際的中斷率。所以這個數字要看得到。
+     */
+    interventionStats() {
+      return Object.freeze({
+        ...interventionRate(state.interventions, state.turns),
+        log: Object.freeze([...state.interventions]),
+      });
+    },
+
     // ── 可見存活與安全中斷(規格書第 7 節)──────────────
 
     /**
@@ -1096,6 +1174,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           beats: state.beats,
           interruptions: state.interruptions,
           snapshot: state.snapshot,
+          interventionLog: state.interventions,
+          turns: state.turns,
           contracts: [...state.contracts.values()],
           declaredTurns: state.declaredTurns,
           failures: state.failures,
@@ -1141,6 +1221,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.beats = [...(sig.beats ?? [])];
       state.interruptions = [...(sig.interruptions ?? [])];
       state.snapshot = sig.snapshot ?? null;
+      state.interventions = [...(sig.interventionLog ?? [])];
+      state.turns = sig.turns ?? 0;
       state.budget = r.state.budget ?? null;
       state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
       return r;

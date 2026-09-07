@@ -958,5 +958,59 @@ t('心跳、中斷紀錄與快照跨重啟活著', () => {
   assert.equal(b.liveness().unsafe_interrupt_rate, 0);
 });
 
+// ---- 介入(規格書第 9、10、11 節)----
+t('高溫單獨不足以硬介入', () => {
+  const r = rt();
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 0 });
+  const v = r.mayIntervene('CREATE_SUCCESSOR');
+  assert.equal(v.allowed, false);
+  assert.match(v.note, /never sufficient/);
+});
+
+t('有快照又臨界時才准建立接班', () => {
+  const r = rt();
+  const v = r.mayIntervene('CREATE_SUCCESSOR', { temperature: 0.9, checkpoint_available: true });
+  assert.equal(v.allowed, true);
+});
+
+t('探針本身是介入,會自動被記錄成有注入', () => {
+  const r = rt();
+  r.probe({ reason: 'stagnation' });
+  const s = r.interventionStats();
+  assert.equal(s.interventions, 1);
+  assert.equal(s.injected, 1);
+});
+
+t('標註不注入,不污染觀測,但仍要記', () => {
+  const r = rt();
+  r.noteIntervention('QUIET_ANNOTATION');
+  const s = r.interventionStats();
+  assert.equal(s.interventions, 1);
+  assert.equal(s.injected, 0);
+});
+
+t('介入率要量得出來,那是規格書要求實作自己量的東西', () => {
+  const r = rt();
+  for (let i = 0; i < 100; i++) r.countTurn();
+  r.probe();
+  assert.equal(r.interventionStats().rate, 0.01);
+  assert.equal(r.interventionStats().injection_rate, 0.01);
+});
+
+t('自述說有進展但沒有任何已驗證產物時,可觀測的勝出', () => {
+  const r = rt();
+  const e = r.evaluateProbeAnswers({ evidence_of_progress: 'all good' });
+  assert.ok(e.contradictions.some((x) => /no verified progress/.test(x)));
+});
+
+t('介入紀錄跨重啟活著,不然介入率永遠是零', () => {
+  const a = rt();
+  a.countTurn();
+  a.probe();
+  const b = rt();
+  b.restore(a.save());
+  assert.equal(b.interventionStats().injected, 1);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

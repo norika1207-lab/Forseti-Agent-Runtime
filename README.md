@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 688 assertions, all green.
+`npm test` → 726 assertions, all green.
 
 </div>
 
@@ -401,6 +401,27 @@ The snapshot's nine fields come from the spec unchanged. One matters more than t
 
 `unsafeInterruptRate` returns `null` with no interruptions rather than `0` — nobody having interrupted is not the same as every interruption being safe. Interrupts without a snapshot are still recorded, because dropping them makes the rate permanently zero.
 
+### `intervention.js` — when acting is allowed, and what acting costs
+
+Specification sections 9, 10 and 11 describe three faces of one thing: when you may act, what to ask before you do, and how acting contaminates the measurement.
+
+**The observer-effect rule is the hard one.** Section 9.1 forbids continuously interrogating the observed model, and the reason is not politeness — it is measurement. Every time you ask "are you still on track", the question itself enters the context, and what follows is *behaviour after being asked*, not the behaviour you meant to observe. Ask ten times and you are measuring your own influence. So every injection is logged as an intervention event, without exception, and the injection rate is reported separately from the annotation rate: annotations do not contaminate, injections do.
+
+**A high temperature is never a reason to act.** Section 11 gives each action its own precondition, all stricter than temperature:
+
+```
+Quiet annotation    threshold reached, or one strong verified anomaly
+Suggest recovery    high temperature AND stagnation or evidence mismatch
+Freeze retry        retry budget exceeded AND no verified progress
+Replan              hypothesis refuted, or hard prerequisite invalidated
+Block high risk     an authority/licence/safety prerequisite unknown
+Create successor    critical health WITH a checkpoint, or user request
+```
+
+Every refusal names what is still missing. A system that acts on temperature alone gets switched off after its first false positive, and a guard that has been switched off protects nobody.
+
+**The diagnostic probe does not ask whether the model is drifting.** That question returns a fluent denial, and fluency is not evidence. It asks for linkage: what you understand the goal to be, why this step advances it, and — the field that matters most — what would falsify your current strategy. A strategy whose owner cannot say what would refute it cannot be checked at all. Missing answers raise uncertainty; the spec is explicit that they do not by themselves prove deception, and where an answer and the observable record disagree, the record wins.
+
 ---
 
 ## Design rules
@@ -460,6 +481,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `signals.js` | 31 | Verified |
 | `windows.js` | 25 | Verified |
 | `rescue.js` | 27 | Verified |
+| `intervention.js` | 31 | Verified |
 | `capture.js` | 46 | Verified |
 | `shell.js` | 33 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
@@ -474,7 +496,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 110 | Verified |
+| `runtime.js` | 117 | Verified |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.
