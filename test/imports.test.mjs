@@ -147,6 +147,26 @@ t('回傳凍結', () => {
   assert.throws(() => { r.imports.push({}); }, TypeError);
 });
 
+t('macOS 的 AppleDouble sidecar 不是原始碼', () => {
+  // 外接碟的 exFAT 上,每個帶 xattr 的檔案旁邊會多一個 ._ 檔,
+  // 同名同副檔名,掃描時會變成一個沒有人依賴的假模組。實測遇過。
+  const r = buildImportRecords({
+    'src/a.js': "import x from './b.js'",
+    'src/b.js': '',
+    'src/._a.js': 'binary garbage',
+    'src/._b.js': 'binary garbage',
+  });
+  assert.equal(r.stats.files, 2);
+  assert.equal(r.stats.skipped_non_source, 2);
+  const g = buildGraph(r.imports);
+  assert.ok(!g.reverse.has('src/._b.js'));
+});
+
+t('為什麼要濾掉,理由寫在原始碼裡', () => {
+  const src = readFileSync(new URL('../src/imports.js', import.meta.url), 'utf8');
+  assert.ok(/孤立模組檢查突然多出一個/.test(src));
+});
+
 // ---- 邊界 ----
 t('零依賴：imports.js 沒有任何 import', () => {
   const src = readFileSync(new URL('../src/imports.js', import.meta.url), 'utf8');

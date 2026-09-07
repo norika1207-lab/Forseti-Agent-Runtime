@@ -1107,5 +1107,57 @@ t('宣告、自我糾錯、範圍都跨重啟活著', () => {
   assert.equal(b.scopeStats().checked, 1);
 });
 
+// ---- 自適應基線與負擔(規格書 §15)----
+t('基線預設只用健康窗口的樣本', () => {
+  const b = rt().baselineFor('output', Array(30).fill(120));
+  assert.equal(b.possibly_contaminated, false);
+  assert.equal(b.value, 120);
+});
+
+t('明說要用全部樣本時,基線會被標成可能污染', () => {
+  const b = rt().baselineFor('output', Array(30).fill(120), { healthyOnly: false });
+  assert.equal(b.possibly_contaminated, true);
+});
+
+t('沒有基線時不拿全域預設頂替', () => {
+  const r = rt();
+  const d = r.compareToBaseline(50, r.baselineFor('x', [1, 2]));
+  assert.equal(d.ratio, null);
+  assert.match(d.note, /A global default would defeat the purpose/);
+});
+
+t('不同工具各自的基線', () => {
+  const r = rt();
+  const out = r.baselinesPerTool([
+    ...Array.from({ length: 30 }, () => ({ key: 'Bash', value: 2000 })),
+    ...Array.from({ length: 30 }, () => ({ key: 'Read', value: 50 })),
+  ]);
+  assert.ok(out.baselines.get('Bash').value > out.baselines.get('Read').value * 10);
+});
+
+t('攔截結果是唯一不靠估值的效益指標', () => {
+  const r = rt();
+  r.recordIntercept('CANCELLED');
+  r.recordIntercept('PROCEEDED');
+  const o = r.overhead({ perCallMs: 156, calls: 100, processStartMs: 130 });
+  assert.equal(o.outcomes.rate, 0.5);
+  assert.equal(o.outcomes.false_positive_burden, 0.5);
+});
+
+t('不給淨效益,而且說明為什麼', () => {
+  const o = rt().overhead({ perCallMs: 156, calls: 100 });
+  assert.ok(!('net_ms' in o));
+  assert.equal(o.cost_measured, true);
+  assert.match(o.note, /must not be subtracted/);
+});
+
+t('攔截紀錄跨重啟活著', () => {
+  const a = rt();
+  a.recordIntercept('CANCELLED');
+  const b = rt();
+  b.restore(a.save());
+  assert.equal(b.overhead({}).outcomes.total, 1);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

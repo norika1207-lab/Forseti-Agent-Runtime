@@ -132,8 +132,20 @@ export function resolve(fromFile, specifier, files, { extensions = DEFAULT_EXTEN
  *   imports 直接餵給 buildGraph()。to 為 null 的那些會進 unresolved,
  *   那是 cost.js 本來就有的欄位,不用另外處理。
  */
+/**
+ * 不是原始碼的檔案。
+ *
+ * macOS 在非 HFS+ 的檔案系統(外接碟的 exFAT、網路磁碟)上,
+ * 會為每個帶 extended attribute 的檔案寫一個 `._` 開頭的 sidecar。
+ * 那些檔案跟原始碼同名同副檔名,掃描時會被當成模組,
+ * 然後在依賴圖裡出現一個沒有人依賴的 `._runtime.js`。
+ * 這是實測遇到的:repo 搬到外接碟之後,孤立模組檢查突然多出一個。
+ */
+const NOT_SOURCE = /(^|\/)\._/;
+
 export function buildImportRecords(sources, { extensions = DEFAULT_EXTENSIONS } = {}) {
-  const entries = sources instanceof Map ? [...sources.entries()] : Object.entries(sources ?? {});
+  const all = sources instanceof Map ? [...sources.entries()] : Object.entries(sources ?? {});
+  const entries = all.filter(([f]) => !NOT_SOURCE.test(f));
   const files = new Set(entries.map(([f]) => f));
   const imports = [];
   const stats = {
@@ -162,6 +174,8 @@ export function buildImportRecords(sources, { extensions = DEFAULT_EXTENSIONS } 
     imports: Object.freeze(imports),
     stats: Object.freeze({
       ...stats,
+      /** 被當成非原始碼濾掉的檔案數。多半是 macOS 的 AppleDouble sidecar。 */
+      skipped_non_source: all.length - entries.length,
       /**
        * 解析率的分母刻意排除外部套件:它們本來就不該解。
        * 把它們算進去會讓一個健康的專案看起來解析率很低。

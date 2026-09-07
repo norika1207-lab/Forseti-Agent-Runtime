@@ -76,6 +76,8 @@ import { detectorResult, conformanceSummary, cannotDetermine } from './conforman
 import { declare, declareStrict, resolve as resolveDeclaration, followThroughRate } from './followthrough.js';
 import { confidenceLoad, falseConfessions } from './rhetoric.js';
 import { createScope, check as checkScope, createStreak, offScopeRate } from './scope.js';
+import { fit as fitBaseline, deviation, fitPerKey } from './baseline.js';
+import { cost as overheadCost, benefit as overheadBenefit, ledger, interceptOutcomes } from './overhead.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -166,6 +168,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     /** 目標範圍與離題累積。 */
     scope: createScope({}),
     scopeStreak: createStreak(),
+    /** 攔截的結果:使用者看到警告之後選擇取消還是繼續。這是唯一不靠估值的效益指標。 */
+    intercepts: [],
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -778,6 +782,61 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     /** 離題比例。回顧用。 */
     scopeStats() { return offScopeRate(state.scopeStreak); },
 
+    // ── 自適應基線(規格書 §15-2)──────────────────────
+
+    /**
+     * 從自己的歷史算基線,而不是用一個全域常數。
+     *
+     * 全域值的問題是實測的:輸出長度的預設是 400 字,而真實中位數是 126。
+     * 用全域值會讓一半的正常回覆被判成異常。那不是門檻設錯,
+     * 是「一個數字適用所有人」這個假設錯了。
+     *
+     * healthyOnly 預設為 true:只用「有已驗證產出」的窗口當樣本。
+     * 不然一個從頭壞到尾的 session,會把自己的失能學成正常。
+     */
+    baselineFor(measure, samples, { healthyOnly = true } = {}) {
+      return fitBaseline(samples, { healthyOnly, config: config.baseline });
+    },
+
+    /** 每個工具各自的基線。Bash 跟 Read 的耗時差一個量級,同一條線判不了。 */
+    baselinesPerTool(samples, opts = {}) {
+      return fitPerKey(samples, { healthyOnly: true, ...opts, config: config.baseline });
+    },
+
+    /** 一個值相對於基線偏離多少。沒有基線時不拿全域預設頂替。 */
+    compareToBaseline(value, baseline) {
+      return deviation(value, baseline, config.baseline);
+    },
+
+    // ── 效益與負擔(規格書 §15-10)────────────────────
+
+    /** 記一次攔截的結果。CANCELLED 代表那次攔截攔到了東西。 */
+    recordIntercept(outcome) {
+      state.intercepts = [...state.intercepts, Object.freeze({ at: now(), outcome })];
+      return state.intercepts.length;
+    },
+
+    /**
+     * 這個系統的負擔與效益。
+     *
+     * 負擔是量的,效益只能估,而且估值必須由呼叫端給 ——
+     * 內建一個數字然後拿它算出「淨效益為正」,是拿自己編的參數證明自己有用。
+     * 所以這裡不給淨效益,只把兩邊並排。
+     *
+     * interceptOutcomes 是唯一不靠估值的那個:使用者看到警告之後
+     * 選擇取消的比例,那是真的攔到東西的證據。
+     */
+    overhead({ perCallMs = null, calls = null, processStartMs = null, minutesPerCollision = null } = {}) {
+      const c = overheadCost({ perCallMs, calls, processStartMs });
+      const cancelled = state.intercepts.filter((i) => i.outcome === 'CANCELLED').length;
+      const b = overheadBenefit({ collisionsBlocked: cancelled, minutesPerCollision });
+      return Object.freeze({
+        ...ledger(c, b),
+        cost_detail: c,
+        outcomes: interceptOutcomes(state.intercepts),
+      });
+    },
+
     // ── 一致性(規格書第 16 節)────────────────────────
 
     /**
@@ -1369,6 +1428,7 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           scopePaths: state.scope.paths,
           scopeNorthStar: state.scope.north_star,
           scopeStreak: state.scopeStreak,
+          intercepts: state.intercepts,
           contracts: [...state.contracts.values()],
           declaredTurns: state.declaredTurns,
           failures: state.failures,
@@ -1420,6 +1480,7 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.selfCorrections = [...(sig.selfCorrections ?? [])];
       state.scope = createScope({ northStar: sig.scopeNorthStar ?? null, paths: sig.scopePaths ?? [] });
       state.scopeStreak = sig.scopeStreak ?? createStreak();
+      state.intercepts = [...(sig.intercepts ?? [])];
       state.budget = r.state.budget ?? null;
       state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
       return r;
