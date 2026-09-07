@@ -57,6 +57,8 @@ import {
   reading, zoneOf, compactionDelta, curve, advice,
 } from './thermometer.js';
 import { expandBashEvent } from './shell.js';
+import { buildImportRecords } from './imports.js';
+import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
   previewCapsule, acceptCapsule, rejectCapsule, validateReturnShape,
@@ -113,6 +115,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     budget: null,
     /** 契約,以 contract_id 索引。 */
     contracts: new Map(),
+    /** 依賴圖。沒有它就算不出改一個檔案的代價。 */
+    graph: null,
+    graphStats: null,
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -511,11 +516,59 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           ...(state.anchor ? [] : ['No goal declared; drift is measured against an inferred anchor and is weaker for it']),
           ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
           ...(state.readings.length ? [] : ['No temperature reading; the share of context that is checked evidence is unknown']),
+          ...(state.graph ? [] : ['No dependency graph indexed; the cost of changing a file cannot be computed']),
           ...(state.budget ? [] : ['No context budget set; nothing is tracking what agent output costs the main session']),
           ...(state.opaqueCommands > 0
             ? [`${state.opaqueCommands} shell command(s) were opaque to static analysis; whatever files they touched are invisible here`]
             : []),
         ]),
+      });
+    },
+
+    // ── 代價(M4)──────────────────────────────────────
+
+    /**
+     * 建依賴圖。宿主餵「檔名 → 原始碼」,這裡不讀檔案系統。
+     *
+     * 沒有這張圖,cost.js 的每個函式都寫好了卻算不出任何東西。
+     * 這條線斷了很久,現在接上。
+     */
+    indexProject(sources) {
+      const { imports, stats } = buildImportRecords(sources);
+      state.graph = buildGraph(imports);
+      state.graphStats = stats;
+      return Object.freeze({
+        files: stats.files,
+        imports: stats.total,
+        resolution_rate: stats.resolution_rate,
+        /** 靜態解析看不到的動態載入次數。它們動了什麼不知道。 */
+        dynamic_opaque: stats.dynamic_opaque,
+        is_lower_bound: true,
+      });
+    },
+
+    /**
+     * 改這個檔案的代價。
+     *
+     * 五個維度,不合成單一分數 —— 合成會把唯一有用的東西毀掉:
+     * 波及 200 個都有測試的檔案,比波及 12 個沒測試的安全。
+     *
+     * live_conflicts 是靜態工具給不出來的那一維:
+     * 波及範圍裡有幾個檔案,此刻正被別人佔著。
+     */
+    costOf(file, { coverage = null } = {}) {
+      if (!state.graph) {
+        return Object.freeze({
+          vector: null,
+          note: 'No dependency graph. Call indexProject() with the project sources first.',
+        });
+      }
+      const liveScopes = state.scopes
+        .filter((sc) => sc.state === 'ACTIVE')
+        .map((sc) => ({ files: [...sc.actual] }));
+      return Object.freeze({
+        vector: computeCostVector(state.graph, file, { coverage, liveScopes }),
+        graph_resolution_rate: state.graphStats?.resolution_rate ?? null,
       });
     },
 

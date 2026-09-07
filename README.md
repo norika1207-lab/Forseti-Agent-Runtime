@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 507 assertions, all green.
+`npm test` → 512 assertions, all green.
 
 </div>
 
@@ -384,7 +384,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 31 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 74 | Verified |
+| `runtime.js` | 79 | Verified |
 | end-to-end | 17 | Verified |
 
 **Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()`, forwarded work on `completeTurn()`, or stopped a loop on a `STOP` verdict. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. Every mechanism now has an input source.

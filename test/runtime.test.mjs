@@ -659,5 +659,47 @@ t('預算與契約跨重啟活著', () => {
   assert.equal(b.register().capsules, 1);
 });
 
+// ---- 代價接線(M4)----
+const PROJ = {
+  'src/app.js': "import { auth } from './auth.js'",
+  'src/auth.js': "import { hash } from './util.js'",
+  'src/util.js': '',
+};
+
+t('沒建圖就算不出代價,而且說得出怎麼補', () => {
+  const c = rt().costOf('src/util.js');
+  assert.equal(c.vector, null);
+  assert.match(c.note, /indexProject/);
+});
+
+t('建圖之後,改一個檔案的波及範圍算得出來', () => {
+  const r = rt();
+  const idx = r.indexProject(PROJ);
+  assert.equal(idx.files, 3);
+  assert.equal(idx.resolution_rate, 1);
+  const c = r.costOf('src/util.js');
+  assert.equal(c.vector.d1_count, 1);
+  assert.equal(c.vector.d2_count, 1, 'app 透過 auth 間接依賴 util');
+});
+
+t('代價不合成單一分數', () => {
+  const r = rt();
+  r.indexProject(PROJ);
+  const v = r.costOf('src/util.js').vector;
+  assert.ok(!('score' in v) && !('risk' in v));
+  assert.equal(v.is_lower_bound, true);
+});
+
+t('波及範圍裡有別人正在寫的檔案,那一維算得出來', () => {
+  const r = rt();
+  r.indexProject(PROJ);
+  r.openScope({ agent_id: 'w2', task_id: 't', declared: ['src/auth.js'] });
+  r.ingest([ev('w2', 'Edit', 'src/auth.js', -100)]);
+  assert.equal(r.costOf('src/util.js').vector.live_conflicts, 1);
+});
+
+t('沒建圖會出現在缺口清單', () =>
+  assert.ok(rt().status().unavailable.some((x) => /No dependency graph/.test(x))));
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);
