@@ -65,6 +65,18 @@ Add `.forseti/` to `.gitignore`.
 
 Writes made through opaque shell commands. `python3 - <<'PY'` with `open(p,'w')` inside carries no file path on the command line, and roughly half of real shell commands are opaque to static analysis. The hook says so in its own warning rather than implying its silence means safety.
 
+## Watching it
+
+```bash
+node tools/dashboard.mjs /path/to/your/project
+```
+
+Opens a read-only local dashboard at `http://127.0.0.1:7777`. It reads the state file and nothing else — it never writes, and never sends anything to the observed session, because §9.1 of the specification forbids continuously interrogating what you are measuring.
+
+It follows the spec's §8.1 quiet rule literally. HEALTHY and WATCH show one line and a dot. A cause appears only at ELEVATED, a diagnosis card only at HIGH, a rescue card only at CRITICAL. A dashboard that flashes while everything is fine gets closed, and a closed dashboard protects nobody.
+
+The header always shows what fraction of the weighted signals actually had data behind them. A confident-looking 0.55 computed from 22% of the signals is a different thing from the same number computed from all of them, and the interface refuses to let those look alike.
+
 ## Verifying it works
 
 ```bash

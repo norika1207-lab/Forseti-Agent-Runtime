@@ -464,6 +464,20 @@ Two of those were doing active harm. A 7-day abandonment threshold flags half of
 
 **These numbers are one person's working rhythm, not universal constants.** Every calibrated field says so in its own comment and points at the tool. Adopting another team's distribution is only marginally better than guessing.
 
+### The dashboard, and why it stays quiet
+
+```bash
+node tools/dashboard.mjs /path/to/project
+```
+
+Specification §8.4 suggests a local web dashboard for CLI hosts. This is that, in about 200 lines with no dependencies beyond Node's own `http`.
+
+§8.1 sets out exactly how loud each state is allowed to be, and the implementation follows it literally: HEALTHY and WATCH get a dot and one line, a cause appears only at ELEVATED, a diagnosis card only at HIGH, a rescue card only at CRITICAL. **Quiet is the default state, not a setting.** A dashboard that flashes while everything is fine gets closed, and a closed dashboard protects nothing.
+
+Two things it will not do. It never writes, and it never sends anything to the session it is watching — §9.1 forbids continuously interrogating what you are measuring, and a monitor that pokes its subject is measuring its own influence.
+
+And it always shows what fraction of the weighted signals had data behind them. A confident-looking 0.55 computed from 22% of the signals is a different thing from the same number computed from all of them; the interface refuses to let those look alike.
+
 ---
 
 ## Design rules
@@ -541,6 +555,8 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `runtime.js` | 117 | Verified |
 | acceptance (spec §14) | 10 | All passing |
 | end-to-end | 17 | Verified |
+
+**It runs live, and it has a face.** `tools/dashboard.mjs` serves a read-only local dashboard that follows the spec's quiet rules.
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.
 

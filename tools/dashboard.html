@@ -1,0 +1,180 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Forseti</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --paper:#FCFBF8; --panel:#FFFFFF; --ink:#1A1917; --ink-2:#4A4741; --faint:#8B8578;
+  --rule:#E6E2D9; --rule-soft:#F0EDE6;
+  --calm:#4A6B52; --watch:#7A6A24; --elevated:#8A5A18; --high:#8F3E20; --critical:#7C2418;
+  --serif:"Newsreader",Georgia,serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  --paper:#14140F; --panel:#1C1C16; --ink:#E8E4D9; --ink-2:#B0AB9C; --faint:#7A7568;
+  --rule:#2C2C24; --rule-soft:#232319;
+  --calm:#8FB097; --watch:#CBB55F; --elevated:#D69A5C; --high:#D98164; --critical:#E08B78;
+}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 var(--serif);
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:820px;margin:0 auto;padding:40px 22px 80px}
+
+/* 靜的時候只有這一條 */
+.bar{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--rule)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--calm);flex:none}
+.state{font:500 12px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase}
+.temp{margin-left:auto;font:500 13px/1 var(--mono);color:var(--faint);font-variant-numeric:tabular-nums}
+h1{margin:0;font:500 17px/1 var(--serif);letter-spacing:-.01em}
+.sub{color:var(--faint);font:400 12px/1.5 var(--mono);margin:6px 0 0}
+
+/* ELEVATED 以上才出現的東西 */
+.cause{margin:18px 0 0;padding:14px 16px;background:var(--panel);border:1px solid var(--rule);
+  border-radius:3px;font-size:14px}
+.cause.hidden{display:none}
+details{margin:18px 0 0;border:1px solid var(--rule);border-radius:3px;background:var(--panel)}
+details[hidden]{display:none}
+summary{padding:13px 16px;cursor:pointer;font:500 12px/1 var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--ink-2);list-style:none}
+summary::-webkit-details-marker{display:none}
+summary::before{content:"›";display:inline-block;margin-right:9px;transition:transform .15s}
+details[open] summary::before{transform:rotate(90deg)}
+.body{padding:0 16px 16px}
+
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+td{padding:7px 0;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+td:first-child{color:var(--ink-2);width:42%}
+td:last-child{font-family:var(--mono);font-size:12.5px;font-variant-numeric:tabular-nums;text-align:right}
+tr:last-child td{border-bottom:none}
+.null{color:var(--faint);font-style:italic}
+
+.gaps{margin:22px 0 0;padding:0;list-style:none;font-size:13px;color:var(--ink-2)}
+.gaps li{padding:7px 0 7px 18px;border-bottom:1px solid var(--rule-soft);position:relative}
+.gaps li::before{content:"—";position:absolute;left:0;color:var(--faint)}
+.gaps li:last-child{border-bottom:none}
+.sect{margin:30px 0 10px;font:500 11px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--faint)}
+.foot{margin:44px 0 0;padding-top:16px;border-top:1px solid var(--rule);color:var(--faint);font-size:12.5px}
+.err{padding:16px;background:var(--panel);border:1px solid var(--rule);border-radius:3px;color:var(--ink-2)}
+code{font:12px var(--mono);background:var(--rule-soft);padding:1px 5px;border-radius:2px}
+</style>
+
+<div class="wrap">
+  <div class="bar">
+    <span class="dot" id="dot"></span>
+    <div>
+      <h1 id="title">Forseti</h1>
+      <p class="sub" id="sub">reading…</p>
+    </div>
+    <span class="temp" id="temp"></span>
+  </div>
+
+  <div class="cause hidden" id="cause"></div>
+  <details id="diag" hidden><summary>Diagnosis</summary><div class="body" id="diagBody"></div></details>
+  <details id="rescue" hidden><summary>Rescue</summary><div class="body" id="rescueBody"></div></details>
+
+  <div id="gapsWrap" hidden>
+    <div class="sect">What cannot be measured</div>
+    <ul class="gaps" id="gaps"></ul>
+  </div>
+
+  <p class="foot">
+    Read-only. Nothing is written and nothing is sent to the observed session —
+    specification §9.1 forbids continuously interrogating what you are measuring.
+    Quiet is the default state, not a setting.
+  </p>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const COLOR = { HEALTHY:'--calm', WATCH:'--watch', ELEVATED:'--elevated', HIGH:'--high', CRITICAL:'--critical' };
+const pct = (x) => x == null ? null : (x*100).toFixed(0) + '%';
+const dur = (ms) => ms == null ? null
+  : ms < 60000 ? (ms/1000).toFixed(0)+'s'
+  : ms < 3600000 ? (ms/60000).toFixed(0)+'m'
+  : (ms/3600000).toFixed(1)+'h';
+
+function rows(pairs){
+  return '<table>' + pairs.map(([k,v]) =>
+    `<tr><td>${k}</td><td>${v == null ? '<span class="null">not measured</span>' : v}</td></tr>`
+  ).join('') + '</table>';
+}
+
+async function tick(){
+  let d;
+  try { d = await (await fetch('/state.json',{cache:'no-store'})).json(); }
+  catch { return; }
+
+  if (d.error){
+    $('title').textContent = 'Forseti';
+    $('sub').textContent = '';
+    $('cause').className = 'cause';
+    $('cause').innerHTML = `<div class="err">${d.error}</div>`;
+    return;
+  }
+
+  const t = d.temperature ?? {};
+  const state = t.state ?? 'HEALTHY';
+  $('dot').style.background = `var(${COLOR[state] ?? '--calm'})`;
+  $('title').textContent = 'Forseti';
+  $('sub').innerHTML = `<span class="state" style="color:var(${COLOR[state] ?? '--calm'})">${state}</span>`;
+  $('temp').textContent = t.temperature == null
+    ? 'no reading'
+    : t.temperature.toFixed(2) + '  ·  ' + pct(t.measured_weight) + ' of signals measured';
+
+  // §8.1:ELEVATED 以上才出現一行原因
+  const rank = ['HEALTHY','WATCH','ELEVATED','HIGH','CRITICAL'].indexOf(state);
+  const top = (t.top_contributors ?? [])[0];
+  if (rank >= 2 && top){
+    $('cause').className = 'cause';
+    $('cause').textContent = `${top.name} at ${top.value.toFixed(2)} — ${top.caveat}`;
+  } else if (rank >= 2 && t.note){
+    $('cause').className = 'cause';
+    $('cause').textContent = t.note;
+  } else {
+    $('cause').className = 'cause hidden';
+  }
+
+  // §8.1:HIGH 以上才展開診斷卡
+  $('diag').hidden = rank < 3;
+  if (rank >= 3){
+    const l = d.liveness ?? {};
+    const a = d.artifacts ?? {};
+    $('diagBody').innerHTML = rows([
+      ['Top contributor', top ? `${top.name} ${top.value.toFixed(2)}` : null],
+      ['Signals measured', pct(t.measured_weight)],
+      ['Verified progress age', dur(l.last_verified_progress_age_ms)],
+      ['Silent execution', pct(l.silent_execution_ratio)],
+      ['Artifact claims refuted', a.total ? `${a.REFUTED} of ${a.total}` : null],
+      ['Claims never checked', a.unchecked_ratio == null ? null : pct(a.unchecked_ratio)],
+      ['Goal state', d.drift?.goal_state ?? null],
+      ['Direction', d.drift?.display ?? null],
+    ]);
+  }
+
+  // §8.1:CRITICAL 才出現救援卡,而且要有快照
+  const ready = d.liveness?.snapshot_ready === true;
+  $('rescue').hidden = !(rank >= 4);
+  if (rank >= 4){
+    $('rescueBody').innerHTML = ready
+      ? rows([
+          ['Recovery snapshot', 'ready'],
+          ['Unsafe interrupt rate', pct(d.liveness?.unsafe_interrupt_rate)],
+          ['Interventions so far', d.interventions?.interventions ?? 0],
+          ['Of which injected', d.interventions?.injected ?? 0],
+        ])
+      : '<div class="err">No usable recovery snapshot. Interrupting now would lose the working state — '
+        + 'the specification requires a snapshot before, or at, the interruption.</div>';
+  }
+
+  // 拿不到的東西一律列出來,不用預設值蓋過去
+  const gaps = d.status?.unavailable ?? [];
+  $('gapsWrap').hidden = gaps.length === 0;
+  $('gaps').innerHTML = gaps.map((g) => `<li>${g}</li>`).join('');
+}
+
+tick();
+setInterval(tick, 4000);
+</script>
