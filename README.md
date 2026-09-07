@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 583 assertions, all green.
+`npm test` → 621 assertions, all green.
 
 </div>
 
@@ -355,6 +355,22 @@ Two distinctions the module refuses to blur. A file that exists at a plausible s
 
 **This is also what reopens idle detection.** `heartbeat` v0.2 refuses activity as a proxy for progress, which left it unable to stop a loop on a host with no verification contract. Verified artifacts are the qualifying source: count them, and the check works again — on evidence rather than on motion.
 
+### `signals.js` — ten atomic signals, and what each one cannot tell you
+
+Specification section 3.1 defines ten signals, each normalised to 0..1. Three rules run through all of them.
+
+**Unmeasurable returns `null`, never `0`.** Zero means measured and fine. Null means not measured. Treating the second as the first makes a system with nothing connected look perfectly healthy — the single most dangerous failure mode for a health instrument.
+
+**Every signal carries its own caveat**, because alone each one misreads. The spec says so in the very first entry: high tool occupancy is benign if verified progress is also rising. So S3 says it is weak evidence and must not be used alone; S9 says it measures unsafe-interrupt risk, not user mood; S6 refuses to compute at all unless corrections have already been separated from new requirements, because that distinction needs the text and guessing it would produce a confident wrong number.
+
+**All windows and decay constants are uncalibrated**, and the spec lists them first among the things that must be fitted rather than guessed. The defaults exist so the code runs, not so anyone relies on them.
+
+Two signals are stricter than they look. S4 does not count repetition alone — repeating an action against a *different* target is not a retry. S10 returns `null` when no refutation event exists at all: repeating a strategy nobody has contradicted is just doing the work, not persisting against evidence.
+
+**The composite refuses to hide its own coverage.** `composite()` excludes unmeasured signals from both numerator and denominator, then reports `measured_weight` — how much of the weighted total actually had data behind it. Substituting zero for a missing signal would hand a disconnected system a perfect score. When nothing at all is measurable it returns `temperature: null` with the line that matters: *this is not a healthy reading; it is no reading.* And every score arrives with its top contributors, because the spec judges a bare scalar non-conformant.
+
+The runtime computes four of the ten on its own (S1, S4, S5, S7). The other six need something not present in an event stream — a definition of user-visible liveness, this user's own output baseline, the correction/new-requirement split, an evidence contract, interruption events, refutation events — and those are reported as gaps rather than defaulted.
+
 ---
 
 ## Design rules
@@ -411,6 +427,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 |---|---|---|
 | `conformance.js` | 21 | Verified |
 | `artifact.js` | 35 | Verified |
+| `signals.js` | 31 | Verified |
 | `capture.js` | 46 | Verified |
 | `shell.js` | 30 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
@@ -425,7 +442,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 91 | Verified |
+| `runtime.js` | 98 | Verified |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.

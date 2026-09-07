@@ -806,5 +806,58 @@ t('產物驗證結果跨重啟活著', () => {
   assert.equal(b.artifactHealth().REFUTED, 1);
 });
 
+// ---- 原子訊號接線(規格書第 3 節)----
+t('十個訊號都在,runtime 算不出來的回 null 不頂替', () => {
+  const r = rt();
+  const sg = r.signals();
+  assert.equal(sg.length, 10);
+  const unmeasured = sg.filter((x) => x.value === null).map((x) => x.id);
+  for (const id of ['S2', 'S3', 'S6', 'S8', 'S9', 'S10']) {
+    assert.ok(unmeasured.includes(id), id + ' 需要宿主提供,應為 null');
+  }
+});
+
+t('S5 從已驗證的產物自己算得出來', () => {
+  const r = rt();
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 0 });
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 900, hash: 'x' });
+  const s5 = r.signals().find((x) => x.id === 'S5');
+  assert.equal(s5.value, 0.5);
+});
+
+t('S7 沒驗過任何進展時回 null,那不等於沒有停滯', () => {
+  const s7 = rt().signals().find((x) => x.id === 'S7');
+  assert.equal(s7.value, null);
+  assert.match(s7.caveat, /not the same as no stagnation/);
+});
+
+t('宿主給得出來的訊號可以直接傳進去', () => {
+  const r = rt();
+  const sg = r.signals({ liveness: { silentMs: 90, activeMs: 100 } });
+  assert.equal(sg.find((x) => x.id === 'S2').value, 0.9);
+});
+
+t('複合溫度一定帶貢獻者與資料比重', () => {
+  const r = rt();
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 0 });
+  const c = r.runtimeTemperature();
+  assert.ok(c.temperature !== null);
+  assert.ok(c.top_contributors.length > 0);
+  assert.ok(c.measured_weight > 0 && c.measured_weight < 1);
+  assert.match(c.note, /indicative only/);
+});
+
+t('一個訊號都量不到時是沒有讀數,不是健康', () => {
+  const c = rt().runtimeTemperature();
+  assert.equal(c.temperature, null);
+  assert.match(c.note, /not a healthy reading/);
+});
+
+t('status 帶複合溫度', () => {
+  const r = rt();
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 0 });
+  assert.ok(r.status().runtime_temperature.temperature !== null);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

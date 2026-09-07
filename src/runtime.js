@@ -59,6 +59,11 @@ import {
 import { expandBashEvent } from './shell.js';
 import { buildImportRecords } from './imports.js';
 import { verifyClaim, artifactNullity, summarize as summarizeArtifacts } from './artifact.js';
+import {
+  s1ToolOccupancy, s2SilentExecution, s3OutputCompression, s4RetryRepetition, s5ArtifactNullity,
+  s6CorrectionLoad, s7ProgressStagnation, s8ClaimEvidenceGap, s9CancellationPressure,
+  s10StrategyPersistence, composite,
+} from './signals.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -542,6 +547,15 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         evidence: mix,
         /** 燒了資源卻零產出的委派。 */
         barren: checkBarrenInvestment(state.investments),
+        /** 規格書第 3.2 節的複合溫度。用多少比重的資料算的,看 measured_weight。 */
+        runtime_temperature: composite([
+          s4RetryRepetition(state.toolCalls.slice(-200).map((c) => ({ tool: c.name, target: c.file_path }))),
+          s5ArtifactNullity(artifactNullity(state.artifacts)),
+          s7ProgressStagnation((() => {
+            const lv = [...state.artifacts].filter((a) => a.verdict === 'VERIFIED').sort((a, b) => b.at - a.at)[0];
+            return { lastVerifiedAt: lv?.at ?? null, now: lv ? now() : null };
+          })()),
+        ], config.signals),
         /** 宣稱的產物有多少站得住。沒驗過任何東西時 total 為 0。 */
         artifacts: Object.freeze({
           ...summarizeArtifacts(state.artifacts),
@@ -569,6 +583,59 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
             : []),
         ]),
       });
+    },
+
+    // ── 原子訊號與複合溫度(規格書第 3 節)────────────────
+
+    /**
+     * 算出這一刻的十個原子訊號。
+     *
+     * runtime 自己算得出來的只有四個(S1、S4、S5、S7),
+     * 因為其他六個需要的東西不在事件流裡:
+     *
+     *   S2 需要「使用者看得見的動靜」的定義,那是宿主的 UI 概念
+     *   S3 需要這個使用者自己的健康基線,不是一個全域常數
+     *   S6 需要把糾正跟新需求分開,那要讀文字
+     *   S8 需要「實質宣稱」的定義與證據契約
+     *   S9 需要中斷事件,hook 拿不到
+     *   S10 需要反證事件,那是人或另一個系統判定的
+     *
+     * 拿不到的一律回 null 並列在 unmeasured,不用預設值頂替。
+     * 複合溫度會告訴你它是用多少比重的資料算出來的。
+     *
+     * @param {object} extra 宿主算得出來的那幾個,直接傳進來
+     */
+    signals(extra = {}) {
+      const t = now();
+      const win = config.signals?.windowMs ?? 10 * 60 * 1000;
+      const recent = state.toolCalls.filter((c) => c.at >= t - win);
+
+      const lastVerified = [...state.artifacts]
+        .filter((a) => a.verdict === 'VERIFIED')
+        .sort((a, b) => b.at - a.at)[0] ?? null;
+
+      return Object.freeze([
+        extra.s1 ?? s1ToolOccupancy(extra.toolOccupancy ?? {}),
+        extra.s2 ?? s2SilentExecution(extra.liveness ?? {}),
+        extra.s3 ?? s3OutputCompression(extra.output ?? {}),
+        s4RetryRepetition(recent.map((c) => ({ tool: c.name, target: c.file_path }))),
+        s5ArtifactNullity(artifactNullity(state.artifacts)),
+        extra.s6 ?? s6CorrectionLoad(extra.corrections ?? {}),
+        s7ProgressStagnation({ lastVerifiedAt: lastVerified?.at ?? null, now: lastVerified ? t : null }),
+        extra.s8 ?? s8ClaimEvidenceGap(extra.claims ?? {}),
+        extra.s9 ?? s9CancellationPressure(extra.interruptions ?? {}),
+        extra.s10 ?? s10StrategyPersistence(extra.strategy ?? {}),
+      ]);
+    },
+
+    /**
+     * 複合溫度 T_runtime。規格書第 3.2 節。
+     *
+     * 回傳一定帶貢獻最大的訊號 —— 單一純量沒有解釋,規格書判它不合格。
+     * 也一定帶 measured_weight:這個分數是用多少比重的資料算出來的。
+     */
+    runtimeTemperature(extra = {}) {
+      return composite(this.signals(extra), config.signals);
     },
 
     // ── 產物實在性(規格書第 6 節)──────────────────────
