@@ -225,5 +225,33 @@ t('兩個靜默吃資料的坑寫在原始碼裡，不可被靜默刪除', () =>
   assert.ok(/幽靈鎖死/.test(src), '坑二必須留在原始碼裡');
 });
 
+t('存檔裡的檔案集合有上限,不會無限長大', async () => {
+  // 事件早就有上限,但從事件衍生的兩個檔案集合沒有。
+  // 實測八千筆事件時它們佔存檔的 87%,而每一次 PostToolUse
+  // 都要把整份讀回來再寫出去。
+  const { createRuntime } = await import('../src/runtime.js');
+  const rt = createRuntime();
+  rt.ingest(Array.from({ length: 6000 }, (_, i) => ({
+    attributed_agent: 'a', session_id: 'a', name: 'Write',
+    input: { file_path: `/p/f${i}.js` }, at: Date.now() - (6000 - i) * 1000,
+  })));
+  const body = JSON.parse(JSON.parse(rt.save()).body);
+  assert.ok(Object.keys(body.coverages[0].files).length <= 2000, 'coverage 的檔案集合要有上限');
+  assert.ok(body.signals.selfWritten.length <= 2000, 'selfWritten 要有上限');
+  assert.equal(body.coverages[0].files_truncated, true, '截斷了就要說,不能靜靜給一個變小的數字');
+});
+
+t('沒超過上限就不會被標成截斷', async () => {
+  const { createRuntime } = await import('../src/runtime.js');
+  const rt = createRuntime();
+  rt.ingest(Array.from({ length: 50 }, (_, i) => ({
+    attributed_agent: 'a', session_id: 'a', name: 'Write',
+    input: { file_path: `/p/f${i}.js` }, at: Date.now(),
+  })));
+  const body = JSON.parse(JSON.parse(rt.save()).body);
+  assert.equal(body.coverages[0].files_truncated, undefined);
+  assert.equal(Object.keys(body.coverages[0].files).length, 50);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

@@ -101,6 +101,36 @@ const EVENT_RETENTION_MS = 10 * 60 * 1000;
 /** 存檔最多留幾筆事件。狀態檔不該無限長大。 */
 const MAX_KEPT_EVENTS = 2000;
 
+/**
+ * 存檔最多記幾個檔案路徑。
+ *
+ * 事件本身早就有上限了,但從事件衍生出來的兩個檔案集合沒有:
+ * 每個 coverage 的 files,以及 selfWritten。實測八千筆事件時
+ * 它們佔存檔的 87%,而事件本身只佔一成。存檔會無限長大,
+ * 每一次 PostToolUse 都要把整份讀回來再寫出去,於是長 session
+ * 的後半會越來越慢 —— 那正是最需要它的時候。
+ *
+ * 截斷會讓下游低估「這個 agent 知道多少」,於是交接時會建議
+ * 多轉述一些。錯的方向是保守的,但仍然要標出來,不能靜靜地
+ * 給一個變小的數字:截斷過的 coverage 帶 files_truncated。
+ *
+ * 兩千個不同檔案在真實 session 幾乎不會碰到,這個上限是防病態,
+ * 不是日常會踩到的線。【兩千沒有實測校準,是照 MAX_KEPT_EVENTS 取的。】
+ */
+const MAX_KEPT_PATHS = 2000;
+
+/**
+ * 留最後 N 個。物件與 Set 都保留插入順序,所以尾端就是比較新的那些。
+ * 這是近似:檔案集合本身沒有時間戳,拿不到真正的「最近」。
+ */
+function tailPaths(files) {
+  const keys = Object.keys(files);
+  if (keys.length <= MAX_KEPT_PATHS) return { files, truncated: false };
+  const kept = {};
+  for (const k of keys.slice(-MAX_KEPT_PATHS)) kept[k] = files[k];
+  return { files: kept, truncated: true };
+}
+
 export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
   const state = {
     events: [],        // 中性事件,累積用
@@ -1402,7 +1432,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         locks: state.locks,
         capsules: state.capsules,
         budget: state.budget,
-        coverages: [...state.coverages.values()],
+        coverages: [...state.coverages.values()].map((c) => {
+          const { files, truncated } = tailPaths(c.files);
+          return truncated ? { ...c, files, files_truncated: true } : c;
+        }),
         stats: state.stats,
         edges: state.edges,
         // 只留最近的事件。撞車偵測只看得到最近幾十秒,而狀態檔不該無限長大。
@@ -1433,7 +1466,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           declaredTurns: state.declaredTurns,
           failures: state.failures,
           friction: state.friction,
-          selfWritten: state.selfWritten,
+          // 同樣的道理。這裡不必標記:它只被用來判斷「這個檔是不是我自己寫的」,
+          // 而漏判的方向是把自寫的當成外來的,那是保守的方向。
+          selfWritten: [...state.selfWritten].slice(-MAX_KEPT_PATHS),
           investments: state.investments,
         },
       }));
