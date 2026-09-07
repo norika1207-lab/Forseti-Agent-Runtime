@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 195 assertions, all green.
+`npm test` → 230 assertions, all green.
 
 </div>
 
@@ -20,7 +20,7 @@ Two agents edit the same file and silently overwrite each other. An agent claims
 
 None of these are model problems. They are runtime problems, and they need runtime answers.
 
-Forseti is six such answers, each small enough to adopt on its own.
+Forseti is seven such answers, each small enough to adopt on its own.
 
 ---
 
@@ -140,6 +140,20 @@ One more thing that only showed up in production: **if the upstream turn produce
 
 `automationRate()` is the one number that matters: how much of your handoff traffic is rules versus your own hands. It should climb. If it doesn't, this mechanism isn't earning its keep.
 
+### `persist.js` — surviving a restart
+
+Every module above is stateless. Restart the process and M2's accumulated automation rate resets to zero, M3 forgets who holds which files, M5 forgets what every session knew. Those numbers are only useful because they accumulate; resetting them on restart is the same as never having collected them.
+
+This module doesn't touch the filesystem either. It packs, serialises, restores, and — the part that matters — decides what a restored state is still allowed to claim. The host only has to store a string and read it back.
+
+**A `Set` does not survive `JSON.stringify`.** It becomes `{}`. Not an empty array, not an error — an empty object, silently. `admission.js` stores each agent's touched files in a Set, so a naive save-and-reload turns every agent into one that has written nothing, out-of-scope detection stops working entirely, and the UI looks completely normal. This is the failure class that gets found months later, during an incident. `roundTripCheck()` exists so a host can assert, before shipping, that its real state survives a save and reload intact.
+
+**After a restart, every ACTIVE write scope is suspect.** The record says agent A is writing these files; A's process died when the host did. Believe it and the project gets deadlocked by a ghost that will never release. Auto-release it and you let two agents into the same file if A is actually still alive in another process — precisely what M3 exists to prevent. So `restore()` does neither: it flags them `stale` and hands the decision to the host, which is the only party that knows whether those agents still exist. Until the host decides, they keep blocking, because the conservative failure is the cheaper one.
+
+Expired locks are dropped outright — a dead holder should not keep blocking. A load failure returns `state: null`, never an empty state, because "could not read the snapshot" and "this is a fresh empty project" are different facts and conflating them silently overwrites everything.
+
+The checksum is FNV-1a, and the source says plainly that it is an integrity check and not a security one: it catches truncation and a mangled file, and stops nobody who edits deliberately.
+
 ---
 
 ## Design rules
@@ -154,7 +168,7 @@ These are enforced by the test suite. Deleting an honesty annotation makes a tes
 
 **Every returned object is frozen.** State changes go through the API or not at all.
 
-**Zero dependencies.** Five of the six modules import nothing at all. The sixth imports one sibling.
+**Zero dependencies.** Six of the seven modules import nothing at all. The seventh imports one sibling.
 
 ---
 
@@ -175,6 +189,7 @@ import { handoffDelta }      from './src/coverage.js';
 import { previewCapsule }    from './src/capsule.js';
 import { planHandoff }       from './src/handoff.js';
 import { normalizeStream }   from './src/capture.js';
+import { serialize, load }   from './src/persist.js';
 ```
 
 Each module works standalone. Adopt one, ignore the rest.
@@ -193,9 +208,10 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `admission.js` | 34 | Verified |
 | `coverage.js` | 30 | Verified |
 | `handoff.js` | 38 | Verified |
-| end-to-end | 13 | Verified |
+| `persist.js` | 31 | Verified |
+| end-to-end | 17 | Verified |
 
-**Honest about what's missing.** The host still has to do two things this repo does not: persist state across restarts, and call these functions at dispatch time. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) are documented as unmeasured rather than claimed.
+**Honest about what's missing.** One thing is still on the host: actually calling these functions at dispatch time, and storing the one string `persist.js` hands it. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) are documented as unmeasured rather than claimed.
 
 `handoff.js` and `capture.js` carry logic that ran in production before being extracted. Nine of handoff's assertions are regression baselines from that environment.
 

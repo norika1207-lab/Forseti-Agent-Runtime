@@ -10,6 +10,7 @@ import { normalizeStream, coverageDepthOf, toWriteEvents, actualWrites, inferTur
 import { coverageFromEvents, handoffDelta, pickHottest, overlapRatio } from '../src/coverage.js';
 import { windowConflicts, createWriteScope, recordActualWrite, outOfScopeWrites, decideAdmission } from '../src/admission.js';
 import { planHandoff, createEdge, createStats, applyStats, automationRate, buildHandoffPacket } from '../src/handoff.js';
+import { createSnapshot, serialize, load, roundTripCheck } from '../src/persist.js';
 
 let pass = 0, fail = 0;
 function t(name, fn) {
@@ -185,6 +186,65 @@ t('採集品質掉下來時看得見，五個機制的答案上限就是它', ()
   const h = captureHealth(r);
   assert.ok(h.capture_rate < 1);
   assert.equal(h.worst_reason.reason, 'NO_ATTRIBUTION');
+});
+
+// ---------------------------------------------------------------------------
+// 跨重啟：狀態真的活得下來嗎
+// ---------------------------------------------------------------------------
+
+t('跨重啟：admission 真正產生的 scope 過得了存讀，那個 Set 沒被吃掉', () => {
+  const { events } = normalizeStream(RAW);
+  let scope = createWriteScope({
+    agent_id: 'w2', task_id: 'ui-work', declared: ['src/ui.js'], declared_at: T0,
+  });
+  for (const f of actualWrites(events, 'w2')) scope = recordActualWrite(scope, f);
+
+  // 存下去之前先自我檢查
+  const snapshot = createSnapshot({ scopes: [scope], at: T0 });
+  assert.equal(roundTripCheck(snapshot).ok, true, '真實資料結構必須過得了來回');
+
+  const back = load(serialize(snapshot), { now: T0 + 1000 }).state.scopes[0];
+  assert.ok(back.actual instanceof Set, 'actual 必須還是 Set，不是空物件');
+  assert.deepEqual([...back.actual].sort(), ['shared/config.js', 'src/ui.js']);
+
+  // 而且還原之後越界偵測仍然管用,這才是它活著的意義
+  assert.deepEqual(outOfScopeWrites(back), ['shared/config.js']);
+});
+
+t('跨重啟：M2 累積的自動化率沒有歸零', () => {
+  let stats = createStats();
+  stats = applyStats(stats, { dispatch: [1, 2, 3], gates: [], blocked: [] }, '2026-09-01T00:00:00Z');
+  const before = automationRate(stats);
+
+  const back = load(serialize(createSnapshot({ stats, at: T0 })), { now: T0 + 86_400_000 }).state.stats;
+  assert.equal(automationRate(back), before, '累積指標歸零等於這個機制從沒存在過');
+  assert.equal(back.since, '2026-09-01T00:00:00Z');
+});
+
+t('跨重啟：M5 的覆蓋範圍活得下來，接手的人不必重讀一遍', () => {
+  const { events } = normalizeStream(RAW);
+  const cov = coverageFromEvents({
+    session_id: 'w1-sess', agent_id: 'w1',
+    events: events.filter((e) => e.agent_id === 'w1'), toolDepth: coverageDepthOf,
+  });
+  const back = load(serialize(createSnapshot({ coverages: [cov], at: T0 })), { now: T0 }).state.coverages[0];
+  assert.equal(back.files['src/server.js'], 'EDITED');
+  assert.equal(back.is_upper_bound, true, '上界標記不可在存讀過程中掉失');
+});
+
+t('跨重啟：重啟前正在寫的 agent 被標成待確認,不是默默當它還活著', () => {
+  const held = createWriteScope({
+    agent_id: 'w1', task_id: 't', declared: ['src/server.js'], declared_at: T0,
+  });
+  const r = load(serialize(createSnapshot({ scopes: [held], at: T0 })), { now: T0 + 5000 });
+  assert.equal(r.stale_scopes.length, 1);
+
+  // 宿主還沒確認之前,它仍然擋得住新任務 —— 這是刻意的保守
+  const verdict = decideAdmission(
+    { agent_id: 'w9', task_id: 'new', declared: ['src/server.js'], declared_at: T0 + 5000 },
+    { scopes: r.state.scopes, now: T0 + 5000 },
+  );
+  assert.notEqual(verdict.decision, 'ALLOW');
 });
 
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
