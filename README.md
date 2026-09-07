@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 809 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 841 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -521,6 +521,25 @@ cannot tell. If the direction genuinely changed, declare it so the
 drift reading stays meaningful.
 ```
 
+### The Stop hook — the one that catches the actual failure
+
+Every check above runs when something is about to be written. None of them run at the moment this repo's own author kept failing: declaring work and then ending the turn having done nothing.
+
+Measured on the session that built Forseti: 401 turns, 23 of which declared work and ended with zero tool calls. The author's own estimate was *two*. Not one of those 23 turns could have been caught by a PreToolUse hook, because there was no tool call to intercept.
+
+`hooks/forseti-stop-hook.mjs` runs on Stop. If anything was declared with a named file and that file was never touched, it exits 2 and the list comes back:
+
+```
+Forseti: 1 thing(s) declared this session with no matching action on disk.
+  · src/a.js, src/b.js — wire the thing
+
+Either do them now, or say explicitly that they are dropped.
+```
+
+Three rules keep it from becoming torture. It fires **once per turn** — twice would mean "you may not stop until you are finished", and some things genuinely need stopping to ask about. It only holds declarations that **named a concrete file**, because using an uncheckable declaration to block someone converts the tool's own limitation into the user's obligation. And any internal failure exits 0, same as the other hook: a guard that jams gets removed, and a removed guard protects nobody.
+
+`hooks/forseti-declare.mjs` is how something gets onto that ledger, and it refuses a declaration with no named target.
+
 ---
 
 ## Design rules
@@ -596,6 +615,8 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `followthrough.js` | 21 | Verified |
 | `rhetoric.js` | 19 | Verified |
 | `scope.js` | 15 | Verified |
+| `baseline.js` | 17 | Verified |
+| `overhead.js` | 14 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
 | `runtime.js` | 128 | Verified |
