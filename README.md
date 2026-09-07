@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 841 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 853 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -603,7 +603,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `capture.js` | 47 | Verified |
 | `shell.js` | 33 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
-| `imports.js` | 28 | Verified |
+| `imports.js` | 33 | Verified |
 | `cost.js` | 16 | Verified |
 | `capsule.js` | 18 | Verified |
 | `admission.js` | 34 | Verified |
@@ -619,7 +619,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `overhead.js` | 14 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 128 | Verified |
+| `runtime.js` | 135 | Verified |
 | acceptance (spec §14) | 10 | All passing |
 | end-to-end | 17 | Verified |
 

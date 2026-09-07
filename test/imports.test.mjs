@@ -77,6 +77,31 @@ t('目錄補 index', () => {
 t('上層路徑收得平', () =>
   assert.equal(resolve('src/deep/x.js', '../a.js', FILES).target, 'src/a.js'));
 
+t('絕對路徑當 key 時也解得開', () => {
+  // 原本 normalize 會吃掉開頭的斜線,於是絕對路徑一律解析失敗,
+  // 圖是空的,孤立模組檢查回報全部孤立。25 個模組報了 24 個。
+  const ABS = new Set(['/Volumes/X/src/a.js', '/Volumes/X/src/b.js']);
+  const r = resolve('/Volumes/X/src/a.js', './b.js', ABS);
+  assert.equal(r.target, '/Volumes/X/src/b.js');
+});
+
+t('絕對路徑的整包解析也對得起來', () => {
+  const proj = {
+    '/p/src/app.js': "import { a } from './auth.js'",
+    '/p/src/auth.js': "import { u } from './util.js'",
+    '/p/src/util.js': '',
+  };
+  const { imports, stats } = buildImportRecords(proj);
+  assert.equal(stats.resolution_rate, 1);
+  const g = buildGraph(imports);
+  assert.equal(g.reverse.get('/p/src/util.js').size, 1);
+});
+
+t('路徑往上跳一層也不會吃掉根斜線', () => {
+  const ABS = new Set(['/p/src/a.js', '/p/lib/b.js']);
+  assert.equal(resolve('/p/src/a.js', '../lib/b.js', ABS).target, '/p/lib/b.js');
+});
+
 t('外部套件不是解析失敗,是本來就不該解', () => {
   const r = resolve('src/x.js', 'react', FILES);
   assert.equal(r.target, null);

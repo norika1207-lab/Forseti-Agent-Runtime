@@ -79,15 +79,24 @@ export function parseImports(source) {
   return Object.freeze({ specifiers: Object.freeze(out), opaque });
 }
 
-/** 把 a/b/../c 這種路徑收平。 */
+/**
+ * 把 a/b/../c 這種路徑收平。
+ *
+ * 開頭的斜線要保留。原本的實作把它吃掉了,所以宿主如果用絕對路徑
+ * 當檔案 key,每一個相對 import 都會解析失敗 —— 圖是空的,
+ * 而空圖裡每個模組都沒有人依賴,於是孤立模組檢查回報全部孤立。
+ * 這是 tools/orphans.mjs 第一次跑就抓到的:25 個模組報了 24 個孤立。
+ */
 function normalize(path) {
+  const raw = String(path);
+  const absolute = raw.startsWith('/');
   const parts = [];
-  for (const seg of String(path).split('/')) {
+  for (const seg of raw.split('/')) {
     if (seg === '' || seg === '.') continue;
     if (seg === '..') { parts.pop(); continue; }
     parts.push(seg);
   }
-  return parts.join('/');
+  return (absolute ? '/' : '') + parts.join('/');
 }
 
 function dirOf(file) {
