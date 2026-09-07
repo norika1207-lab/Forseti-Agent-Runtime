@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 517 assertions, all green.
+`npm test` → 542 assertions, all green.
 
 </div>
 
@@ -316,6 +316,24 @@ External packages are not resolution failures. `react` was never meant to resolv
 
 **Run against this repo's own source**, it resolved 100% of 10 internal imports across 14 files — and immediately found a real defect: `shell.js` was not reachable from `runtime.js`. The runtime was not expanding shell commands, so every file changed through a shell was invisible to it. That is the exact blind spot that had held capture at 19.6% before it was fixed in the analysis path, still open in the live path. Fixed in the same commit the graph found it.
 
+### `conformance.js` — what makes a verdict admissible
+
+A formal specification (v0.1, 2026-09-07) set a rule this repo did not meet: any detector emitting *drift*, *deception*, *failure* or *safe* must expose seven things — its input events, its computation version, its thresholds, its exclusion conditions, its epistemic state, a human-readable explanation, and the recovery behaviour it links to. Anything short of that is experimental and must be labelled so.
+
+Missing a field does not throw. Throwing pushes developers toward filling in a plausible value; a `conformant: false` with the gap named is more honest than a complete-looking structure full of placeholder text.
+
+The epistemic ladder is the specification's, unchanged: `OBSERVED`, `VERIFIED`, `INFERRED`, `UNKNOWN`, `REFUTED`, `STALE`. Only the first two may be stated as fact. A fluent self-explanation never promotes `INFERRED` to `VERIFIED`.
+
+### Turning the tools on this repo's own session
+
+Running the detectors against the transcript that built them found three violations of that spec, in the output itself:
+
+**Drift claimed what it was not entitled to claim.** The anchor was inferred from the opening segments, and the module still emitted `is_drift: true`. The spec is explicit: when the goal is not reliable the interface says *goal alignment cannot be determined*, never *the agent drifted*. `GOAL_STATES` now carries the spec's four levels, and an `AMBIGUOUS` or `MISSING` anchor returns `null` with the reason. On the same data the verdict changed from "drifted" to "cannot be determined — 35 plausible goals coexist in the anchor window."
+
+**Idle detection counted the wrong thing.** `heartbeat` v0.1 used files-written as its proxy for progress, which the spec forbids in as many words: activity, tool calls and file names are not proof of progress. v0.2 accepts only verified progress and, when the host cannot supply it, turns idle detection *off* and says so. The cost is real — a host without verification contracts loses the ability to stop a loop — and that is the correct trade. Pretending to know beats nothing; being unable to know beats pretending.
+
+**The thermometer measured the wrong object.** Run after the fact it reported a comfortable 86.5% checked evidence. That is the transcript's composition, not the live window's, and `thermometer.js` says so in its own opening paragraph. The reading was false comfort, and only running it produced the demonstration.
+
 ---
 
 ## Design rules
@@ -370,6 +388,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 
 | Module | Assertions | State |
 |---|---|---|
+| `conformance.js` | 21 | Verified |
 | `capture.js` | 46 | Verified |
 | `shell.js` | 30 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
@@ -382,12 +401,14 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `persist.js` | 31 | Verified |
 | `drift.js` | 37 | Verified |
 | `provenance.js` | 32 | Verified |
-| `heartbeat.js` | 31 | Verified |
+| `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 84 | Verified |
+| `runtime.js` | 85 | Verified |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.
+
+**Two of these modules were transcribed from confession documents, and that is a source of hypotheses, not of ground truth.** The specification says so directly: model self-reports are useful research material and must not be treated as sole ground truth. They pointed at what to look for; the event stream is what confirms it.
 
 **Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()`, forwarded work on `completeTurn()`, or stopped a loop on a `STOP` verdict. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. Every mechanism now has an input source.
 

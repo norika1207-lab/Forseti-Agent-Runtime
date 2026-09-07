@@ -14,7 +14,7 @@ function t(name, fn) {
   catch (e) { console.log('FAIL  ' + name + '\n      ' + e.message); fail++; }
 }
 const T = 1_700_000_000_000;
-const F = (over = {}) => ({ capture_rate: 1, drift_level: 'ON_COURSE', drift_unannounced: false, barren_count: 0, new_provenance: 0, produced: 1, ...over });
+const F = (over = {}) => ({ capture_rate: 1, drift_level: 'ON_COURSE', drift_unannounced: false, barren_count: 0, new_provenance: 0, verified_progress: 1, ...over });
 
 t('四種結論,一字不改', () =>
   assert.deepEqual([...VERDICTS], ['QUIET', 'NOTE', 'WAKE', 'STOP']));
@@ -76,27 +76,50 @@ t('宣稱引用了沒親自查過的東西:叫人', () => {
 });
 
 // ---- 核心規則:心跳不是進度 ----
-t('這一輪沒產出就記一筆空轉', () => {
-  const j = judgeBeat(F({ produced: 0 }), createBeatState());
+t('v0.2:拿不到驗證資料時不判空轉,也不判有產出', () => {
+  const j = judgeBeat(F({ verified_progress: null }), createBeatState());
+  assert.equal(j.idle_detection_active, false);
+  assert.equal(j.barren_streak, 0, 'UNKNOWN 不可以被轉換成失敗');
+  assert.equal(j.unverifiable_streak, 1);
+  assert.ok(j.reasons.some((r) => /not accepted as proof of progress/.test(r)));
+});
+
+t('v0.2:防線關著的時候,連續多輪也不會 STOP', () => {
+  let s = createBeatState();
+  let j;
+  for (let i = 0; i < 5; i++) { j = judgeBeat(F({ verified_progress: null }), s); s = applyBeat(s, planBeat(s), j, T); }
+  assert.notEqual(j.verdict, 'STOP', '沒有驗證資料就沒有資格叫停');
+  assert.equal(j.unverifiable_streak, 5);
+});
+
+t('活動量不是進度,這條的來由寫在原始碼裡', () => {
+  const src = readFileSync(new URL('../src/heartbeat.js', import.meta.url), 'utf8');
+  assert.ok(/MUST NOT treat activity, tool calls, or file names as proof of progress/.test(src));
+  assert.ok(/比誠實說不知道更糟/.test(src));
+});
+
+t('這一輪沒驗證到推進就記一筆空轉', () => {
+  const j = judgeBeat(F({ verified_progress: 0 }), createBeatState());
   assert.equal(j.barren_streak, 1);
   assert.equal(j.verdict, 'NOTE');
 });
 
 t('有產出就把空轉計數歸零', () => {
-  const j = judgeBeat(F({ produced: 2 }), { ...createBeatState(), barren_streak: 2 });
+  const j = judgeBeat(F({ verified_progress: 2 }), { ...createBeatState(), barren_streak: 2 });
   assert.equal(j.barren_streak, 0);
 });
 
 t('連續空轉到上限要停,不是繼續排下一輪', () => {
-  const j = judgeBeat(F({ produced: 0 }), { ...createBeatState(), barren_streak: 2 });
+  const j = judgeBeat(F({ verified_progress: 0 }), { ...createBeatState(), barren_streak: 2 });
   assert.equal(j.verdict, 'STOP');
+  assert.equal(j.idle_detection_active, true);
   assert.ok(j.reasons.some((r) => /A scheduled wake-up is not progress/.test(r)),
     '排程不是進度,這句話必須出現在結論裡');
 });
 
 t('上限可調,不是硬編碼', () => {
   const s = { ...createBeatState(), barren_streak: 0 };
-  assert.equal(judgeBeat(F({ produced: 0 }), s, { barrenStreakLimit: 1 }).verdict, 'STOP');
+  assert.equal(judgeBeat(F({ verified_progress: 0 }), s, { barrenStreakLimit: 1 }).verdict, 'STOP');
 });
 
 // ---- 下一次多久 ----
@@ -143,7 +166,7 @@ t('沒有對應 agent 的理由要列在 unhandled,不靜默略過', () => {
 t('狀態帶得動,而且不改原物件', () => {
   const s0 = createBeatState();
   const p = planBeat(s0);
-  const j = judgeBeat(F({ produced: 0 }), s0);
+  const j = judgeBeat(F({ verified_progress: 0 }), s0);
   const s1 = applyBeat(s0, p, j, T);
   assert.equal(s0.beats, 0);
   assert.equal(s1.beats, 1);

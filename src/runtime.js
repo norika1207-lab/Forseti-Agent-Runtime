@@ -777,8 +777,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
      * 沒交東西下一輪就會被零產出偵測抓到,這條迴路是閉的。
      *
      * @param {object} opts
-     * @param {number} opts.produced 這一輪實際產出了什麼(宿主定義單位)。
-     *   不給的話用「自上次心跳以來寫入的檔案數」當代理值。
+     * @param {number|null} opts.produced 這一輪有幾項經過驗證契約確認的推進。
+     *   不給就是 null,空轉偵測會關掉並明說 —— 活動量不接受當成進度證據。
      * @param {string[]} opts.agents 現在有哪些 agent 可派
      */
     beat({ produced = null, agents = [], config = {} } = {}) {
@@ -788,11 +788,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         hasSignals: state.failures.length > 0 || state.friction.length > 0,
       });
 
-      // 產出的代理值:自上次心跳以來,實際寫入的檔案數。
-      // 這是刻意選的:寫了東西才算做了事,講了話不算。
-      const writesNow = state.events.filter((e) => e.action === 'WRITE').length;
-      const producedNow = produced ?? (writesNow - state.lastProducedMark);
-      state.lastProducedMark = writesNow;
+      // v0.2:不再拿寫入檔案數當產出。規格書 0.2 明令
+      // MUST NOT treat activity, tool calls, or file names as proof of progress。
+      // 宿主拿得到驗證資料就傳進來,拿不到就是 null,空轉偵測整個關掉。
+      const verifiedNow = produced ?? null;
 
       const drift = this.driftCheck({ config });
       const health = captureHealth({
@@ -810,7 +809,7 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         drift_unannounced: drift.is_unannounced ?? false,
         barren_count: barren.length,
         new_provenance: 0,   // 宿主要查宣稱的話自己叫 checkClaim,心跳不猜有哪些宣稱
-        produced: producedNow,
+        verified_progress: verifiedNow,
       }, state.beat, config.heartbeat);
 
       state.beat = applyBeat(state.beat, plan, judged, at);
@@ -822,8 +821,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         verdict: judged.verdict,
         reasons: judged.reasons,
         note: judged.note,
-        produced: producedNow,
+        verified_progress: verifiedNow,
         barren_streak: judged.barren_streak,
+        unverifiable_streak: judged.unverifiable_streak,
+        idle_detection_active: judged.idle_detection_active,
         next: nextInterval(judged, config.interval),
         dispatch: dispatchPlan(judged, { available: agents }),
         drift,

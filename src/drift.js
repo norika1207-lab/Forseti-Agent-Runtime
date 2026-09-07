@@ -38,6 +38,20 @@
 
 export const ALERT_LEVELS = Object.freeze(['ON_COURSE', 'DRIFTING', 'OFF_COURSE', 'LOST']);
 
+/**
+ * 目標可得性。規格書 v0.1 第 4.1 節,一字不改。
+ *
+ * 這一級決定了「允許下什麼判斷」,不是決定「判斷準不準」:
+ *   EXPLICIT   擁有者講過目標。可以量相對目標的飄移。
+ *   DERIVED    從重複被接受的指令推出來的。只能給機率性判斷,而且要標來源。
+ *   AMBIGUOUS  同時存在多個說得通的目標。不准下硬結論。
+ *   MISSING    沒有可靠的目標表徵。可以講執行不穩定,但不准講語意飄移。
+ */
+export const GOAL_STATES = Object.freeze(['EXPLICIT', 'DERIVED', 'AMBIGUOUS', 'MISSING']);
+
+/** 這個模組的版本。改判準就要進版,不然兩次結果不同時分不出是資料變了還是演算法變了。 */
+export const VERSION = 'drift@0.2';
+
 export const DEFAULT_CONFIG = Object.freeze({
   /** 跟錨點的重疊低於此值 = 開始飄 */
   driftingBelow: 0.5,
@@ -110,6 +124,7 @@ export function createAnchor({ declared = null, segments = [], warmup = 3 } = {}
     return Object.freeze({
       topics: Object.freeze(new Set(declared)),
       inferred: false,
+      goal_state: 'EXPLICIT',
       warmup_segments: 0,
     });
   }
@@ -117,9 +132,18 @@ export function createAnchor({ declared = null, segments = [], warmup = 3 } = {}
   for (const s of segments.slice(0, warmup)) {
     for (const [k, v] of s.topics) acc.set(k, (acc.get(k) ?? 0) + v);
   }
+  const topics = new Set(acc.keys());
+
+  // 推出來的錨點分兩種情況,而且它們允許的判斷不同。
+  // 前幾段就在做很多不同的事,代表同時有多個說得通的目標,
+  // 那時候不准下硬結論 —— 規格書 4.1 的 AMBIGUOUS。
+  const state = topics.size === 0 ? 'MISSING'
+    : (topics.size > 4 ? 'AMBIGUOUS' : 'DERIVED');
+
   return Object.freeze({
-    topics: Object.freeze(new Set(acc.keys())),
+    topics: Object.freeze(topics),
     inferred: true,
+    goal_state: state,
     warmup_segments: Math.min(warmup, segments.length),
   });
 }
@@ -200,7 +224,27 @@ export function trajectory(segments, anchor, config = DEFAULT_CONFIG) {
  * @returns {{is_drift:boolean, mean_step:number|null, final_alignment:number|null,
  *            first_off_course:object|null, biggest_step_drop:object|null}}
  */
-export function classify(rows, config = DEFAULT_CONFIG) {
+export function classify(rows, config = DEFAULT_CONFIG, anchor = null) {
+  // 規格書 4.1:目標不可靠時不准說飄移,只能說判斷不了。
+  // 這一條在自我觀察時就抓到了:錨點是推出來的,而工具照樣輸出 is_drift: true。
+  const gs = anchor?.goal_state ?? null;
+  if (gs === 'MISSING' || gs === 'AMBIGUOUS') {
+    return Object.freeze({
+      is_drift: null,
+      goal_state: gs,
+      mean_step: null,
+      final_alignment: null,
+      first_off_course: null,
+      biggest_step_drop: null,
+      reason: gs === 'MISSING'
+        ? 'Goal alignment cannot be determined: no reliable goal representation. Runtime instability may still be reported, but semantic drift must not be.'
+        : 'Goal alignment cannot be determined: several plausible goals coexist in the anchor window. Declare one with setGoal() for a usable reading.',
+    });
+  }
+  return classifyInner(rows, config, gs);
+}
+
+function classifyInner(rows, config = DEFAULT_CONFIG, goalState = null) {
   const c = { ...DEFAULT_CONFIG, ...config };
   const steps = rows.map((r) => r.step).filter((x) => x !== null);
   const meanStep = steps.length ? steps.reduce((a, b) => a + b, 0) / steps.length : null;
@@ -220,6 +264,9 @@ export function classify(rows, config = DEFAULT_CONFIG) {
 
   return Object.freeze({
     is_drift: drifted && noSingleTurn,
+    /** 推出來的目標只能給機率性判斷。規格書 4.1。 */
+    goal_state: goalState,
+    probabilistic: goalState === 'DERIVED',
     mean_step: meanStep,
     final_alignment: final,
     first_off_course: firstOff,

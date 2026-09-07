@@ -17,6 +17,19 @@
  * 而且連續空轉會被計數並升級。醒來而沒有結論不算一輪工作,
  * 它只會讓那個計數往上跳。心跳不是進度,產出才是。
  *
+ * ── v0.2 的更正:活動量不是產出 ─────────────────────────
+ *
+ * v0.1 拿「這一輪寫了幾個檔案」當產出的代理值。那違反規格書 0.2:
+ * MUST NOT treat activity, tool calls, or file names as proof of progress。
+ * 檔名存在不代表產物有效,寫了十個檔可能十個都是空的。
+ *
+ * v0.2 只認 verified_progress:有驗證契約支撐的推進(規格書第 6 節的
+ * 那張表:檔案要存在且大小合理、程式要編得過、測試要有 exit code)。
+ * 拿不到驗證資料時,空轉判定回 UNKNOWN,不是回 0 也不是回「有產出」。
+ *
+ * 代價講清楚:沒有驗證契約的宿主,心跳就失去 STOP 的能力。
+ * 那是對的。用活動量假裝知道有沒有進展,比誠實說不知道更糟。
+ *
  * 這個模組不排程、不 setTimeout、不碰時間。宿主自己決定用什麼排程器,
  * 它只回答兩件事:這一輪該檢查什麼,以及這一輪的結果該不該吵醒人。
  *
@@ -25,6 +38,9 @@
 
 /** 一次心跳的結論等級。 */
 export const VERDICTS = Object.freeze(['QUIET', 'NOTE', 'WAKE', 'STOP']);
+
+/** 這個模組的版本。改判準要進版。 */
+export const VERSION = 'heartbeat@0.2';
 
 export const DEFAULT_CONFIG = Object.freeze({
   /**
@@ -48,6 +64,8 @@ export function createBeatState() {
   return Object.freeze({
     beats: 0,
     barren_streak: 0,
+    /** 連續幾輪拿不到驗證資料。這個數字高,代表 STOP 這條防線是關著的。 */
+    unverifiable_streak: 0,
     last_beat_at: null,
     last_verdict: null,
     /** 每一輪的結論摘要,最新在最後。宿主自己決定留幾筆。 */
@@ -88,7 +106,9 @@ export function planBeat(state, { hasGoal = false, hasSignals = false } = {}) {
  * @param {boolean} findings.drift_unannounced
  * @param {number} findings.barren_count      零產出的委派數
  * @param {number} findings.new_provenance    這一輪新出現的來源鏈疑點數
- * @param {number} findings.produced          這一輪實際產出了什麼(檔案數、決策數,宿主定義)
+ * @param {number|null} findings.verified_progress
+ *   這一輪有幾項「經過驗證契約確認」的推進。拿不到就傳 null,
+ *   不要拿活動量頂替 —— 那正是 v0.1 違反規格書 0.2 的地方。
  */
 export function judgeBeat(findings, state, config = DEFAULT_CONFIG) {
   const c = { ...DEFAULT_CONFIG, ...config };
@@ -126,24 +146,43 @@ export function judgeBeat(findings, state, config = DEFAULT_CONFIG) {
     reasons.push(`${findings.new_provenance} claim(s) cite evidence that was never checked first-hand.`);
   }
 
-  // 空轉:這一輪什麼都沒產出。心跳本身不是進度。
-  const produced = findings?.produced ?? 0;
-  const streak = produced > 0 ? 0 : (state?.barren_streak ?? 0) + 1;
-  if (streak >= c.barrenStreakLimit) {
-    raise('STOP');
-    reasons.push(
-      `${streak} beats in a row produced nothing. A scheduled wake-up is not progress; ` +
-      'stop the loop and say what is actually blocked.',
-    );
-  } else if (streak > 0) {
+  // 空轉:這一輪有沒有「經過驗證的」推進。心跳本身不是進度,活動量也不是。
+  const verified = findings?.verified_progress ?? null;
+  let streak = state?.barren_streak ?? 0;
+  let unverifiable = state?.unverifiable_streak ?? 0;
+
+  if (verified === null) {
+    // 拿不到驗證資料。不准當成有產出,也不准當成空轉。
+    // 規格書第 1 節:UNKNOWN 不可以被轉換成成功或失敗。
+    unverifiable += 1;
     raise('NOTE');
-    reasons.push(`${streak} beat(s) in a row produced nothing.`);
+    reasons.push(
+      `No verified-progress signal this beat (${unverifiable} in a row). ` +
+      'Idle detection is off: activity and file writes are not accepted as proof of progress.',
+    );
+  } else {
+    unverifiable = 0;
+    streak = verified > 0 ? 0 : streak + 1;
+    if (streak >= c.barrenStreakLimit) {
+      raise('STOP');
+      reasons.push(
+        `${streak} beats in a row produced no verified progress. A scheduled wake-up is not progress; ` +
+        'stop the loop and say what is actually blocked.',
+      );
+    } else if (streak > 0) {
+      raise('NOTE');
+      reasons.push(`${streak} beat(s) in a row produced no verified progress.`);
+    }
   }
 
   return Object.freeze({
     verdict: level,
     reasons: Object.freeze(reasons),
+    version: VERSION,
     barren_streak: streak,
+    unverifiable_streak: unverifiable,
+    /** 空轉這條防線現在是不是關著的。關著的時候 STOP 不會發生。 */
+    idle_detection_active: verified !== null,
     /** QUIET 不代表沒問題,只代表這一輪檢查的那幾項沒有觸發。 */
     note: level === 'QUIET'
       ? 'Nothing tripped this beat. That is not the same as nothing being wrong.'
@@ -153,6 +192,7 @@ export function judgeBeat(findings, state, config = DEFAULT_CONFIG) {
 
 /** 把一輪的結論併進狀態。回傳新狀態,不改原物件。 */
 export function applyBeat(state, plan, judged, at, { keepLog = 20 } = {}) {
+  // v0.2:unverifiable_streak 也要帶著走,不然「防線關了多久」每輪重算。
   const entry = Object.freeze({
     beat: plan.beat,
     at,
@@ -163,6 +203,7 @@ export function applyBeat(state, plan, judged, at, { keepLog = 20 } = {}) {
   return Object.freeze({
     beats: plan.beat,
     barren_streak: judged.barren_streak,
+    unverifiable_streak: judged.unverifiable_streak ?? 0,
     last_beat_at: at,
     last_verdict: judged.verdict,
     log: Object.freeze(log),
