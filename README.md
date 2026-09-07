@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 466 assertions, all green.
+`npm test` → 497 assertions, all green.
 
 </div>
 
@@ -302,6 +302,20 @@ And the advice at high temperature is not "clear the context" — it is **pin th
 
 Delegated content is counted in its own column. Folding a subagent's report into "checked" would be source erasure, in a module built to detect it.
 
+### `imports.js` — the input `cost.js` had been waiting for
+
+`cost.js` shipped on day one with every function written and every test passing, and it could not compute anything. Nothing produced a dependency graph. This closes that.
+
+It reads no filesystem: the host hands it filename-to-source, it returns records `buildGraph()` accepts directly.
+
+**It reports a lower bound, and says which cases it cannot see** — dynamic imports with computed paths, string-concatenated requires, config-driven loading. That is why `cost.js` has had `is_lower_bound` permanently true since before this module existed. An opaque `import()` is *counted*, never guessed at.
+
+No AST parser, because that would mean a dependency. Regex has a known cost — it misses things — and a miss that gets counted honestly is better than a dependency.
+
+External packages are not resolution failures. `react` was never meant to resolve to a project file, so it is reported separately and excluded from the denominator; folding it in makes a healthy project look broken.
+
+**Run against this repo's own source**, it resolved 100% of 10 internal imports across 14 files — and immediately found a real defect: `shell.js` was not reachable from `runtime.js`. The runtime was not expanding shell commands, so every file changed through a shell was invisible to it. That is the exact blind spot that had held capture at 19.6% before it was fixed in the analysis path, still open in the live path. Fixed in the same commit the graph found it.
+
 ---
 
 ## Design rules
@@ -359,6 +373,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `capture.js` | 46 | Verified |
 | `shell.js` | 30 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
+| `imports.js` | 28 | Verified |
 | `cost.js` | 16 | Verified |
 | `capsule.js` | 18 | Verified |
 | `admission.js` | 34 | Verified |
@@ -369,10 +384,10 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 31 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 61 | Verified |
+| `runtime.js` | 64 | Verified |
 | end-to-end | 17 | Verified |
 
-**Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()`, forwarded work on `completeTurn()`, or stopped a loop on a `STOP` verdict. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. `cost.js` also still has no input source: nothing here builds an import graph yet.
+**Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()`, forwarded work on `completeTurn()`, or stopped a loop on a `STOP` verdict. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. Every mechanism now has an input source.
 
 `handoff.js` and `capture.js` carry logic that ran in production before being extracted. Nine of handoff's assertions are regression baselines from that environment.
 

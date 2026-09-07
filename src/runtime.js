@@ -56,6 +56,7 @@ import {
 import {
   reading, zoneOf, compactionDelta, curve, advice,
 } from './thermometer.js';
+import { expandBashEvent } from './shell.js';
 
 /**
  * 建一個 runtime。
@@ -101,6 +102,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     readings: [],
     /** 每一次壓縮的前後對照。 */
     compactions: [],
+    /** 看不透的 shell 命令次數。它們動了什麼看不出來,但看得出來有這件事。 */
+    opaqueCommands: 0,
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -136,7 +139,22 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       }
       state.toolCalls.sort((a, b) => a.at - b.at);
 
-      const r = normalizeStream(rawEvents);
+      // shell 命令要先展開,不然透過 shell 改檔案這條路完全看不到。
+      // 第一次把採集層接上真實記錄時,漏掉這一段讓採集率只有 19.6%,
+      // 而下游照樣給出乾淨自信的答案。
+      const expanded = [];
+      for (const raw of (rawEvents ?? [])) {
+        const name = String(raw?.name ?? raw?.tool_name ?? raw?.type ?? '');
+        if (/^Bash$/i.test(name)) {
+          const x = expandBashEvent(raw);
+          state.opaqueCommands += x.opaque_commands;
+          expanded.push(...x.events);
+        } else {
+          expanded.push(raw);
+        }
+      }
+
+      const r = normalizeStream(expanded);
       state.events.push(...r.events);
       state.events.sort((a, b) => a.at - b.at);
 
@@ -169,6 +187,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         accepted: r.events.length,
         skipped: r.skipped,
         skipped_by_reason: r.skipped_by_reason,
+        /** 這批裡有幾條 shell 命令是靜態看不透的。它們動了什麼不知道。 */
+        opaque_commands: state.opaqueCommands,
         conflicts: windowConflicts(toWriteEvents(state.events), config.admission),
         label_drift: labelDrift(state.events),
         ambiguous_labels: ambiguousLabels(state.events),
@@ -482,6 +502,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           ...(state.anchor ? [] : ['No goal declared; drift is measured against an inferred anchor and is weaker for it']),
           ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
           ...(state.readings.length ? [] : ['No temperature reading; the share of context that is checked evidence is unknown']),
+          ...(state.opaqueCommands > 0
+            ? [`${state.opaqueCommands} shell command(s) were opaque to static analysis; whatever files they touched are invisible here`]
+            : []),
         ]),
       });
     },

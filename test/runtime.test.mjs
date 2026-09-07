@@ -550,5 +550,26 @@ t('溫度歷史跨重啟活著,不然趨勢每次重啟都歸零', () => {
   assert.equal(b.temperature().compactions.length, 1);
 });
 
+// ---- shell 展開接線 ----
+t('透過 shell 改檔案看得到,不然採集率會掉回 19.6%', () => {
+  const r = rt();
+  r.ingest([{ attributed_agent: 'w1', name: 'Bash', at: clock - 100, input: { command: 'cat > src/new.js <<EOF' } }]);
+  const cov = r.inspect().coverages.find((c) => c.agent_id === 'w1');
+  assert.equal(cov.files['src/new.js'], 'EDITED');
+});
+
+t('看不透的 shell 命令會被計數,並列進缺口清單', () => {
+  const r = rt();
+  r.ingest([{ attributed_agent: 'w1', name: 'Bash', at: clock - 100, input: { command: "python3 - <<'PY'" } }]);
+  assert.equal(r.status().unavailable.some((x) => /opaque to static analysis/.test(x)), true);
+});
+
+t('shell 展開的寫入會進佔用範圍的越界偵測', () => {
+  const r = rt();
+  r.openScope({ agent_id: 'w1', task_id: 't', declared: ['src/a.js'] });
+  r.ingest([{ attributed_agent: 'w1', name: 'Bash', at: clock - 100, input: { command: 'echo x > src/secret.js' } }]);
+  assert.deepEqual([...r.closeScope('t').out_of_scope], ['src/secret.js']);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);
