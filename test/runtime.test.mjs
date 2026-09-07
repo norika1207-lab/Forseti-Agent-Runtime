@@ -487,5 +487,68 @@ t('空轉計數跨重啟活著,不然連續空轉永遠數不到', () => {
   assert.equal(b.beat().verdict, 'STOP', '重啟不該讓計數歸零,那等於永遠停不下來');
 });
 
+// ---- 溫度計接線(M10)----
+t('記一筆溫度,拿回區間跟建議', () => {
+  const r = rt();
+  const out = r.recordTemperature({ checked: 200, generated: 800, source: 'PROVIDER_REPORTED' });
+  assert.equal(out.zone, 'CRITICAL');
+  assert.equal(out.advice.action, 'PIN_EVIDENCE');
+});
+
+t('沒讀數時直說量不到,並指出怎麼補', () => {
+  const t2 = rt().temperature();
+  assert.equal(t2.zone, null);
+  assert.match(t2.note, /recordTemperature/);
+});
+
+t('壓縮前後比對,看丟掉的是工具輸出還是自己的敘述', () => {
+  const r = rt();
+  r.recordTemperature({ checked: 800, generated: 200 });
+  const d = r.recordCompaction({ checked: 200, generated: 200 });
+  assert.ok(d.fact_ratio_drop > 0.2);
+  assert.equal(d.lost_was_checked, 1);
+  assert.equal(d.alarming, true);
+});
+
+t('第一次壓縮沒有前一筆可比時要直說', () => {
+  const d = rt().recordCompaction({ checked: 1, generated: 1 });
+  assert.equal(d.fact_ratio_drop, null);
+  assert.match(d.note, /No earlier reading/);
+});
+
+t('多筆讀數看得出趨勢', () => {
+  const r = rt();
+  r.recordTemperature({ checked: 90, generated: 10 });
+  r.recordTemperature({ checked: 50, generated: 50 });
+  r.recordTemperature({ checked: 20, generated: 80 });
+  assert.equal(r.temperature().trend.trend, 'RISING');
+});
+
+t('心跳會帶上溫度,沒讀數就是 null 不是猜一個', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Write', 'src/auth/a.js', 0)]);
+  assert.equal(r.beat().temperature, null);
+  r.recordTemperature({ checked: 100, generated: 900 });
+  assert.equal(r.beat().temperature.zone, 'CRITICAL');
+});
+
+t('沒量過溫度會出現在缺口清單', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Write', 'a.js', 0)]);
+  assert.ok(r.status().unavailable.some((x) => /No temperature reading/.test(x)));
+});
+
+t('溫度歷史跨重啟活著,不然趨勢每次重啟都歸零', () => {
+  const a = rt();
+  a.recordTemperature({ checked: 90, generated: 10 });
+  a.recordCompaction({ checked: 20, generated: 80 });
+  const text = a.save();
+  const b = rt();
+  b.restore(text);
+  assert.equal(b.temperature().trend.points.length, 2);
+  assert.equal(b.temperature().compactions.length, 1);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

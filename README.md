@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 433 assertions, all green.
+`npm test` →  assertions, all green.
 
 </div>
 
@@ -280,6 +280,28 @@ Production is measured as files actually written, not turns taken. Talking is no
 
 The empty-beat counter is persisted. Reset it on restart and the loop can never stop itself.
 
+### `thermometer.js` — how much of context is checked
+
+A fuel gauge answers how much room is left. This answers something else: of what is in context right now, how much was checked and how much did the model write itself.
+
+**This measurement only works at runtime, and the reason it fails otherwise is the point.** I tried computing it after the fact from transcripts. A transcript is a complete record — it keeps every tool output in full. The context window is the compacted subset, and compaction keeps summaries while dropping detail. Summaries are the model's own text; detail is the raw tool output. So the transcript reads a steady 80% evidence while the live window may already have inverted.
+
+Why the number matters is the same line that drives `provenance.js`: *I have no reliable boundary between what I actually checked and what I generated.* If that boundary does not exist internally, then the proportion of real evidence on hand determines what gets picked up as evidence. When it falls, the model does not notice. The thermometer does.
+
+`compactionDelta()` is where it earns its keep. A single reading says what the temperature is; comparing two says **what compaction took**:
+
+```js
+{ fact_ratio_before: 0.8, fact_ratio_after: 0.5,
+  lost_checked: 600, lost_generated: 0, lost_was_checked: 1,
+  alarming: true,
+  note: "Compaction removed proportionally more checked evidence than
+         generated text. What remains leans on the model's own summaries." }
+```
+
+And the advice at high temperature is not "clear the context" — it is **pin the evidence**: write the raw outputs still in hand to files, so they become something that can be re-read rather than something that has to be remembered.
+
+Delegated content is counted in its own column. Folding a subagent's report into "checked" would be source erasure, in a module built to detect it.
+
 ---
 
 ## Design rules
@@ -346,7 +368,8 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `drift.js` | 37 | Verified |
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 31 | Verified |
-| `runtime.js` | 53 | Verified |
+| `thermometer.js` | 25 | Verified |
+| `runtime.js` | 61 | Verified |
 | end-to-end | 17 | Verified |
 
 **Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()`, forwarded work on `completeTurn()`, or stopped a loop on a `STOP` verdict. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. `cost.js` also still has no input source: nothing here builds an import graph yet.

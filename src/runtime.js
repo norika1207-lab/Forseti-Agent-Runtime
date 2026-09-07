@@ -53,6 +53,9 @@ import {
 import {
   createBeatState, planBeat, judgeBeat, applyBeat, nextInterval, dispatchPlan,
 } from './heartbeat.js';
+import {
+  reading, zoneOf, compactionDelta, curve, advice,
+} from './thermometer.js';
 
 /**
  * 建一個 runtime。
@@ -94,6 +97,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     beat: createBeatState(),
     /** 上一輪心跳時的產出基準,用來算這一輪產出了什麼。 */
     lastProducedMark: 0,
+    /** 溫度讀數的歷史。趨勢要靠多筆才看得出來。 */
+    readings: [],
+    /** 每一次壓縮的前後對照。 */
+    compactions: [],
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -461,6 +468,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         evidence: mix,
         /** 燒了資源卻零產出的委派。 */
         barren: checkBarrenInvestment(state.investments),
+        /** context 幾度。沒讀數就 null,這個量測只有 runtime 做得到。 */
+        temperature: state.readings.length
+          ? Object.freeze({ ...state.readings.at(-1), zone: zoneOf(state.readings.at(-1)) })
+          : null,
         /** 拿不到的資料一律列在這裡,不用預設值蓋過去。 */
         unavailable: Object.freeze([
           ...(state.edges.length ? [] : ['No handoff rules configured; completeTurn will dispatch nothing']),
@@ -470,7 +481,61 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
             : []),
           ...(state.anchor ? [] : ['No goal declared; drift is measured against an inferred anchor and is weaker for it']),
           ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
+          ...(state.readings.length ? [] : ['No temperature reading; the share of context that is checked evidence is unknown']),
         ]),
+      });
+    },
+
+    // ── 溫度計(M10)───────────────────────────────────
+
+    /**
+     * 記一筆溫度讀數。
+     *
+     * 量的不是「還剩多少空間」,是「手上這批 context 有多少是查過的」。
+     * 這個數字只有在 runtime 當下量得到:事後從 transcript 看,
+     * 看到的是全量記錄,不是壓縮後真正留在 context 裡的東西。
+     *
+     * @param {object} p 見 thermometer.reading()。拿不到 provider 的用量就標 ESTIMATED。
+     */
+    recordTemperature(p) {
+      const r = reading(p);
+      state.readings = [...state.readings, r];
+      return Object.freeze({ ...r, zone: zoneOf(r), advice: advice(r) });
+    },
+
+    /**
+     * 通知發生了一次壓縮,附上壓縮後的讀數。
+     *
+     * 這是溫度計最有價值的一刻:比對前後,看丟掉的是工具輸出還是自己的敘述。
+     * 壓縮保留摘要丟掉細節,而摘要是模型自己寫的。
+     */
+    recordCompaction(afterReading) {
+      const before = state.readings.at(-1) ?? null;
+      const after = reading(afterReading);
+      state.readings = [...state.readings, after];
+      const delta = before ? compactionDelta(before, after) : null;
+      if (delta) state.compactions = [...state.compactions, Object.freeze({ at: now(), ...delta })];
+      return delta ?? Object.freeze({
+        fact_ratio_drop: null,
+        note: 'No earlier reading to compare against; record one before the next compaction.',
+      });
+    },
+
+    /** 現在幾度,以及該不該現在就把證據落檔。 */
+    temperature() {
+      const last = state.readings.at(-1) ?? null;
+      if (!last) {
+        return Object.freeze({
+          zone: null,
+          note: 'No temperature reading yet. Call recordTemperature() with the provider\'s usage numbers.',
+        });
+      }
+      return Object.freeze({
+        ...last,
+        zone: zoneOf(last),
+        advice: advice(last),
+        trend: curve(state.readings),
+        compactions: Object.freeze([...state.compactions]),
       });
     },
 
@@ -508,6 +573,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         skipped_by_reason: state.capture.skipped_by_reason,
       });
       const barren = checkBarrenInvestment(state.investments, config.provenance);
+      const lastReading = state.readings.at(-1) ?? null;
+      const zone = lastReading ? zoneOf(lastReading, config.thermometer) : null;
 
       const judged = judgeBeat({
         capture_rate: health.capture_rate,
@@ -532,6 +599,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         next: nextInterval(judged, config.interval),
         dispatch: dispatchPlan(judged, { available: agents }),
         drift,
+        /** 手上的證據有多少比例是查過的。沒讀數就 null,不猜。 */
+        temperature: lastReading
+          ? Object.freeze({ zone, fact_ratio: lastReading.fact_ratio, advice: advice(lastReading, config.thermometer) })
+          : null,
       });
     },
 
@@ -553,6 +624,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         signals: {
           beat: state.beat,
           lastProducedMark: state.lastProducedMark,
+          readings: state.readings,
+          compactions: state.compactions,
           declaredTurns: state.declaredTurns,
           failures: state.failures,
           friction: state.friction,
@@ -588,6 +661,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.investments = [...(sig.investments ?? [])];
       state.beat = sig.beat ?? createBeatState();
       state.lastProducedMark = sig.lastProducedMark ?? 0;
+      state.readings = [...(sig.readings ?? [])];
+      state.compactions = [...(sig.compactions ?? [])];
       return r;
     },
 
