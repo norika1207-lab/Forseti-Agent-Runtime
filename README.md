@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 256 assertions, all green.
+`npm test` → 305 assertions, all green.
 
 </div>
 
@@ -20,7 +20,7 @@ Two agents edit the same file and silently overwrite each other. An agent claims
 
 None of these are model problems. They are runtime problems, and they need runtime answers.
 
-Forseti is seven such answers, each small enough to adopt on its own.
+Forseti is a set of answers, each small enough to adopt on its own.
 
 ---
 
@@ -39,6 +39,24 @@ Two rules in here were paid for in production, not derived from a spec:
 **Stable id and display name are separate fields, and routing may only use the stable one.** In production the rules stored an internal id while the panel showed a user-chosen name. Rename something and the two silently decouple; have two windows share a name and you cannot even tell where a message went. The user's word for it was "it sends things to the wrong place." `labelDrift()` and `ambiguousLabels()` surface both conditions so the host can fix the UI before anyone notices the misdelivery.
 
 Nothing is dropped silently. Every skipped event is counted with a reason, and `captureHealth()` reports the capture rate — because the quality of all five mechanisms below is capped by this number, and a capture layer that quietly loses events is the hardest failure to find: everything still runs, every answer is a little wrong, and nothing turns red.
+
+### `shell.js` — the 80% that was invisible
+
+This module exists because of a number. The first time the capture layer was pointed at real transcripts, the capture rate was **19.6%**. Of 985 tool calls, 792 were dropped for the same reason: no `file_path` field. 754 of those were shell commands.
+
+Which means the capture layer could not see files being changed through a shell — the exact way this repository was itself written.
+
+The consequence is worse than a missing feature. Downstream still answers, cleanly and confidently, and the answer is wrong. "Zero collisions" was not a clean bill of health; it was eight in ten writes being invisible. Adding shell parsing took the same corpus from 19.6% to **74.3%**.
+
+**It only ever reports a lower bound, and it says why.** Shell is Turing-complete; reading a command string cannot tell you which files it touched. Three cases are never guessed at, only flagged `opaque`:
+
+```
+python3 - <<'PY' ... open(p,'w') ... PY    # the filename lives inside the program
+cp "$SRC" "$DST"                            # variable expansion
+./deploy.sh                                 # runs a script
+```
+
+In the real corpus, **56% of shell commands were opaque**. "There are file operations here and I cannot see them" is a far more useful fact than a clean-looking list that is silently missing half the writes.
 
 ### `cost.js` — what a change actually costs
 
@@ -182,6 +200,30 @@ It walks the whole lifecycle and prints what each step returns, including the re
 
 ---
 
+## What happened when it met real data
+
+Every mechanism above was written against tests. Then it was pointed at 130 real Claude Code transcripts — 372,754 lines, 48,228 tool calls — and three of its own assumptions broke.
+
+**Capture was blind to 80% of writes.** Covered above: shell was invisible, so the tooling reported zero collisions with total confidence. `captureHealth()` is the reason this was caught rather than believed — it reports the capture rate as an explicit ceiling on every other number, instead of letting a partial view masquerade as a complete one.
+
+**`/dev/null` is not a file.** Two executors "wrote the same file within 3.5 seconds", five times over. All five were `2> /dev/null`. Precisely the class of noise that trains people to ignore an alert.
+
+**A resumed conversation has two session ids.** Resume a session and the system opens a new transcript with a new id and copies the old history into it. One transcript shared 96 of its 97 event uuids with another, and started 17 seconds after the first ended. Attribute by session id and one person becomes two, every duplicated event becomes a 0.0-second collision between them, and three of the four collisions found were this artifact. The fix is to attribute by event uuid, which identifies the event rather than the file it was recorded in.
+
+That last one is the same lesson `capture.js` already carried, arriving from a completely different direction: **a file-level identifier names the record stream, not the person doing the work.** It was written there after routing on self-reported identity misdelivered four times. The transcript corpus proved it again, from the other side.
+
+After the fixes: capture 74.3%, 4,435 duplicate events removed, collisions down from 4 to 1. The one that survived is real — a coordination file that multiple sessions write by design.
+
+**Run it on your own transcripts:**
+
+```bash
+node tools/analyze-transcripts.mjs ~/.claude/projects/<your-project>
+```
+
+Everything stays local. It reports your capture rate, how many of your shell commands are opaque, whether any two of your sessions ever wrote the same file at the same moment, and which of them are paying twice to read the same code.
+
+---
+
 ## Design rules
 
 These are enforced by the test suite. Deleting an honesty annotation makes a test go red.
@@ -194,7 +236,7 @@ These are enforced by the test suite. Deleting an honesty annotation makes a tes
 
 **Every returned object is frozen.** State changes go through the API or not at all.
 
-**Zero dependencies.** Six of the eight modules import nothing at all; the other two import only siblings. Nothing here reaches outside the repo.
+**Zero dependencies.** Every module imports nothing at all, or only siblings. Nothing here reaches outside the repo, including the adapter and the analysis tool.
 
 ---
 
@@ -235,6 +277,8 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | Module | Assertions | State |
 |---|---|---|
 | `capture.js` | 46 | Verified |
+| `shell.js` | 30 | Verified |
+| `adapters/claude-code.js` | 19 | Verified |
 | `cost.js` | 16 | Verified |
 | `capsule.js` | 18 | Verified |
 | `admission.js` | 34 | Verified |
@@ -244,7 +288,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `runtime.js` | 26 | Verified |
 | end-to-end | 17 | Verified |
 
-**Honest about what's missing.** The integration surface is complete, but *this runtime has never been attached to a live host.* Its logic is verified by 256 assertions and two of its modules carry rules learned in production, and neither of those is the same as having run. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) are documented as unmeasured rather than claimed. The host still supplies its own event adapter and decides where the snapshot string lives.
+**Honest about what's missing.** The capture path has now been run against 130 real transcripts and corrected three times as a result. What has *not* happened is the other half: nothing has yet consumed these decisions live — no host has blocked a dispatch on `requestWrite()` or forwarded work on `completeTurn()`. Reading history is proven; steering it is not. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) remain documented as unmeasured rather than claimed. `cost.js` also still has no input source: nothing here builds an import graph yet.
 
 `handoff.js` and `capture.js` carry logic that ran in production before being extracted. Nine of handoff's assertions are regression baselines from that environment.
 
