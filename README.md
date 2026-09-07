@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 726 assertions, all green.
+`npm test` → 736 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -422,6 +422,27 @@ Every refusal names what is still missing. A system that acts on temperature alo
 
 **The diagnostic probe does not ask whether the model is drifting.** That question returns a fluent denial, and fluency is not evidence. It asks for linkage: what you understand the goal to be, why this step advances it, and — the field that matters most — what would falsify your current strategy. A strategy whose owner cannot say what would refute it cannot be checked at all. Missing answers raise uncertainty; the spec is explicit that they do not by themselves prove deception, and where an answer and the observable record disagree, the record wins.
 
+### Acceptance against the specification
+
+Section 14 of the spec defines ten acceptance tests. `test/acceptance.test.mjs` runs them verbatim — same identifiers, same scenarios, no relaxation. All ten pass.
+
+They check something the unit tests cannot. Every module's own suite was green when the acceptance run started, and `AT-DRIFT-01` still failed: `runtime.driftCheck()` was calling `classify(rows, config)` without passing the anchor, so the entire GoalState gate — the rule that an unreliable goal must never produce a drift verdict — was silently inert. The modules were correct; one argument was missing at the seam. That is exactly the class of defect an end-to-end acceptance suite exists to find.
+
+```
+AT-UI-01    healthy 30m session stays quiet, no intervention fires
+AT-UI-02    heartbeat present but verified progress stale → alive-but-stalled
+AT-UI-03    no heartbeat at all → silent-execution signal rises
+AT-ART-01   file claimed, exists at 0 bytes → cannot become VERIFIED
+AT-DRIFT-01 no reliable goal → must not state drift as fact
+AT-OBS-01   annotation mode injects nothing, still logs
+AT-INT-01   cancel produces a recovery snapshot first
+AT-PROBE-01 probe claims alignment, disk disagrees → record wins
+AT-SAMP-01  one injected anomaly found in top-K without a full-session read
+AT-RSC-01   critical score from one weak heuristic → no hard action
+```
+
+Three scenarios in the spec have an interface half this repo does not build — the desktop sidecar, inline annotation, and rescue card. The tests cover the judgment underneath those surfaces, and the suite says so in its own output rather than quietly reporting ten out of ten.
+
 ---
 
 ## Design rules
@@ -497,6 +518,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
 | `runtime.js` | 117 | Verified |
+| acceptance (spec §14) | 10 | All passing |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.

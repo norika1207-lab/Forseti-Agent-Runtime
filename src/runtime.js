@@ -417,8 +417,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         return Object.freeze({
           ...driftAlert({ recentTopics: topics, anchor: state.anchor, declaredTurn, config: config.drift }),
           verdict: null,
+          goal_state: state.anchor.goal_state,
           segments: 0,
           anchor_topics: Object.freeze([...state.anchor.topics]),
+          display: 'Early reading from very few events; not a conclusion.',
           /** 樣本太少,這是早期讀數不是結論。 */
           early_reading: true,
         });
@@ -434,11 +436,21 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
 
       const alert = driftAlert({ recentTopics: topics, anchor, declaredTurn, config: config.drift });
       const rows = trajectory(segs, anchor, config.drift);
+      // anchor 一定要傳進 classify:GoalState 的把關全在裡面。
+      // 漏掉這個參數,AMBIGUOUS 與 MISSING 的早退不會發生,
+      // 工具會對著一個不可靠的目標下硬結論。驗收測試 AT-DRIFT-01 抓到的。
+      const verdict = classify(rows, config.drift, anchor);
       return Object.freeze({
         ...alert,
-        verdict: classify(rows, config.drift),
+        verdict,
+        /** 目標可靠度。不可靠時 verdict.is_drift 會是 null。 */
+        goal_state: anchor.goal_state,
         segments: rows.length,
         anchor_topics: Object.freeze([...anchor.topics]),
+        /** 目標不可靠時,這句話是唯一該顯示給人看的東西。 */
+        display: verdict.is_drift === null
+          ? verdict.reason
+          : (verdict.is_drift ? 'Direction moved without anyone changing it.' : 'Still within the declared goal.'),
       });
     },
 
