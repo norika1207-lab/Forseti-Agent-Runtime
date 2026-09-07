@@ -69,9 +69,82 @@ test('AdvisoryLock 欄位名照 5.3 節,恰好 4 個', () => {
   assert.deepEqual(Object.keys(l).sort(), ['acquired_at', 'file_path', 'holder', 'ttl_seconds']);
 });
 
-test('AdmissionDecision 欄位名照 5.3 節,恰好 4 個,不多塞欄位', () => {
+test('AdmissionDecision 保留 5.3 節四個原欄位,一字不改', () => {
   const d = decideAdmission({ agent_id: 'B', task_id: 't', declared: ['src/x/**'] }, {});
-  assert.deepEqual(Object.keys(d).sort(), ['conflicts', 'decision', 'reason', 'suggested_scope']);
+  for (const k of ['conflicts', 'decision', 'reason', 'suggested_scope']) {
+    assert.ok(k in d, '規格欄位不可少: ' + k);
+  }
+});
+
+// 這條原本寫成「恰好 4 個,不多塞欄位」,守的是規格 5.3 的欄位契約。
+// 端到端測試抓到漏洞之後做了一次有記錄的修訂:多出 undecidable 與 is_complete。
+// 理由是「沒查到衝突」與「沒有衝突」必須分得開,而且要分得出來的必須是欄位不是字串,
+// 呼叫端才寫得出 if (!verdict.is_complete) 這種保守處理。塞進 reason 文字裡等於沒有。
+// 這條測試改成擋「未記錄的擴充」,而不是擋所有擴充。
+test('AdmissionDecision 的擴充欄位必須是有記錄的那兩個,其餘一律不准加', () => {
+  const d = decideAdmission({ agent_id: 'B', task_id: 't', declared: ['src/x/**'] }, {});
+  assert.deepEqual(Object.keys(d).sort(),
+    ['conflicts', 'decision', 'is_complete', 'reason', 'suggested_scope', 'undecidable']);
+});
+
+test('派工當下就攔得住:兩人宣告同一個檔案、都還沒動手寫', () => {
+  const held = createWriteScope({
+    agent_id: 'A', task_id: 't1', declared: ['src/shared.js'], declared_at: T0,
+  });
+  const d = decideAdmission(
+    { agent_id: 'B', task_id: 't2', declared: ['src/shared.js'], declared_at: T0 },
+    { scopes: [held], now: T0 },
+  );
+  assert.notEqual(d.decision, 'ALLOW', 'actual 還是空的時候正是最該攔的一刻');
+  assert.deepEqual(d.conflicts.map((c) => c.file_path), ['src/shared.js']);
+});
+
+test('字面路徑落在對方宣告的 glob 範圍內也攔得住', () => {
+  const held = createWriteScope({
+    agent_id: 'A', task_id: 't1', declared: ['src/**'], declared_at: T0,
+  });
+  const d = decideAdmission(
+    { agent_id: 'B', task_id: 't2', declared: ['src/deep/a.js'], declared_at: T0 },
+    { scopes: [held], now: T0 },
+  );
+  assert.notEqual(d.decision, 'ALLOW');
+});
+
+test('兩邊都是萬用字元又沒有候選清單時,標明無法判定,不冒充放行', () => {
+  const held = createWriteScope({
+    agent_id: 'A', task_id: 't1', declared: ['src/**'], declared_at: T0,
+  });
+  const d = decideAdmission(
+    { agent_id: 'B', task_id: 't2', declared: ['src/*.js'], declared_at: T0 },
+    { scopes: [held], now: T0 },
+  );
+  assert.equal(d.decision, 'ALLOW');
+  assert.equal(d.is_complete, false, '這是沒查到,不是沒有');
+  assert.equal(d.undecidable.length, 1);
+  assert.match(d.reason, /無法判定/);
+});
+
+test('自己的 scope 不跟自己衝突', () => {
+  const mine = createWriteScope({
+    agent_id: 'B', task_id: 't1', declared: ['src/shared.js'], declared_at: T0,
+  });
+  const d = decideAdmission(
+    { agent_id: 'B', task_id: 't2', declared: ['src/shared.js'], declared_at: T0 },
+    { scopes: [mine], now: T0 },
+  );
+  assert.equal(d.decision, 'ALLOW');
+  assert.equal(d.is_complete, true);
+});
+
+test('已釋放的 scope 不再造成衝突', () => {
+  const done = releaseScope(createWriteScope({
+    agent_id: 'A', task_id: 't1', declared: ['src/shared.js'], declared_at: T0,
+  }));
+  const d = decideAdmission(
+    { agent_id: 'B', task_id: 't2', declared: ['src/shared.js'], declared_at: T0 },
+    { scopes: [done], now: T0 },
+  );
+  assert.equal(d.decision, 'ALLOW');
 });
 
 // ---- glob ----

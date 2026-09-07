@@ -77,6 +77,36 @@ export function matchGlob(pattern, filePath) {
   return new RegExp(`^${re}$`).test(filePath);
 }
 
+/** 不含萬用字元的樣式。這種樣式不必展開就能確定比對結果。 */
+export function literalPaths(globs) {
+  return (globs ?? []).filter((g) => !/[*?]/.test(g));
+}
+
+/**
+ * 兩邊都是萬用字元、又沒有候選檔案清單時,無法確定它們有沒有交集。
+ *
+ * 這種情況必須跟「確定沒有交集」分開回報。把無法判定當成放行,
+ * 是本模組最容易犯、也最難查的一種錯:畫面上一片綠,衝突照撞。
+ *
+ * @returns {Array<{request_glob, scope_glob, holder_agent}>}
+ */
+export function undecidablePairs(request, { scopes = [], candidateFiles = null } = {}) {
+  if (candidateFiles) return [];
+  const out = [];
+  const reqGlobs = (request.declared ?? []).filter((g) => /[*?]/.test(g));
+  for (const scope of scopes) {
+    if (scope.state !== SCOPE_STATES.ACTIVE) continue;
+    if (scope.agent_id === request.agent_id) continue;
+    for (const sg of scope.declared) {
+      if (!/[*?]/.test(sg)) continue;
+      for (const rg of reqGlobs) {
+        out.push(Object.freeze({ request_glob: rg, scope_glob: sg, holder_agent: scope.agent_id }));
+      }
+    }
+  }
+  return Object.freeze(out);
+}
+
 export function matchesAny(globs, filePath) {
   for (const g of globs) if (matchGlob(g, filePath)) return true;
   return false;
@@ -248,6 +278,21 @@ export function findConflicts(request, { scopes = [], locks = [], now = 0, candi
     for (const f of scope.actual) {
       if (matchesAny(globs, f)) found.set(f, scope.agent_id);
     }
+    // 宣告對宣告的直接比對。
+    //
+    // 端到端測試抓到的漏洞:原本只比對 scope.actual(已經寫下去的檔案)
+    // 與展開後的 requested(需要 candidateFiles)。但派工當下 actual 必然是空的,
+    // 而 candidateFiles 要掃整個 repo 才拿得到,宿主多半給不出來。
+    // 兩人宣告同一個具體檔案、都還沒動手 —— 也就是最該攔的那一刻 —— 直接放行,
+    // 要等有人真的寫下去才看得見衝突。那時 M3 已經退化成它想取代的那份 git diff。
+    //
+    // 字面路徑(不含萬用字元)不需要展開就能確定比對結果,所以這一段不引入猜測。
+    for (const f of literalPaths(scope.declared)) {
+      if (matchesAny(globs, f) && !found.has(f)) found.set(f, scope.agent_id);
+    }
+    for (const f of literalPaths(globs)) {
+      if (matchesAny(scope.declared, f) && !found.has(f)) found.set(f, scope.agent_id);
+    }
     if (requested) {
       for (const f of requested) {
         if (matchesAny(scope.declared, f) && !found.has(f)) found.set(f, scope.agent_id);
@@ -320,19 +365,31 @@ export function decideAdmission(request, env = {}) {
     config = DEFAULT_CONFIG,
   } = env;
 
+  // 無法判定的 glob 對。ALLOW 時尤其重要:那代表「沒查到衝突」而不是「沒有衝突」。
+  const undecidable = undecidablePairs(request, { scopes, candidateFiles });
+
   const decision = (d, conflicts, reason, suggested_scope = null) =>
     Object.freeze({
       decision: d,
       conflicts: Object.freeze(conflicts),
       reason,
       suggested_scope: suggested_scope ? Object.freeze(suggested_scope) : null,
+      undecidable,
+      is_complete: undecidable.length === 0,
     });
 
   const conflicts = findConflicts(request, { scopes, locks, now, candidateFiles });
 
   // Q1:沒有交集就放行
   if (conflicts.length === 0) {
-    return decision(DECISIONS.ALLOW, [], '與所有 ACTIVE 寫入範圍無交集');
+    return decision(
+      DECISIONS.ALLOW,
+      [],
+      undecidable.length === 0
+        ? '與所有 ACTIVE 寫入範圍無交集'
+        : `未查到交集,但有 ${undecidable.length} 組樣式無法判定(雙方都是萬用字元且未提供候選檔案清單)。` +
+          '這是「沒查到」不是「沒有」,見 is_complete。',
+    );
   }
 
   // Q2:交集是否只落在樞紐檔案上

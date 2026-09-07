@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 130 assertions, all green.
+`npm test` → 195 assertions, all green.
 
 </div>
 
@@ -20,11 +20,25 @@ Two agents edit the same file and silently overwrite each other. An agent claims
 
 None of these are model problems. They are runtime problems, and they need runtime answers.
 
-Forseti is five such answers, each small enough to adopt on its own.
+Forseti is six such answers, each small enough to adopt on its own.
 
 ---
 
 ## What's in here
+
+### `capture.js` — the intake
+
+Five of the modules below are pure functions waiting for someone to feed them. This is the feeding hatch. It reads nothing and watches nothing: the host hands it raw tool-call events, and it normalises them into one neutral shape that all five can eat.
+
+Without this layer every host writes five conversions by hand, and gets one of them subtly wrong with nothing to catch it.
+
+Two rules in here were paid for in production, not derived from a spec:
+
+**An agent's self-reported identity is never trusted.** Three ways of identifying who did what were tried live, and all three failed: aliases drift, self-reported identity is inherited wholesale by forked subprocesses, and the UUID that looks most authoritative identifies the *transcript*, not the actor. Routing on self-reported identity misdelivered four times, twice into completely unrelated sessions. The only thing that held up was what the host itself stamped on the event: a timestamp, a tool call, a file. So the adapter reads `attributed_agent` and ignores anything the payload claims about itself. No stamp means the event goes to `skipped` — never to a guess.
+
+**Stable id and display name are separate fields, and routing may only use the stable one.** In production the rules stored an internal id while the panel showed a user-chosen name. Rename something and the two silently decouple; have two windows share a name and you cannot even tell where a message went. The user's word for it was "it sends things to the wrong place." `labelDrift()` and `ambiguousLabels()` surface both conditions so the host can fix the UI before anyone notices the misdelivery.
+
+Nothing is dropped silently. Every skipped event is counted with a reason, and `captureHealth()` reports the capture rate — because the quality of all five mechanisms below is capped by this number, and a capture layer that quietly loses events is the hardest failure to find: everything still runs, every answer is a little wrong, and nothing turns red.
 
 ### `cost.js` — what a change actually costs
 
@@ -136,11 +150,11 @@ These are enforced by the test suite. Deleting an honesty annotation makes a tes
 
 **Missing data is `null`, never `0`.** No overlap data is not the same as no overlap. No coverage report is not the same as no coverage.
 
-**Unvalidated constants say so in the source.** The 15-second conflict window and the lock TTL are documented as *not empirically calibrated*, and a test asserts that disclaimer still exists.
+**Unvalidated constants say so in the source.** The 15-second conflict window, the lock TTL and the turn-gap threshold are documented as *not empirically calibrated*, and a test asserts each disclaimer still exists.
 
 **Every returned object is frozen.** State changes go through the API or not at all.
 
-**Zero dependencies.** Four of the five modules import nothing at all. The fifth imports one sibling.
+**Zero dependencies.** Five of the six modules import nothing at all. The sixth imports one sibling.
 
 ---
 
@@ -160,6 +174,7 @@ import { decideAdmission }   from './src/admission.js';
 import { handoffDelta }      from './src/coverage.js';
 import { previewCapsule }    from './src/capsule.js';
 import { planHandoff }       from './src/handoff.js';
+import { normalizeStream }   from './src/capture.js';
 ```
 
 Each module works standalone. Adopt one, ignore the rest.
@@ -172,15 +187,19 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 
 | Module | Assertions | State |
 |---|---|---|
+| `capture.js` | 46 | Verified |
 | `cost.js` | 16 | Verified |
 | `capsule.js` | 18 | Verified |
-| `admission.js` | 28 | Verified |
+| `admission.js` | 34 | Verified |
 | `coverage.js` | 30 | Verified |
 | `handoff.js` | 38 | Verified |
+| end-to-end | 13 | Verified |
 
-**Honest about what's missing.** These are pure functions with no input source. Nothing yet feeds them a live event stream, nothing persists their state across restarts, and nothing calls them at dispatch time. Two constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window) are documented as unmeasured rather than claimed.
+**Honest about what's missing.** The host still has to do two things this repo does not: persist state across restarts, and call these functions at dispatch time. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) are documented as unmeasured rather than claimed.
 
-`handoff.js` is the one module here whose logic ran in production before being extracted. Nine of its assertions are regression baselines carried over from that environment, including the roundtrip counter fix.
+`handoff.js` and `capture.js` carry logic that ran in production before being extracted. Nine of handoff's assertions are regression baselines from that environment.
+
+**The end-to-end suite earns its keep.** Each module's own tests only prove that the part is correct in isolation. The first run of the integration suite found a real hole in `admission.js`: conflicts were only detected against files already written, or against globs expanded with a full file list the host rarely has. But at dispatch time — the exact moment the mechanism exists for — nothing has been written yet. Two agents declaring the same file and neither having started was waved straight through. The conflict only became visible once someone wrote to disk, by which point the module had degraded into the `git diff` it was built to replace. Fixed by comparing declared sets directly, with a separate `is_complete` flag so "no conflict found" is never reported as "no conflict."
 
 ---
 
