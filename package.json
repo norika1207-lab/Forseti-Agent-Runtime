@@ -1,0 +1,13 @@
+{
+  "name": "forseti-agent-runtime",
+  "version": "0.1.0",
+  "description": "Reliability primitives for multi-agent AI coding. Zero dependencies, pure functions, no framework.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node test/run-all.mjs"
+  },
+  "keywords": ["ai-agents", "multi-agent", "reliability", "blast-radius", "context-management", "claude-code", "codex"],
+  "repository": { "type": "git", "url": "https://github.com/norika1207-lab/Forseti-Agent-Runtime" }
+}
