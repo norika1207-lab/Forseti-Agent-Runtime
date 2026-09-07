@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` →  assertions, all green.
+`npm test` → 466 assertions, all green.
 
 </div>
 
