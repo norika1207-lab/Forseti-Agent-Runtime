@@ -42,7 +42,7 @@ export const COMPACT_RISK_UNKNOWN = null;
 
 function assertDepth(depth) {
   if (!DEPTH_RANK[depth]) {
-    throw new TypeError(`不認得的 CoverageDepth: ${String(depth)}。合法值: ${COVERAGE_DEPTHS.join(' / ')}`);
+    throw new TypeError(`Unrecognised CoverageDepth: ${String(depth)}. Valid values: ${COVERAGE_DEPTHS.join(' / ')}`);
   }
   return depth;
 }
@@ -66,10 +66,10 @@ function strongerDepth(a, b) {
  *        不可以用啟發式估算。文件 7.5 三。
  */
 export function createCoverage({ session_id, agent_id, files = {}, updated_at = null, compact_risk = COMPACT_RISK_UNKNOWN } = {}) {
-  if (!session_id) throw new TypeError('session_id 必填');
-  if (!agent_id) throw new TypeError('agent_id 必填');
+  if (!session_id) throw new TypeError('session_id is required');
+  if (!agent_id) throw new TypeError('agent_id is required');
   if (compact_risk !== null && !(typeof compact_risk === 'number' && compact_risk >= 0 && compact_risk <= 1)) {
-    throw new TypeError('compact_risk 必須是 0..1 或 null（拿不到就 null，不要估）');
+    throw new TypeError('compact_risk must be 0..1 or null (null when unavailable - do not estimate)');
   }
   const norm = {};
   for (const [path, depth] of Object.entries(files)) norm[path] = assertDepth(depth);
@@ -90,7 +90,7 @@ export function createCoverage({ session_id, agent_id, files = {}, updated_at = 
  */
 export function recordAccess(coverage, file_path, depth, at = null) {
   assertDepth(depth);
-  if (!file_path) throw new TypeError('file_path 必填');
+  if (!file_path) throw new TypeError('file_path is required');
   const next = { ...coverage.files };
   next[file_path] = strongerDepth(next[file_path], depth);
   return createCoverage({

@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 230 assertions, all green.
+`npm test` → 256 assertions, all green.
 
 </div>
 
@@ -154,6 +154,32 @@ Expired locks are dropped outright — a dead holder should not keep blocking. A
 
 The checksum is FNV-1a, and the source says plainly that it is an integrity check and not a security one: it catches truncation and a mangled file, and stops nobody who edits deliberately.
 
+### `runtime.js` — the part you actually integrate against
+
+Seven modules, each independently useful, is still seven APIs to read and an ordering to work out for yourself. This wires them together so a host only has to do four things:
+
+```js
+const forseti = createRuntime();
+
+forseti.setEdges([...])                    // handoff rules, cycles rejected up front
+forseti.requestWrite({ agent_id, declared })   // ask before dispatching
+forseti.ingest(rawToolCallEvents)          // forward events as they happen
+forseti.completeTurn({ agent_id })         // a turn ended - where does it go
+forseti.save()                             // one string, store it anywhere
+```
+
+**It answers; it never acts.** `completeTurn()` says the work should go to `review`. Actually sending it is the host's job. `requestWrite()` says a request should be blocked. Whether to block is the host's call. The line is deliberate: the moment this starts performing actions it stops being a set of primitives and becomes a framework, and a framework dictates how you organise everything else. A test asserts the returned plan contains no field claiming anything was sent.
+
+`status()` reports what it knows and, separately, what it does not — no rules configured yet, no events received yet, capture dropped N events so every number below is computed from incomplete data. That last one is the one that matters: the capture rate is the ceiling on the quality of every other answer here.
+
+`example/host.mjs` is a complete integration you can run:
+
+```bash
+node example/host.mjs
+```
+
+It walks the whole lifecycle and prints what each step returns, including the restart, where a scope held by an agent that may or may not still exist keeps blocking until you confirm.
+
 ---
 
 ## Design rules
@@ -168,7 +194,7 @@ These are enforced by the test suite. Deleting an honesty annotation makes a tes
 
 **Every returned object is frozen.** State changes go through the API or not at all.
 
-**Zero dependencies.** Six of the seven modules import nothing at all. The seventh imports one sibling.
+**Zero dependencies.** Six of the eight modules import nothing at all; the other two import only siblings. Nothing here reaches outside the repo.
 
 ---
 
@@ -182,6 +208,14 @@ npm test
 
 No install step, no build step, no `node_modules`. Requires Node 22+.
 
+Start with the runtime, which wires everything together:
+
+```js
+import { createRuntime } from './src/runtime.js';
+```
+
+Or take a single mechanism and ignore the rest — every module works standalone:
+
 ```js
 import { computeCostVector } from './src/cost.js';
 import { decideAdmission }   from './src/admission.js';
@@ -191,8 +225,6 @@ import { planHandoff }       from './src/handoff.js';
 import { normalizeStream }   from './src/capture.js';
 import { serialize, load }   from './src/persist.js';
 ```
-
-Each module works standalone. Adopt one, ignore the rest.
 
 ---
 
@@ -209,9 +241,10 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `coverage.js` | 30 | Verified |
 | `handoff.js` | 38 | Verified |
 | `persist.js` | 31 | Verified |
+| `runtime.js` | 26 | Verified |
 | end-to-end | 17 | Verified |
 
-**Honest about what's missing.** One thing is still on the host: actually calling these functions at dispatch time, and storing the one string `persist.js` hands it. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) are documented as unmeasured rather than claimed.
+**Honest about what's missing.** The integration surface is complete, but *this runtime has never been attached to a live host.* Its logic is verified by 256 assertions and two of its modules carry rules learned in production, and neither of those is the same as having run. Three constants (`cost.js` sub-100ms on a 20k-node graph, `admission.js` 15-second window, `capture.js` 30-second turn gap) are documented as unmeasured rather than claimed. The host still supplies its own event adapter and decides where the snapshot string lives.
 
 `handoff.js` and `capture.js` carry logic that ran in production before being extracted. Nine of handoff's assertions are regression baselines from that environment.
 

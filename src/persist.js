@@ -95,7 +95,7 @@ export function createSnapshot({
   coverages = [], stats = null, edges = [], at = null,
 } = {}) {
   if (typeof at !== 'number' || !Number.isFinite(at)) {
-    throw new TypeError('at 必填且必須是毫秒 timestamp。沒有打包時間就判斷不了鎖有沒有過期。');
+    throw new TypeError('at is required and must be a millisecond timestamp. Without a pack time, lock expiry cannot be judged.');
   }
   return Object.freeze({
     schema_version: SCHEMA_VERSION,
@@ -133,7 +133,7 @@ export function deserialize(text) {
   } catch (e) {
     return Object.freeze({
       snapshot: null,
-      errors: Object.freeze([Object.freeze({ section: null, message: '整份無法解析: ' + e.message })]),
+      errors: Object.freeze([Object.freeze({ section: null, message: 'Whole snapshot failed to parse: ' + e.message })]),
       checksum_ok: null,
     });
   }
@@ -144,7 +144,7 @@ export function deserialize(text) {
     bodyText = outer.body;
     checksum_ok = typeof outer.checksum === 'string' ? checksum(bodyText) === outer.checksum : null;
     if (checksum_ok === false) {
-      errors.push(Object.freeze({ section: null, message: 'checksum 不符,內容可能被截斷或改動過' }));
+      errors.push(Object.freeze({ section: null, message: 'checksum mismatch - the content may be truncated or modified' }));
     }
   } else {
     // 沒有外層信封,當成裸的快照。舊格式或手寫的都走這條。
@@ -157,7 +157,7 @@ export function deserialize(text) {
   } catch (e) {
     return Object.freeze({
       snapshot: null,
-      errors: Object.freeze([...errors, Object.freeze({ section: null, message: '內容無法解析: ' + e.message })]),
+      errors: Object.freeze([...errors, Object.freeze({ section: null, message: 'Body failed to parse: ' + e.message })]),
       checksum_ok,
     });
   }
@@ -227,7 +227,7 @@ function lockExpired(lock, now) {
  */
 export function restore(snapshot, { now } = {}) {
   if (typeof now !== 'number' || !Number.isFinite(now)) {
-    throw new TypeError('now 必填。沒有現在時間就判斷不了鎖有沒有過期。');
+    throw new TypeError('now is required. Without the current time, lock expiry cannot be judged.');
   }
   const warnings = [];
   const scopes = Array.isArray(snapshot?.scopes) ? snapshot.scopes : [];
@@ -242,17 +242,17 @@ export function restore(snapshot, { now } = {}) {
   const stale = scopes.filter((s) => s?.state === 'ACTIVE');
   if (stale.length) {
     warnings.push(
-      `${stale.length} 個佔用範圍在重啟前是 ACTIVE。持有者可能已經不在了,` +
-      '請先確認再決定要釋放還是保留。這裡不替你決定,兩種猜法都會出事。',
+      `${stale.length} write scope(s) were ACTIVE before the restart. Their holders may no longer exist; ` +
+      'confirm before releasing or keeping them. This module will not decide for you - both guesses cause damage.',
     );
   }
 
   const gap = typeof snapshot?.at === 'number' ? now - snapshot.at : null;
   if (gap === null) {
-    warnings.push('快照沒有打包時間,無法判斷中斷了多久。');
+    warnings.push('Snapshot has no pack time; the length of the interruption cannot be determined.');
   }
   if (snapshot?.unknown_future_version) {
-    warnings.push('快照版本比這份程式認得的還新,可能有欄位沒被讀進來。');
+    warnings.push('Snapshot version is newer than this build understands; some fields may not have been read.');
   }
 
   return Object.freeze({
@@ -287,7 +287,7 @@ export function load(text, { now } = {}) {
       stale_scopes: Object.freeze([]),
       expired_locks: Object.freeze([]),
       gap_ms: null,
-      warnings: Object.freeze(['快照讀不出來。這不等於空專案,不要拿空狀態覆蓋上去。']),
+      warnings: Object.freeze(['Snapshot could not be read. This is not the same as an empty project - do not overwrite with empty state.']),
     });
   }
   const r = restore(parsed.snapshot, { now });

@@ -167,27 +167,27 @@ test('非法轉移一律拋錯,不靜默允許', () => {
   const budget = makeBudget();
   const pending = makeCapsule();
   // PENDING → REJECTED 不在圖上
-  assert.throws(() => rejectCapsule(pending), /非法/);
+  assert.throws(() => rejectCapsule(pending), /Illegal/);
   // PENDING → SUMMARIZED_AGAIN 不在圖上
-  assert.throws(() => requestResummarize(pending), /非法/);
+  assert.throws(() => requestResummarize(pending), /Illegal/);
   // ACCEPTED 是終態
   const { capsule: previewed } = previewCapsule(pending, budget);
   const { capsule: accepted } = acceptCapsule(previewed, budget, makeContract());
-  assert.throws(() => previewCapsule(accepted, budget), /非法/);
-  assert.throws(() => rejectCapsule(accepted), /非法/);
+  assert.throws(() => previewCapsule(accepted, budget), /Illegal/);
+  assert.throws(() => rejectCapsule(accepted), /Illegal/);
   // REJECTED 是終態
   const rejected = rejectCapsule(previewed);
-  assert.throws(() => requestResummarize(rejected), /非法/);
+  assert.throws(() => requestResummarize(rejected), /Illegal/);
   // SUMMARIZED_AGAIN 只能回 PENDING
   const again = requestResummarize(previewed);
-  assert.throws(() => rejectCapsule(again), /非法/);
+  assert.throws(() => rejectCapsule(again), /Illegal/);
   // 轉移表本身照 3.4 的圖
   assert.deepEqual(LEGAL_TRANSITIONS.PENDING, ['PREVIEWED', 'ACCEPTED']);
   assert.deepEqual(LEGAL_TRANSITIONS.PREVIEWED, ['ACCEPTED', 'SUMMARIZED_AGAIN', 'REJECTED']);
   assert.deepEqual(LEGAL_TRANSITIONS.SUMMARIZED_AGAIN, ['PENDING']);
   assert.deepEqual(LEGAL_TRANSITIONS.ACCEPTED, []);
   assert.deepEqual(LEGAL_TRANSITIONS.REJECTED, []);
-  assert.throws(() => assertLegalTransition('ACCEPTED', 'PENDING'), /非法/);
+  assert.throws(() => assertLegalTransition('ACCEPTED', 'PENDING'), /Illegal/);
 });
 
 // ---- 自動放行(文件 3.4) ----
@@ -206,7 +206,7 @@ test('超過自動閾值的 PENDING 膠囊直接 accept 要拋錯,必須走 prev
   const contract = makeContract({ max_return_tokens: 99999 });
   const costly = makeCapsule({ token_cost: 4001 }); // 2% = 4000
   assert.equal(shouldAutoAccept(costly, budget, contract), false);
-  assert.throws(() => acceptCapsule(costly, budget, contract), /自動放行/);
+  assert.throws(() => acceptCapsule(costly, budget, contract), /auto-clear/);
 });
 
 test('閾值可設定:同一顆膠囊,ratio 調到 0.05 就過,調到 0.001 就不過', () => {

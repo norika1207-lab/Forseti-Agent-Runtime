@@ -30,7 +30,7 @@ t('CoverageDepth 四級照 7.3 節，一字不改', () => {
 });
 
 t('不認得的深度直接拋錯，不靜默接受', () => {
-  assert.throws(() => cov('s1', { 'a.ts': 'SKIMMED' }), /不認得的 CoverageDepth/);
+  assert.throws(() => cov('s1', { 'a.ts': 'SKIMMED' }), /Unrecognised CoverageDepth/);
 });
 
 t('雷一：is_upper_bound 永遠 true，且物件凍結改不動', () => {
@@ -46,8 +46,8 @@ t('7.5 三：compact_risk 預設 null，拿不到就不估', () => {
 });
 
 t('compact_risk 給 0..1 以外的值拋錯，不接受瞎猜的數字', () => {
-  assert.throws(() => cov('s1', {}, { compact_risk: 1.5 }), /0\.\.1 或 null/);
-  assert.throws(() => cov('s1', {}, { compact_risk: 'high' }), /0\.\.1 或 null/);
+  assert.throws(() => cov('s1', {}, { compact_risk: 1.5 }), /0\.\.1 or null/);
+  assert.throws(() => cov('s1', {}, { compact_risk: 'high' }), /0\.\.1 or null/);
   assert.equal(cov('s1', {}, { compact_risk: 0.8 }).compact_risk, 0.8);
 });
 

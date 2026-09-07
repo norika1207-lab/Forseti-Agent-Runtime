@@ -31,9 +31,9 @@ export const LEGAL_TRANSITIONS = Object.freeze({
 
 export function assertLegalTransition(fromState, toState) {
   const allowed = LEGAL_TRANSITIONS[fromState];
-  if (!allowed) throw new Error(`未知狀態:${String(fromState)}`);
+  if (!allowed) throw new Error(`Unknown state: ${String(fromState)}`);
   if (!allowed.includes(toState)) {
-    throw new Error(`非法狀態轉移:${fromState} → ${toState}`);
+    throw new Error(`Illegal state transition: ${fromState} -> ${toState}`);
   }
 }
 
@@ -48,14 +48,14 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 function intField(value, name) {
   if (!Number.isInteger(value) || value < 0) {
-    throw new TypeError(`${name} 必須是非負整數,拿到:${String(value)}`);
+    throw new TypeError(`${name} must be a non-negative integer, got: ${String(value)}`);
   }
   return value;
 }
 
 function strField(value, name) {
   if (typeof value !== 'string' || value.length === 0) {
-    throw new TypeError(`${name} 必須是非空字串`);
+    throw new TypeError(`${name} must be a non-empty string`);
   }
   return value;
 }
@@ -87,7 +87,7 @@ export function createBudget(fields) {
   const f = fields ?? {};
   if (f.source !== TOKEN_SOURCES.PROVIDER_REPORTED && f.source !== TOKEN_SOURCES.ESTIMATED) {
     throw new TypeError(
-      `ContextBudget.source 必須明講 PROVIDER_REPORTED 或 ESTIMATED,拿到:${String(f.source)}`,
+      `ContextBudget.source must state PROVIDER_REPORTED or ESTIMATED explicitly, got: ${String(f.source)}`,
     );
   }
   return Object.freeze({
@@ -136,7 +136,7 @@ export function remainingBudget(budget) {
 export function validateReturnShape(capsule, contract) {
   const reasons = [];
   if (capsule.token_cost > contract.max_return_tokens) {
-    reasons.push(`token_cost ${capsule.token_cost} 超過 max_return_tokens ${contract.max_return_tokens}`);
+    reasons.push(`token_cost ${capsule.token_cost} exceeds max_return_tokens ${contract.max_return_tokens}`);
   }
   const shape = contract.return_shape;
   if (shape && shape.kind === 'json') {
@@ -144,11 +144,11 @@ export function validateReturnShape(capsule, contract) {
     try {
       parsed = JSON.parse(capsule.summary);
     } catch {
-      reasons.push('return_shape 要求 JSON,但 summary 不是合法 JSON');
+      reasons.push('return_shape requires JSON but summary is not valid JSON');
     }
     if (parsed && Array.isArray(shape.required_fields)) {
       for (const key of shape.required_fields) {
-        if (!(key in parsed)) reasons.push(`summary 缺少 return_shape 要求的欄位:${key}`);
+        if (!(key in parsed)) reasons.push(`summary is missing a field required by return_shape: ${key}`);
       }
     }
   }
@@ -207,8 +207,8 @@ export function acceptCapsule(capsule, budget, contract, config = DEFAULT_CONFIG
     if (!shouldAutoAccept(capsule, budget, contract, config)) {
       const { reasons } = shapeCheck(capsule, contract, config);
       throw new Error(
-        `非法轉移:PENDING → ACCEPTED 只允許自動放行,此膠囊未達條件` +
-          (reasons.length ? `(${reasons.join(';')})` : '(token_cost 超過自動閾值)'),
+        `Illegal transition: PENDING -> ACCEPTED is only allowed for auto-clear, and this capsule does not qualify` +
+          (reasons.length ? `(${reasons.join(';')})` : ' (token_cost exceeds the auto-clear threshold)'),
       );
     }
   }

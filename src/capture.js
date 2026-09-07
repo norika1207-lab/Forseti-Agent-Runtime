@@ -78,11 +78,11 @@ export function createEvent({
   tool, action, file_path, partial = false,
 } = {}) {
   if (!ACTIONS.includes(action)) {
-    throw new TypeError(`不認得的 action: ${String(action)}。合法值: ${ACTIONS.join(' / ')}`);
+    throw new TypeError(`Unrecognised action: ${String(action)}. Valid values: ${ACTIONS.join(' / ')}`);
   }
-  if (!agent_id) throw new TypeError('agent_id 必填。沒有穩定識別碼就不該建事件，見教訓一。');
+  if (!agent_id) throw new TypeError('agent_id is required. Without a stable id an event should not be created at all - see lesson one.');
   if (typeof at !== 'number' || !Number.isFinite(at)) {
-    throw new TypeError('at 必須是毫秒 timestamp。缺時間戳的事件請進 skipped，不要補一個假的。');
+    throw new TypeError('at must be a millisecond timestamp. Events without one belong in skipped, not filled in with a fake.');
   }
   return Object.freeze({
     at, agent_id, agent_label, session_id, tool, action, file_path, partial,
@@ -355,7 +355,7 @@ export function captureHealth(result) {
       total: 0,
       skipped: 0,
       worst_reason: null,
-      note: '沒有事件。這不代表採集正常，只代表沒東西可判斷。',
+      note: 'No events. This does not mean capture is healthy, only that there is nothing to judge.',
     });
   }
   const bucket = result.skipped_by_reason ?? {};

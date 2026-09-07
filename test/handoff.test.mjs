@@ -39,9 +39,9 @@ t('busy 優先於 loop', () => assert.equal(D('direct', 'B', 'A', ['A', 'B'], tr
 t('edge 三種型別，一字不改', () => assert.deepEqual([...EDGE_KINDS], ['direct', 'gated', 'roundtrip']));
 t('decide 四種結果，一字不改', () => assert.deepEqual([...DECISIONS], ['allow', 'loop', 'busy', 'hops']));
 t('不認得的 kind 拋錯，不靜默接受', () =>
-  assert.throws(() => createEdge({ id: 'x', from: 'A', to: 'B', kind: 'maybe' }), /不認得的 edge kind/));
+  assert.throws(() => createEdge({ id: 'x', from: 'A', to: 'B', kind: 'maybe' }), /Unrecognised edge kind/));
 t('不允許自己指向自己', () =>
-  assert.throws(() => createEdge({ id: 'x', from: 'A', to: 'A' }), /自己指向自己/));
+  assert.throws(() => createEdge({ id: 'x', from: 'A', to: 'A' }), /own origin/));
 t('edge 凍結，改不動', () => {
   const e = E('A', 'B');
   assert.throws(() => { e.kind = 'gated'; }, TypeError);
@@ -77,7 +77,7 @@ t('roundtrip 達上限時轉成閘門交給人，不是直接丟掉', () => {
   assert.equal(p.dispatch.length, 0);
   assert.equal(p.blocked.length, 1);
   assert.equal(p.gates.length, 1);
-  assert.match(p.gates[0].reason, /上限/);
+  assert.match(p.gates[0].reason, /limit reached/);
 });
 
 t('實測過的失敗模式：上游沒有產出就不觸發任何邊', () => {

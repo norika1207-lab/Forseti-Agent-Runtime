@@ -29,7 +29,7 @@ export function buildGraph(imports = []) {
   let total = 0;
   for (const imp of imports) {
     if (!imp || typeof imp.from !== 'string') {
-      throw new TypeError('import 紀錄缺少 from 欄位');
+      throw new TypeError('import record is missing the from field');
     }
     total += 1;
     if (imp.to == null) {
@@ -127,7 +127,7 @@ export function computeCostVector(graph, target, options = {}) {
   let coverageSource = COVERAGE_NONE;
   if (coverage != null) {
     if (coverage.source !== COVERAGE_LCOV) {
-      throw new TypeError(`不認得的 coverage_source: ${String(coverage.source)}`);
+      throw new TypeError(`Unrecognised coverage_source: ${String(coverage.source)}`);
     }
     coverageSource = COVERAGE_LCOV;
     const covered = coverage.covered instanceof Set ? coverage.covered : new Set(coverage.covered ?? []);

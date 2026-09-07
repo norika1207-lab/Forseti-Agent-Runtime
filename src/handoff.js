@@ -38,7 +38,7 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 function assertKind(kind) {
   if (!EDGE_KINDS.includes(kind)) {
-    throw new TypeError(`不認得的 edge kind: ${String(kind)}。合法值: ${EDGE_KINDS.join(' / ')}`);
+    throw new TypeError(`Unrecognised edge kind: ${String(kind)}. Valid values: ${EDGE_KINDS.join(' / ')}`);
   }
   return kind;
 }
@@ -53,9 +53,9 @@ function assertKind(kind) {
  * @param {boolean} [p.enabled=true]
  */
 export function createEdge({ id, from, to, kind = 'direct', enabled = true } = {}) {
-  if (!id) throw new TypeError('id 必填');
-  if (!from || !to) throw new TypeError('from 與 to 必填');
-  if (from === to) throw new TypeError('不允許自己指向自己的邊');
+  if (!id) throw new TypeError('id is required');
+  if (!from || !to) throw new TypeError('from and to are required');
+  if (from === to) throw new TypeError('an edge may not point at its own origin');
   assertKind(kind);
   return Object.freeze({ id, from, to, kind, enabled: !!enabled });
 }
@@ -130,7 +130,7 @@ export function planHandoff({ fromNode, edges, chain = [fromNode], isRunning = (
       blocked.push(Object.freeze({ edge_id: edge.id, to: edge.to, reason: verdict }));
       // roundtrip 被擋下時不靜默丟掉，轉成閘門讓人決定要不要再送一次。
       if (edge.kind === 'roundtrip' && verdict === 'loop') {
-        gates.push(Object.freeze({ edge_id: edge.id, from: fromNode, to: edge.to, chain: Object.freeze([...chain]), reason: 'roundtrip 已達上限，需要你決定' }));
+        gates.push(Object.freeze({ edge_id: edge.id, from: fromNode, to: edge.to, chain: Object.freeze([...chain]), reason: 'roundtrip limit reached, needs your decision' }));
       }
       continue;
     }

@@ -96,7 +96,7 @@ t('整份無法解析時 snapshot 是 null，不回一個空狀態', () => {
 t('讀不出來不等於空專案，警告要講清楚', () => {
   const r = load('壞掉的內容', { now: T0 });
   assert.equal(r.state, null);
-  assert.match(r.warnings[0], /不等於空專案/);
+  assert.match(r.warnings[0], /not the same as an empty project/);
 });
 
 t('讀得出來的區塊照樣還原，缺的區塊是 null 不是空陣列', () => {
@@ -124,7 +124,7 @@ t('同版本不動它', () => {
 });
 
 t('打包一定要有時間，沒有就拋錯不補假的', () =>
-  assert.throws(() => createSnapshot({}), /at 必填/));
+  assert.throws(() => createSnapshot({}), /at is required/));
 
 t('區塊清單一字不改', () =>
   assert.deepEqual([...SECTIONS],
@@ -156,7 +156,7 @@ t('stale 的不自動釋放：那個 agent 可能還活著，放掉會讓兩人�
   const r = restore(s, { now: T0 + 1000 });
   assert.equal(r.state.scopes.length, 1, '仍在狀態裡,只是被標記');
   assert.equal(r.state.scopes[0].state, 'ACTIVE');
-  assert.match(r.warnings[0], /兩種猜法都會出事/);
+  assert.match(r.warnings[0], /both guesses cause damage/);
 });
 
 t('中斷了多久算得出來', () => {
@@ -166,15 +166,15 @@ t('中斷了多久算得出來', () => {
 t('快照沒有時間戳時明說判斷不了，不填 0', () => {
   const r = restore({ scopes: [], locks: [] }, { now: T0 });
   assert.equal(r.gap_ms, null);
-  assert.ok(r.warnings.some((w) => /無法判斷中斷了多久/.test(w)));
+  assert.ok(r.warnings.some((w) => /length of the interruption/.test(w)));
 });
 
 t('沒有現在時間就拋錯，不拿系統時鐘偷偷補', () =>
-  assert.throws(() => restore(snap(), {}), /now 必填/));
+  assert.throws(() => restore(snap(), {}), /now is required/));
 
 t('未來版本的快照在復甦時也會警告', () => {
   const r = restore({ ...snap(), unknown_future_version: true }, { now: T0 });
-  assert.ok(r.warnings.some((w) => /版本比這份程式認得的還新/.test(w)));
+  assert.ok(r.warnings.some((w) => /newer than this build/.test(w)));
 });
 
 t('沒有 scopes 與 locks 也不炸', () => {

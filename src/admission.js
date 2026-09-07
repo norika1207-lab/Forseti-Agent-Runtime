@@ -39,14 +39,14 @@ export const DEFAULT_CONFIG = Object.freeze({
 
 function strField(value, name) {
   if (typeof value !== 'string' || value.length === 0) {
-    throw new TypeError(`${name} 必須是非空字串`);
+    throw new TypeError(`${name} must be a non-empty string`);
   }
   return value;
 }
 
 function intField(value, name) {
   if (!Number.isInteger(value) || value < 0) {
-    throw new TypeError(`${name} 必須是非負整數,拿到:${String(value)}`);
+    throw new TypeError(`${name} must be a non-negative integer, got: ${String(value)}`);
   }
   return value;
 }
@@ -386,9 +386,9 @@ export function decideAdmission(request, env = {}) {
       DECISIONS.ALLOW,
       [],
       undecidable.length === 0
-        ? '與所有 ACTIVE 寫入範圍無交集'
-        : `未查到交集,但有 ${undecidable.length} 組樣式無法判定(雙方都是萬用字元且未提供候選檔案清單)。` +
-          '這是「沒查到」不是「沒有」,見 is_complete。',
+        ? 'No intersection with any ACTIVE write scope'
+        : `No intersection found, but ${undecidable.length} glob pair(s) are undecidable (both sides are wildcards and no candidate file list was supplied). ` +
+          'This is \'not found\', not \'not present\' - see is_complete.',
     );
   }
 
@@ -400,16 +400,16 @@ export function decideAdmission(request, env = {}) {
     return decision(
       DECISIONS.ALLOW,
       conflicts,
-      `交集只落在樞紐檔案上(前 ${config.hub_percentile ?? DEFAULT_CONFIG.hub_percentile} 百分位)` +
-        `,不算真衝突,放行並標記警示。樞紐判定來源:${HUB_SOURCES.IMPORT_COUNTS}`,
+      `Intersection falls only on hub files (top ${config.hub_percentile ?? DEFAULT_CONFIG.hub_percentile} percentile)` +
+        `; not a real conflict, allowed with a warning. Hub source: ${HUB_SOURCES.IMPORT_COUNTS}`,
     );
   }
 
   const realConflicts = hubs === null ? conflicts : conflicts.filter((c) => !hubs.has(c.file_path));
   const hubNote =
     hubs === null
-      ? `樞紐判定來源:${HUB_SOURCES.NONE}(無 import 次數資料,未給樞紐豁免,未估算)`
-      : `樞紐判定來源:${HUB_SOURCES.IMPORT_COUNTS}`;
+      ? `Hub source: ${HUB_SOURCES.NONE} (no import-count data, no hub exemption granted, nothing estimated)`
+      : `Hub source: ${HUB_SOURCES.IMPORT_COUNTS}`;
 
   // Q3:能不能縮小範圍避開交集
   const narrowed = suggestNarrowedScope(request, realConflicts, { candidateFiles, graph });
@@ -417,28 +417,28 @@ export function decideAdmission(request, env = {}) {
     return decision(
       DECISIONS.NARROW,
       realConflicts,
-      `可縮小寫入範圍避開 ${realConflicts.length} 個衝突檔案。${hubNote}`,
+      `Write scope can be narrowed to avoid ${realConflicts.length} conflicting file(s). ${hubNote}`,
       narrowed,
     );
   }
 
   const narrowNote = candidateFiles
-    ? '縮小後無檔案可寫'
-    : '未提供候選檔案清單,無法評估能否縮小範圍(不猜)';
+    ? 'nothing left to write after narrowing'
+    : 'no candidate file list supplied, cannot evaluate narrowing (will not guess)';
 
   // Q4:預設序列化,只有明確宣告不可延後才交給擁有者裁決
   if (request.deferrable === false) {
     return decision(
       DECISIONS.BLOCK,
       realConflicts,
-      `${narrowNote};任務明確宣告不可延後,交給擁有者裁決。${hubNote}`,
+      `${narrowNote}; task is explicitly non-deferrable, escalating to the owner. ${hubNote}`,
     );
   }
-  const deferNote = request.deferrable === true ? '任務可延後' : '任務未宣告可否延後,預設可延後';
+  const deferNote = request.deferrable === true ? 'task is deferrable' : 'task did not declare deferrability, defaulting to deferrable';
   return decision(
     DECISIONS.SERIALIZE,
     realConflicts,
-    `${narrowNote};${deferNote},排在持有者之後。${hubNote}`,
+    `${narrowNote}; ${deferNote}, queued behind the current holder. ${hubNote}`,
   );
 }
 

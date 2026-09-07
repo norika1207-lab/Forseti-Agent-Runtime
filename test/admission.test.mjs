@@ -121,7 +121,7 @@ test('兩邊都是萬用字元又沒有候選清單時,標明無法判定,不冒
   assert.equal(d.decision, 'ALLOW');
   assert.equal(d.is_complete, false, '這是沒查到,不是沒有');
   assert.equal(d.undecidable.length, 1);
-  assert.match(d.reason, /無法判定/);
+  assert.match(d.reason, /undecidable/);
 });
 
 test('自己的 scope 不跟自己衝突', () => {
@@ -225,7 +225,7 @@ test('樞紐例外:交集只落在樞紐檔案上就放行,不算真衝突', () 
   );
   assert.equal(d.decision, DECISIONS.ALLOW);
   assert.equal(d.conflicts.length, 1); // 警示資訊保留,但決策是放行
-  assert.match(d.reason, /樞紐/);
+  assert.match(d.reason, /[Hh]ub/);
 });
 
 test('樞紐例外:交集混有非樞紐檔案時,非樞紐那些仍算真衝突', () => {
@@ -262,7 +262,7 @@ test('沒有 import 次數資料就沒有樞紐豁免:hubFiles 回 null,決策�
   );
   assert.notEqual(d.decision, DECISIONS.ALLOW);
   assert.match(d.reason, new RegExp(HUB_SOURCES.NONE));
-  assert.match(d.reason, /未估算/);
+  assert.match(d.reason, /nothing estimated/);
 });
 
 // ---- NARROW / SERIALIZE / BLOCK ----
@@ -306,7 +306,7 @@ test('沒有候選檔案清單就不猜能否縮小,理由要明講,不靜默降
   );
   assert.equal(d.decision, DECISIONS.SERIALIZE);
   assert.equal(d.suggested_scope, null);
-  assert.match(d.reason, /不猜/);
+  assert.match(d.reason, /will not guess/);
 });
 
 test('SERIALIZE:無法縮小但任務可延後', () => {
@@ -316,7 +316,7 @@ test('SERIALIZE:無法縮小但任務可延後', () => {
     { scopes: [holder], now: T0, candidateFiles: ['src/auth/login.js'] },
   );
   assert.equal(d.decision, DECISIONS.SERIALIZE);
-  assert.match(d.reason, /縮小後無檔案可寫/);
+  assert.match(d.reason, /nothing left to write/);
 });
 
 test('BLOCK 只保留給明確宣告 deferrable=false 的請求', () => {
@@ -327,7 +327,7 @@ test('BLOCK 只保留給明確宣告 deferrable=false 的請求', () => {
   );
   assert.equal(d.decision, DECISIONS.BLOCK);
   assert.deepEqual(d.conflicts, [{ file_path: 'src/auth/login.js', holder_agent: 'A' }]);
-  assert.match(d.reason, /明確宣告不可延後/);
+  assert.match(d.reason, /non-deferrable/);
 });
 
 test('未宣告 deferrable 且無法縮小 → SERIALIZE,不是 BLOCK(預設不叫人)', () => {
@@ -339,7 +339,7 @@ test('未宣告 deferrable 且無法縮小 → SERIALIZE,不是 BLOCK(預設不�
   );
   assert.equal(d.decision, DECISIONS.SERIALIZE);
   assert.notEqual(d.decision, DECISIONS.BLOCK);
-  assert.match(d.reason, /預設可延後/);
+  assert.match(d.reason, /defaulting to deferrable/);
   // 同場加映:沒有候選清單、也沒宣告 deferrable,一樣不准 BLOCK
   const d2 = decideAdmission(
     { agent_id: 'B', task_id: 't', declared: ['src/auth/**'] },

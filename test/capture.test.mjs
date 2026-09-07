@@ -33,15 +33,15 @@ t('跳過原因五種，一字不改', () =>
 
 t('沒有穩定識別碼就建不出事件', () =>
   assert.throws(() => createEvent({ at: 1, tool: 'Read', action: 'READ', file_path: 'x' }),
-    /agent_id 必填/));
+    /agent_id is required/));
 
 t('缺時間戳不補假的，直接拋錯', () =>
   assert.throws(() => createEvent({ agent_id: 'a', tool: 'Read', action: 'READ', file_path: 'x' }),
-    /毫秒 timestamp/));
+    /millisecond timestamp/));
 
 t('不認得的 action 拋錯，不靜默接受', () =>
   assert.throws(() => createEvent({ at: 1, agent_id: 'a', tool: 'X', action: 'MAYBE', file_path: 'x' }),
-    /不認得的 action/));
+    /Unrecognised action/));
 
 t('事件凍結，改不動', () => {
   const e = createEvent({ at: 1, agent_id: 'a', tool: 'Read', action: 'READ', file_path: 'x' });
@@ -276,7 +276,7 @@ t('採集率算得出來，五個機制的答案上限就是這個數字', () =>
 t('完全沒事件時採集率是 null 不是 1', () => {
   const h = captureHealth(normalizeStream([]));
   assert.equal(h.capture_rate, null);
-  assert.match(h.note, /不代表採集正常/);
+  assert.match(h.note, /nothing to judge/);
 });
 
 t('指出最大的漏源，才知道該修宿主哪裡', () => {
