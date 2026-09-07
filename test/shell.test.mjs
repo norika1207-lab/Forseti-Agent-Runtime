@@ -86,6 +86,22 @@ t('/proc 與 /sys 同理', () => {
 t('萬用字元不猜,展開結果這裡看不到', () =>
   assert.deepEqual([...f('rm build/*.js').writes], []));
 
+t('真實資料抓到的誤判:JS 的屬性存取不是檔案', () => {
+  // 在真實 session 上跑可疑窗口時才看到的:a.at、r.k、rows.length
+  // 全部被當成檔案,污染了覆蓋範圍與下游每一個數字。
+  for (const bad of ['a.at', 'r.k', 'rows.length', 'e.file_path', 'x.y']) {
+    assert.deepEqual([...f(`cat ${bad}`).reads], [], bad + ' 不該被當成檔案');
+  }
+});
+
+t('不含斜線但有已知副檔名的仍算檔案', () => {
+  assert.deepEqual([...f('cat README.md').reads], ['README.md']);
+  assert.deepEqual([...f('cat app.py').reads], ['app.py']);
+});
+
+t('含斜線的照舊算路徑,不受副檔名清單限制', () =>
+  assert.deepEqual([...f('cat src/thing').reads], ['src/thing']));
+
 // ---- 不透明 ----
 t('變數展開:看不出實際路徑', () => {
   const r = f('cp "$SRC" "$DST"');

@@ -859,5 +859,33 @@ t('status 帶複合溫度', () => {
   assert.ok(r.status().runtime_temperature.temperature !== null);
 });
 
+// ---- 可疑窗口接線(規格書第 5 節)----
+t('沒有事件時直說,不硬選', () => {
+  const r = rt().suspiciousWindows();
+  assert.equal(r.windows.length, 0);
+  assert.match(r.note, /No events indexed/);
+});
+
+t('注入的異常會被選進來,而且不是把全部都選進來', () => {
+  const r = rt();
+  const M = 60_000;
+  const evs = [];
+  for (let i = 0; i < 60; i += 5) evs.push({ attributed_agent: 'w1', name: 'Read', at: clock - (60 - i) * M, input: { file_path: 'f' + i + '.js' } });
+  for (let k = 0; k < 20; k++) evs.push({ attributed_agent: 'w1', name: 'Edit', at: clock - 30 * M, input: { file_path: 'stuck.js' } });
+  r.ingest(evs);
+  const out = r.suspiciousWindows({ bucketMs: 5 * M, topK: 3 });
+  assert.ok(out.windows.length > 0);
+  assert.ok(out.windows.some((w) => w.events.some((e) => e.file_path === 'stuck.js')), '異常必須落在選出的窗口裡');
+  assert.ok(out.reduction < 1, '不該把全部選進來');
+});
+
+t('每個窗口都標明語意結論的上限是 INFERRED', () => {
+  const r = rt();
+  const M = 60_000;
+  for (let i = 0; i < 40; i++) r.ingest([{ attributed_agent: 'w1', name: i === 20 ? 'Edit' : 'Read', at: clock - (40 - i) * M, input: { file_path: i === 20 ? 'x.js' : 'f' + i + '.js' } }]);
+  const out = r.suspiciousWindows({ bucketMs: 5 * M });
+  if (out.windows.length) assert.equal(out.windows[0].result_epistemic_ceiling, 'INFERRED');
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

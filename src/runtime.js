@@ -64,6 +64,7 @@ import {
   s6CorrectionLoad, s7ProgressStagnation, s8ClaimEvidenceGap, s9CancellationPressure,
   s10StrategyPersistence, composite,
 } from './signals.js';
+import { bucketize, findPeaks, findChangePoints, findMotifs, selectWindows } from './windows.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -636,6 +637,41 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
      */
     runtimeTemperature(extra = {}) {
       return composite(this.signals(extra), config.signals);
+    },
+
+    // ── 可疑窗口(規格書第 5 節)────────────────────────
+
+    /**
+     * 找出值得細看的幾段,而不是把整個 session 送去語意分析。
+     *
+     * 規格書第 5 節把全 session 語意讀取列為例外。真正的理由不是省錢:
+     * 幾十萬行裡的一個異常,對語意模型來說跟雜訊沒有差別;
+     * 收窄之後送三千行,那個異常佔的比重大了兩個數量級。
+     *
+     * 回傳的每個窗口都標著 result_epistemic_ceiling: 'INFERRED' ——
+     * 語意分析讀了原文,結論還是推論,不會因此升級。
+     */
+    suspiciousWindows(opts = {}) {
+      const buckets = bucketize(state.events, opts);
+      if (!buckets.length) {
+        return Object.freeze({
+          windows: Object.freeze([]),
+          considered: 0,
+          note: 'No events indexed yet.',
+        });
+      }
+      const counts = buckets.map((b) => ({ index: b.index, from: b.from, value: b.count }));
+      const writes = buckets.map((b) => ({
+        index: b.index, from: b.from,
+        value: b.events.filter((e) => e.action === 'WRITE').length,
+      }));
+      const candidates = [
+        ...findPeaks(counts, opts),
+        ...findChangePoints(counts, opts),
+        ...findPeaks(writes, opts),
+        ...findMotifs(buckets, (e) => `${e.tool}|${e.file_path}`, opts),
+      ];
+      return selectWindows(candidates, buckets, opts);
     },
 
     // ── 產物實在性(規格書第 6 節)──────────────────────

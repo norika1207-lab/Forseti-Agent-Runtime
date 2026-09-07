@@ -59,13 +59,25 @@ const OPAQUE_PATTERNS = Object.freeze([
  */
 const NOT_A_FILE = /^\/(dev|proc|sys)\//;
 
+/**
+ * 已知的檔案副檔名。不含斜線的字串必須是這裡面的才算路徑。
+ *
+ * 為什麼要這張清單:原本的判斷是「結尾像副檔名就算」,
+ * 結果 JS 的屬性存取全部中招 —— a.at、r.k、rows.length 都被當成檔案,
+ * 然後進了覆蓋範圍、進了可疑窗口、污染下游每一個數字。
+ * 那是在真實 session 上跑可疑窗口選取時才看到的。
+ */
+const KNOWN_EXT = /\.(js|mjs|cjs|ts|tsx|jsx|json|md|txt|log|sh|bash|zsh|py|rb|go|rs|c|h|cpp|hpp|java|kt|swift|m|mm|html|htm|css|scss|yml|yaml|toml|ini|cfg|conf|xml|sql|csv|tsv|lock|gradle|plist|env|gguf|bin|img|apk|ipa|zip|tar|gz|pdf|png|jpg|jpeg|svg|ico)$/i;
+
 /** 看起來像檔案路徑的東西。不含萬用字元,因為展開結果這裡看不到。 */
 function looksLikePath(tok) {
   if (!tok || tok.startsWith('-')) return false;
   if (/[*?]/.test(tok)) return false;
   if (/^[|;&<>]+$/.test(tok)) return false;
   if (NOT_A_FILE.test(tok)) return false;
-  return tok.includes('/') || /\.[A-Za-z0-9]{1,6}$/.test(tok);
+  // 含斜線的當路徑;不含斜線的必須帶已知副檔名,
+  // 否則 a.at 這種屬性存取會被當成檔案。
+  return tok.includes('/') || KNOWN_EXT.test(tok);
 }
 
 function stripQuotes(s) {

@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 621 assertions, all green.
+`npm test` → 652 assertions, all green.
 
 </div>
 
@@ -371,6 +371,22 @@ Two signals are stricter than they look. S4 does not count repetition alone — 
 
 The runtime computes four of the ten on its own (S1, S4, S5, S7). The other six need something not present in an event stream — a definition of user-visible liveness, this user's own output baseline, the correction/new-requirement split, an evidence contract, interruption events, refutation events — and those are reported as gaps rather than defaulted.
 
+### `windows.js` — narrow first, read second
+
+Specification section 5 makes full-session semantic ingestion the exception rather than the default: index the events, roll the atomic signals, find peaks and change points and repeated motifs, take the top K, expand each by a little context, and send only those.
+
+**The real reason is not cost.** Money and latency are the obvious objections, and both are true, but the one that matters is dilution: an anomaly buried in three hundred thousand lines is indistinguishable from noise to a semantic model. Narrow to three thousand lines and that same anomaly is two orders of magnitude more prominent. Saving money is a side effect.
+
+Peaks and change points are separate detectors because they find different things. A gradual climb to a high point has a peak and no change point; a sharp drop from high to low has a change point and no peak. Motifs use a caller-supplied key, so the same action against a different target is not the same motif — matching the S4 rule that a retry requires the same unresolved objective.
+
+Overlapping windows merge. Sending two overlapping stretches of context means paying twice for the same content and showing the model duplicates. And finding nothing returns a note saying so explicitly: *this does not mean nothing is wrong — it means these detectors found no peak, change point, or motif in this data.*
+
+Every selected window carries `result_epistemic_ceiling: 'INFERRED'`. Reading the raw text does not promote a semantic conclusion to VERIFIED.
+
+**Run on a real 61-day session**: 1,304 events across 5,910 buckets, 416 candidates, narrowed to 3 windows covering 15.3% of events — and each one a genuine burst of concentrated work.
+
+That run also caught a defect in `shell.js`. A fourth window had been selected, composed of "files" named `a.at`, `r.k` and `rows.length`. Those are JavaScript property accesses; the path heuristic accepted anything ending in something that looked like an extension. 93 phantom paths had been flowing into coverage and every downstream number. Bare names now require a known extension. Only running the selector on real data made it visible.
+
 ---
 
 ## Design rules
@@ -428,8 +444,9 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `conformance.js` | 21 | Verified |
 | `artifact.js` | 35 | Verified |
 | `signals.js` | 31 | Verified |
+| `windows.js` | 25 | Verified |
 | `capture.js` | 46 | Verified |
-| `shell.js` | 30 | Verified |
+| `shell.js` | 33 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
 | `imports.js` | 28 | Verified |
 | `cost.js` | 16 | Verified |
@@ -442,7 +459,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 98 | Verified |
+| `runtime.js` | 101 | Verified |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.
