@@ -19,7 +19,14 @@
  * ── What it does ────────────────────────────────────────────────────
  *
  *   PostToolUse   feed the event in; update coverage, evidence, scopes
- *   PreToolUse    on a write, check whether someone else holds that file
+ *   PreToolUse    on a write, check two things:
+ *                   - is another session writing this same file right now
+ *                   - have the last several writes all been outside the declared goal
+ *
+ * The second one only speaks after a streak, never on a single write. Doing
+ * real work means touching things around the edges - configs, other people's
+ * implementations, docs, tests. Flagging each of those is the same as flagging
+ * none of them, because the whole thing gets switched off.
  *
  * State lives in one JSON file per project, because each hook invocation
  * is a fresh process with no memory of the last one.
@@ -43,9 +50,36 @@ function readStdin() {
   }
 }
 
-function stateFile(cwd) {
-  const root = process.env.CLAUDE_PROJECT_DIR || cwd || process.cwd();
-  return join(root, '.forseti', 'state.json');
+function projectRoot(cwd) {
+  return process.env.CLAUDE_PROJECT_DIR || cwd || process.cwd();
+}
+function stateFile(cwd) { return join(projectRoot(cwd), '.forseti', 'state.json'); }
+function goalFile(cwd) { return join(projectRoot(cwd), '.forseti', 'goal.json'); }
+function streakFile(cwd) { return join(projectRoot(cwd), '.forseti', 'streak.json'); }
+
+/** 讀宣告過的目標範圍。沒有就回一個不作用的範圍,絕不推測。 */
+async function loadScope(cwd) {
+  const { createScope } = await import(join(HERE, '..', 'src', 'scope.js'));
+  const p = goalFile(cwd);
+  if (!existsSync(p)) return createScope({});
+  try {
+    const g = JSON.parse(readFileSync(p, 'utf8'));
+    return createScope({ northStar: g.north_star ?? null, paths: g.scope ?? [] });
+  } catch {
+    return createScope({});
+  }
+}
+
+function loadStreak(cwd) {
+  const p = streakFile(cwd);
+  if (!existsSync(p)) return null;
+  try { return JSON.parse(readFileSync(p, 'utf8')); } catch { return null; }
+}
+function saveStreak(cwd, streak) {
+  try {
+    mkdirSync(dirname(streakFile(cwd)), { recursive: true });
+    writeFileSync(streakFile(cwd), JSON.stringify(streak));
+  } catch { /* 存不了就算了,不擋工作 */ }
 }
 
 function loadState(rt, path) {
@@ -102,6 +136,25 @@ async function main() {
       windowMs: WINDOW_MS,
       excludeAgent: input.session_id || 'unknown',
     });
+
+    // 先看有沒有人正在寫同一個檔。撞車比離題急,而且離題不該蓋掉撞車的訊息。
+    if (!others.length) {
+      // 沒撞車才看離題。連續數次都在宣告的目標範圍外才說話。
+      const { check } = await import(join(HERE, '..', 'src', 'scope.js'));
+      const scope = await loadScope(input.cwd);
+      if (scope.active) {
+        const out = check(file, scope, loadStreak(input.cwd));
+        saveStreak(input.cwd, out.streak);
+        if (out.notice) {
+          process.stderr.write(JSON.stringify({
+            hookSpecificOutput: { permissionDecision: 'ask' },
+            systemMessage: 'Forseti: ' + out.notice.text,
+          }));
+          process.exit(2);
+        }
+      }
+      OK();
+    }
 
     if (others.length) {
       const who = others

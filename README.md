@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 783 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 798 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -500,6 +500,25 @@ The author's own estimate before running it was *twice*. The owner said *at leas
 
 Two of the four "permanently out of scope" shapes turned out to need no semantic judgment either, which was its own version of the same error — taking a real constraint and widening it into a false one. Confidence-marker density is string matching. False confession is a timestamp comparison: a self-correction whose accusation is later overturned. Both are in `rhetoric.js`, both permanently flagged experimental. The two that genuinely cannot be done from an event stream are named individually, with reasons specific enough to argue with.
 
+### `scope.js` — the one that actually interrupts
+
+Drift detection reads a trend; it needs dozens of segments before it can say anything. This reads a single action: is the file about to be written inside the goal that was declared.
+
+**It does not speak on the first one.** Doing real work means touching the surroundings — configs, someone else's implementation, docs, the test you need to read. Flagging each of those is identical to flagging none, because the whole thing gets switched off. So the criterion is a streak: several consecutive writes outside the scope. One write back inside resets it to zero, because that means the person is still on the main line and the detour was a detour.
+
+The message names the north star, and says plainly that the tool cannot distinguish a necessary detour from wandering off. It asks; it never blocks.
+
+**The scope is declared, never inferred.** With no `.forseti/goal.json` the check does nothing and reports that it is doing nothing — so silence never gets mistaken for an all-clear. Inferring a scope and then using it to interrupt someone would impose the tool's own guess about what they should be working on, which is worse than not checking.
+
+Wired into the hook, it looks like this:
+
+```
+Forseti: 5 consecutive writes outside the declared goal scope.
+North star: Finish Forseti. This may be a necessary detour - the tool
+cannot tell. If the direction genuinely changed, declare it so the
+drift reading stays meaningful.
+```
+
 ---
 
 ## Design rules
@@ -574,6 +593,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 33 | Verified |
 | `followthrough.js` | 21 | Verified |
 | `rhetoric.js` | 19 | Verified |
+| `scope.js` | 15 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
 | `runtime.js` | 117 | Verified |

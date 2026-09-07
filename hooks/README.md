@@ -6,6 +6,21 @@ This is where Forseti stops explaining what already went wrong and starts runnin
 
 **Before a write** it checks whether another session wrote that same file in the last 15 seconds. If so, the write pauses and asks, naming who and how long ago.
 
+**Before a write, second check:** if the last several writes in a row landed outside your declared goal scope, it says so once — naming the north star and pointing out that it cannot tell a necessary detour from actually wandering off.
+
+It never speaks on a single write. Real work touches things around the edges: configs, other people's implementations, docs, tests. Flagging each of those is the same as flagging none, because the whole thing gets switched off. One write back inside the scope resets the count to zero.
+
+To enable it, put a `.forseti/goal.json` in the project:
+
+```json
+{
+  "north_star": "Ship the auth refresh",
+  "scope": ["src/auth", "test/auth"]
+}
+```
+
+Without that file the check does nothing and says so. It never infers a scope — imposing the tool's own guess about what you should be working on is worse than not checking at all.
+
 **After every tool call** it feeds the event in — coverage, evidence provenance, and the write history the check above depends on.
 
 That is the whole surface for now. Everything else Forseti computes (drift, temperature, cost, the context register) needs input the hook interface does not carry, and shipping a check that cannot see its inputs would be theatre.
