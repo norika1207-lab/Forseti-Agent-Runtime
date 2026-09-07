@@ -65,6 +65,10 @@ import {
   s10StrategyPersistence, composite,
 } from './signals.js';
 import { bucketize, findPeaks, findChangePoints, findMotifs, selectWindows } from './windows.js';
+import {
+  createSnapshot as createRecoverySnapshot, silentExecutionRatio, unsafeInterruptRate,
+  interruptReadiness, livenessReport,
+} from './rescue.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -138,6 +142,12 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     artifacts: [],
     /** 上一輪心跳時已驗證的產物數,用來算這一輪新增了幾項。 */
     lastVerifiedMark: 0,
+    /** 可見存活的心跳時間點。沒有它就分不出「安靜在做」跟「掛了」。 */
+    beats: [],
+    /** 中斷紀錄,每一筆帶當時的快照(或沒有)。 */
+    interruptions: [],
+    /** 目前這一輪的復原快照。中斷前要能拿得出來。 */
+    snapshot: null,
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -577,6 +587,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
           ...(state.readings.length ? [] : ['No temperature reading; the share of context that is checked evidence is unknown']),
           ...(state.artifacts.length ? [] : ['No artifact claims verified; idle detection is off because activity is not accepted as proof of progress']),
+          ...(state.beats.length ? [] : ['No visible heartbeats recorded; a user cannot tell working-quietly from hung']),
+          ...(state.snapshot?.usable ? [] : ['No usable recovery snapshot; an interruption right now would lose the working state']),
           ...(state.graph ? [] : ['No dependency graph indexed; the cost of changing a file cannot be computed']),
           ...(state.budget ? [] : ['No context budget set; nothing is tracking what agent output costs the main session']),
           ...(state.opaqueCommands > 0
@@ -637,6 +649,74 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
      */
     runtimeTemperature(extra = {}) {
       return composite(this.signals(extra), config.signals);
+    },
+
+    // ── 可見存活與安全中斷(規格書第 7 節)──────────────
+
+    /**
+     * 打一次可見的心跳。
+     *
+     * 這跟 beat() 是兩件事:beat() 是內部檢查,這個是「讓使用者看得到還活著」。
+     * 沒有這個,使用者分不出安靜在做事跟掛掉了,而那個不確定的成本
+     * 往往比中斷本身還高 —— 所以她會中斷。
+     */
+    heartbeat(at = now()) {
+      state.beats = [...state.beats, at].slice(-500);
+      return state.beats.length;
+    },
+
+    /**
+     * 更新目前的復原快照。
+     *
+     * 規格書第 7 節要求中斷之前或之時建立快照。這個函式讓宿主
+     * 在工作推進時持續更新它,而不是等到要中斷的那一刻才臨時湊。
+     * 臨時湊的快照通常缺 exact_next_step,而那正是唯一真正省時間的欄位。
+     */
+    updateSnapshot(fields) {
+      state.snapshot = createRecoverySnapshot({ ...fields, timestamp: fields.timestamp ?? now() });
+      return state.snapshot;
+    },
+
+    /** 現在中斷安不安全。宿主在真的中斷之前叫這個。 */
+    canInterrupt() {
+      const lv = [...state.artifacts].filter((a) => a.verdict === 'VERIFIED').sort((a, b) => b.at - a.at)[0];
+      return interruptReadiness({
+        snapshot: state.snapshot,
+        openToolCalls: [],
+        lastVerifiedAt: lv?.at ?? null,
+        now: lv ? now() : null,
+      });
+    },
+
+    /**
+     * 記一次中斷,連同當時手上的快照。
+     *
+     * 沒有快照也要記 —— 不安全中斷率就是靠這些筆數算出來的,
+     * 把沒快照的中斷漏掉,那個比率永遠會是零。
+     */
+    recordInterrupt(at = now()) {
+      const entry = Object.freeze({ at, snapshot: state.snapshot });
+      state.interruptions = [...state.interruptions, entry];
+      return entry;
+    },
+
+    /**
+     * 第 7 節那三個指標一起看。
+     *
+     * 三個都拿不到時會明說。三個 null 不是健康,是沒量。
+     */
+    liveness({ activeFrom = null, activeTo = null } = {}) {
+      const lv = [...state.artifacts].filter((a) => a.verdict === 'VERIFIED').sort((a, b) => b.at - a.at)[0];
+      const from = activeFrom ?? (state.events[0]?.at ?? null);
+      const to = activeTo ?? now();
+      return Object.freeze({
+        ...livenessReport({
+          silent: from != null ? silentExecutionRatio(state.beats, { activeFrom: from, activeTo: to }) : null,
+          unsafe: unsafeInterruptRate(state.interruptions),
+          lastVerifiedAgeMs: lv ? now() - lv.at : null,
+        }),
+        snapshot_ready: state.snapshot?.usable ?? false,
+      });
     },
 
     // ── 可疑窗口(規格書第 5 節)────────────────────────
@@ -1013,6 +1093,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           compactions: state.compactions,
           artifacts: state.artifacts,
           lastVerifiedMark: state.lastVerifiedMark,
+          beats: state.beats,
+          interruptions: state.interruptions,
+          snapshot: state.snapshot,
           contracts: [...state.contracts.values()],
           declaredTurns: state.declaredTurns,
           failures: state.failures,
@@ -1055,6 +1138,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.compactions = [...(sig.compactions ?? [])];
       state.artifacts = [...(sig.artifacts ?? [])];
       state.lastVerifiedMark = sig.lastVerifiedMark ?? 0;
+      state.beats = [...(sig.beats ?? [])];
+      state.interruptions = [...(sig.interruptions ?? [])];
+      state.snapshot = sig.snapshot ?? null;
       state.budget = r.state.budget ?? null;
       state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
       return r;

@@ -887,5 +887,76 @@ t('每個窗口都標明語意結論的上限是 INFERRED', () => {
   if (out.windows.length) assert.equal(out.windows[0].result_epistemic_ceiling, 'INFERRED');
 });
 
+// ---- 可見存活與安全中斷(規格書第 7 節)----
+const SNAP = {
+  objective: 'o', current_step: 's', last_verified_state: 'v', active_hypothesis: 'h',
+  open_tool_calls: [], artifact_refs: [], unresolved_decisions: [],
+  exact_next_step: 'run the failing test',
+};
+
+t('沒打過心跳時,使用者分不出安靜在做跟掛了', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Write', 'a.js', -100)]);
+  assert.ok(r.status().unavailable.some((x) => /cannot tell working-quietly from hung/.test(x)));
+});
+
+t('沒有可用快照時,中斷會弄丟工作狀態,要講出來', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Write', 'a.js', -100)]);
+  assert.ok(r.status().unavailable.some((x) => /would lose the working state/.test(x)));
+});
+
+t('沒快照就不能安全中斷', () => {
+  const r = rt();
+  assert.equal(r.canInterrupt().ready, false);
+});
+
+t('快照齊全就可以安全中斷', () => {
+  const r = rt();
+  r.updateSnapshot(SNAP);
+  assert.equal(r.canInterrupt().ready, true);
+});
+
+t('缺 exact_next_step 的快照不算可用', () => {
+  const r = rt();
+  const { exact_next_step, ...rest } = SNAP;
+  const s = r.updateSnapshot(rest);
+  assert.equal(s.lacks_next_step, true);
+  assert.equal(r.canInterrupt().ready, false);
+});
+
+t('沒快照的中斷會被記下來,不安全中斷率才算得出來', () => {
+  const r = rt();
+  r.recordInterrupt();
+  r.updateSnapshot(SNAP);
+  r.recordInterrupt();
+  assert.equal(r.liveness().unsafe_interrupt_rate, 0.5);
+});
+
+t('打了心跳之後沉默比降下來', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Read', 'a.js', -600_000)]);
+  const before = r.liveness().silent_execution_ratio;
+  for (let i = 1; i <= 10; i++) r.heartbeat(clock - 600_000 + i * 60_000);
+  assert.ok(r.liveness().silent_execution_ratio < before);
+});
+
+t('三個指標都量不到時明說,不回一組零', () => {
+  const l = rt().liveness();
+  assert.equal(l.measured, 0);
+  assert.match(l.note, /it is an unmeasured one/);
+});
+
+t('心跳、中斷紀錄與快照跨重啟活著', () => {
+  const a = rt();
+  a.heartbeat();
+  a.updateSnapshot(SNAP);
+  a.recordInterrupt();
+  const b = rt();
+  b.restore(a.save());
+  assert.equal(b.canInterrupt().ready, true);
+  assert.equal(b.liveness().unsafe_interrupt_rate, 0);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

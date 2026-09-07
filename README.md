@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 652 assertions, all green.
+`npm test` → 688 assertions, all green.
 
 </div>
 
@@ -387,6 +387,20 @@ Every selected window carries `result_epistemic_ceiling: 'INFERRED'`. Reading th
 
 That run also caught a defect in `shell.js`. A fourth window had been selected, composed of "files" named `a.at`, `r.k` and `rows.length`. Those are JavaScript property accesses; the path heuristic accepted anything ending in something that looked like an extension. 93 phantom paths had been flowing into coverage and every downstream number. Bare names now require a known extension. Only running the selector on real data made it visible.
 
+### `rescue.js` — visible liveness, and interrupting without losing the work
+
+Specification section 7: long-running work must expose visible liveness so users are not forced to guess whether the system is alive, hung, or silently failing.
+
+**The failure this addresses is specific.** Pressing ESC usually is not a decision that something is wrong — it is the cost of not knowing whether something is wrong, which is frequently higher than the cost of stopping. So the interruption lands at the worst possible moment: mid-task, nothing saved, and the next session inherits nothing.
+
+Two things follow. Measure invisible execution so the silence itself becomes a number, and have a snapshot ready *before* the interrupt rather than assembled in a panic during it.
+
+The snapshot's nine fields come from the spec unchanged. One matters more than the rest: `exact_next_step`. Every other field describes what happened; only that one says what to do next, and a snapshot missing it leaves the next reader re-deriving everything — which is most of what a snapshot was supposed to save. It is flagged separately for that reason.
+
+`silentExecutionRatio` measures whether the user can *see* liveness, not whether work is happening. A quiet, correct, long-running task scores high here, and that is not an error: it means the user currently has to guess, and the guessing is the thing to fix.
+
+`unsafeInterruptRate` returns `null` with no interruptions rather than `0` — nobody having interrupted is not the same as every interruption being safe. Interrupts without a snapshot are still recorded, because dropping them makes the rate permanently zero.
+
 ---
 
 ## Design rules
@@ -445,6 +459,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `artifact.js` | 35 | Verified |
 | `signals.js` | 31 | Verified |
 | `windows.js` | 25 | Verified |
+| `rescue.js` | 27 | Verified |
 | `capture.js` | 46 | Verified |
 | `shell.js` | 33 | Verified |
 | `adapters/claude-code.js` | 19 | Verified |
@@ -459,7 +474,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `provenance.js` | 32 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 101 | Verified |
+| `runtime.js` | 110 | Verified |
 | end-to-end | 17 | Verified |
 
 **It runs live now.** `hooks/forseti-hook.mjs` installs into Claude Code and pauses a write when another session touched that file in the last 15 seconds. See `hooks/README.md`. The governing rule there outranks every check in the repo: a hook that gets in the way gets uninstalled, so every internal failure exits 0 and lets the work through. The only non-zero exit is a real conflict, and it returns `ask`, never `deny`.
