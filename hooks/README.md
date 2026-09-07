@@ -33,7 +33,7 @@ Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`):
     ],
     "PostToolUse": [
       {
-        "matcher": "*",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           { "type": "command", "command": "node /absolute/path/to/forseti/hooks/forseti-hook.mjs" }
         ]
@@ -44,6 +44,14 @@ Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`):
 ```
 
 Restart Claude Code. Node 22+, no dependencies to install.
+
+### Why PostToolUse is not on `*`
+
+Measured on this machine: 156 ms per invocation, of which 130 ms is Node process startup. Forseti's own work is 26 ms. The cost is almost entirely the cost of starting a process at all, and nothing in this repo can make that smaller.
+
+On `*`, a session with 2,300 tool calls pays about six minutes of accumulated latency. Matching only write tools cuts that to the small fraction of calls that are writes.
+
+What you lose: read coverage — which sessions have looked at which files. The collision check does not use it (it only reads write history) and the hook does not currently expose the mechanisms that do. When it does, this trade-off should be revisited rather than inherited.
 
 ## State
 
