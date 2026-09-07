@@ -17,8 +17,14 @@ const T = 1_700_000_000_000;
 const ev = (name, file, offsetMs) => ({ name, file_path: file, at: T + offsetMs });
 
 // ---- 名稱契約 ----
-t('三個可驗的形狀,名稱一字不改', () =>
-  assert.deepEqual([...SHAPES], ['SOURCE_ERASURE', 'SCOPE_INFLATION', 'BARREN_INVESTMENT']));
+t('四個可驗的形狀,名稱一字不改', () =>
+  assert.deepEqual([...SHAPES],
+    ['SOURCE_ERASURE', 'SCOPE_INFLATION', 'BARREN_INVESTMENT', 'PASSIVE_OMISSION']));
+
+t('三加四等於七的那個假完整性,留在原始碼裡當紀錄', () => {
+  const src = readFileSync(new URL('../src/provenance.js', import.meta.url), 'utf8');
+  assert.ok(/用加總掩蓋缺項的清單/.test(src));
+});
 
 t('四個驗不了的形狀要列出來,不是留白', () =>
   assert.deepEqual([...OUT_OF_SCOPE],

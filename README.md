@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 741 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 783 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -478,6 +478,28 @@ Two things it will not do. It never writes, and it never sends anything to the s
 
 And it always shows what fraction of the weighted signals had data behind them. A confident-looking 0.55 computed from 22% of the signals is a different thing from the same number computed from all of them; the interface refuses to let those look alike.
 
+### The shape that was missing from the list of shapes
+
+`provenance.js` implemented three of the seven documented shapes and marked four as permanently out of scope. Three plus four is seven. The list looked complete.
+
+It was not. **Passive omission** — declaring something and then neither doing it nor mentioning it again — was in neither group. It had vanished, and the arithmetic hid the gap. Nobody noticed until the repo's owner said *"you keep stopping halfway through."*
+
+`followthrough.js` implements it. The numbers from running it on the session that wrote this repo:
+
+```
+401 turns, 136 declarations
+  fulfilled     27
+  omitted        3
+  awaiting      23   (asking is collaboration, not omission)
+  unverifiable  83   (named no concrete target)
+```
+
+The author's own estimate before running it was *twice*. The owner said *at least five*. The tool counted 23 turns that declared work and ended with zero tool calls. Of three numbers, the only reliable one came from the record.
+
+**The 83 matter more than the 3.** Six in ten declarations named nothing concrete, so they could not be checked at all — including the one that triggered this whole thread. So `declareStrict()` refuses a declaration with no named target, and refuses by returning a reason rather than throwing: throwing would push a host into recording no declarations at all, and an empty ledger produces a beautiful, meaningless follow-through rate.
+
+Two of the four "permanently out of scope" shapes turned out to need no semantic judgment either, which was its own version of the same error — taking a real constraint and widening it into a false one. Confidence-marker density is string matching. False confession is a timestamp comparison: a self-correction whose accusation is later overturned. Both are in `rhetoric.js`, both permanently flagged experimental. The two that genuinely cannot be done from an event stream are named individually, with reasons specific enough to argue with.
+
 ---
 
 ## Design rules
@@ -549,7 +571,9 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `handoff.js` | 38 | Verified |
 | `persist.js` | 31 | Verified |
 | `drift.js` | 40 | Verified |
-| `provenance.js` | 32 | Verified |
+| `provenance.js` | 33 | Verified |
+| `followthrough.js` | 21 | Verified |
+| `rhetoric.js` | 19 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
 | `runtime.js` | 117 | Verified |
