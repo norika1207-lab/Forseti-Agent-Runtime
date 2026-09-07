@@ -33,6 +33,8 @@ export const SCHEMA_VERSION = 1;
 /** 快照裡的區塊。逐塊還原，一塊壞掉不連累其他塊。 */
 export const SECTIONS = Object.freeze([
   'capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges',
+  // 北極星與訊號。忘了目標,飄移就永遠量不出來,所以它必須跨重啟活著。
+  'goal', 'signals',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -92,7 +94,7 @@ function decodeValue(v) {
  */
 export function createSnapshot({
   capsules = [], budget = null, scopes = [], locks = [],
-  coverages = [], stats = null, edges = [], at = null,
+  coverages = [], stats = null, edges = [], goal = null, signals = null, at = null,
 } = {}) {
   if (typeof at !== 'number' || !Number.isFinite(at)) {
     throw new TypeError('at is required and must be a millisecond timestamp. Without a pack time, lock expiry cannot be judged.');
@@ -100,7 +102,7 @@ export function createSnapshot({
   return Object.freeze({
     schema_version: SCHEMA_VERSION,
     at,
-    capsules, budget, scopes, locks, coverages, stats, edges,
+    capsules, budget, scopes, locks, coverages, stats, edges, goal, signals,
   });
 }
 
@@ -264,6 +266,8 @@ export function restore(snapshot, { now } = {}) {
       coverages: snapshot?.coverages ?? [],
       stats: snapshot?.stats ?? null,
       edges: snapshot?.edges ?? [],
+      goal: snapshot?.goal ?? null,
+      signals: snapshot?.signals ?? null,
     }),
     stale_scopes: Object.freeze(stale),
     expired_locks: Object.freeze(expired),

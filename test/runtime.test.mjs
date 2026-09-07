@@ -240,5 +240,162 @@ t('只回答不動作這條界線寫在原始碼裡,不可被靜默刪除', () =
   assert.ok(/它就從一組原語/.test(src), '越線的後果必須寫明');
 });
 
+// ---- 飄移接線(M7)----
+// 以下測試的事件要落在 now 之前,所以把時鐘往後推十分鐘。
+clock = T0 + 600_000;
+t('宣告北極星之後,飄移是對著它量的,不是推的', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Edit', 'src/auth/token.js', 0)]);
+  const d = r.driftCheck();
+  assert.equal(d.confidence, 'DECLARED_ANCHOR');
+  assert.equal(d.level, 'ON_COURSE', '宣告 src/auth、動 src/auth/token.js,那在範圍內');
+});
+
+t('沒宣告目標時錨點用推的,而且讀數要標明它比較弱', () => {
+  const r = rt();
+  for (let i = 0; i < 60; i++) r.ingest([ev('w1', 'Read', `src/auth/f${i}.js`, i * 100)]);
+  assert.equal(r.driftCheck().confidence, 'INFERRED_ANCHOR');
+});
+
+t('做著做著跑到別的地方,而且沒人宣告過轉向', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Edit', 'docs/blog/post.md', 0)]);
+  const d = r.driftCheck();
+  assert.equal(d.level, 'LOST');
+  assert.equal(d.is_unannounced, true);
+});
+
+t('宣告過轉向就不算飄移,那是決定不是走失', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.declareTurn();
+  r.ingest([ev('w1', 'Edit', 'docs/blog/post.md', 0)]);
+  assert.equal(r.driftCheck().is_unannounced, false);
+});
+
+t('完全沒事件時直說判斷不了,不硬給一個等級', () => {
+  const d = rt().driftCheck();
+  assert.equal(d.level, null);
+  assert.match(d.note, /No events yet/);
+});
+
+t('事件太少又沒宣告目標時,說清楚為什麼判斷不了,並指出怎麼補', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Edit', 'src/a.js', 0)]);
+  const d = r.driftCheck();
+  assert.equal(d.level, null);
+  assert.match(d.note, /Declare one with setGoal/);
+});
+
+t('事件少但有宣告目標時給早期讀數,並標明樣本不足', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([ev('w1', 'Edit', 'docs/blog/x.md', 0)]);
+  const d = r.driftCheck();
+  assert.equal(d.level, 'LOST');
+  assert.equal(d.early_reading, true);
+});
+
+t('沒宣告目標會出現在 status 的缺口清單裡', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Edit', 'a.js', 0)]);
+  assert.ok(r.status().unavailable.some((x) => /No goal declared/.test(x)));
+});
+
+t('沒有失敗訊號時,分不出被放棄還是做完了,要講出來', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Edit', 'a.js', 0)]);
+  assert.ok(r.status().unavailable.some((x) => /cannot be told apart/.test(x)));
+});
+
+t('失敗訊號由宿主餵,這裡不讀任何文字', () => {
+  const r = rt();
+  assert.equal(r.recordFailure(clock), 1);
+  assert.equal(r.recordFriction(clock), 1);
+});
+
+// ---- 來源鏈接線(M8)----
+t('交付前查核:點名的檔案自己沒開過就擋下來', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Read', 'src/a.js', 0)]);
+  const out = r.checkClaim({ files: ['src/a.js', 'src/b.js', 'src/c.js'] });
+  assert.equal(out.clean, false);
+  assert.equal(out.findings[0].shape, 'SOURCE_ERASURE');
+  assert.deepEqual([...out.findings[0].erased_files], ['src/b.js', 'src/c.js']);
+});
+
+t('全部開過就放行', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Read', 'src/a.js', 0)]);
+  assert.equal(r.checkClaim({ files: ['src/a.js'] }).clean, true);
+});
+
+t('過了三個形狀不等於乾淨,四個沒驗的要一起講', () => {
+  const out = rt().checkClaim({ files: [] });
+  assert.match(out.note, /four others were not examined/);
+  assert.equal(out.unchecked_shapes.length, 4);
+});
+
+t('宣稱數量對不上實際次數就標出來', () => {
+  const r = rt();
+  for (let i = 0; i < 5; i++) r.ingest([ev('w1', 'Read', `f${i}.js`, i * 100)]);
+  const out = r.checkClaim({ claimed_count: 200 });
+  assert.equal(out.findings[0].shape, 'SCOPE_INFLATION');
+  assert.equal(out.findings[0].actual_count, 5);
+});
+
+t('讀回自己寫過的檔案算自產,不是第一手證據', () => {
+  const r = rt();
+  r.ingest([ev('w1', 'Write', 'LOG.md', 0)]);
+  r.ingest([ev('w1', 'Read', 'LOG.md', 1000)]);
+  assert.equal(r.evidenceMix().self_written, 1);
+  assert.ok(r.inspect().self_written.includes('LOG.md'));
+});
+
+t('委派給 agent 的不算自己查的', () => {
+  const r = rt();
+  r.ingest([
+    { attributed_agent: 'w1', name: 'Bash', at: clock - 20, input: { file_path: 'a.js' } },
+    { attributed_agent: 'w1', name: 'Agent', at: clock - 10, input: {} },
+  ]);
+  const m = r.evidenceMix();
+  assert.equal(m.delegated, 1, '派 agent 出去沒有 file_path,過不了採集層,但來源鏈必須看得到它');
+  assert.ok(m.first_hand_ratio < 1);
+});
+
+t('燒了 agent 卻零產出,會被追出來', () => {
+  const r = rt();
+  r.recordInvestment({ id: 'wf1', agents: 8, tokens: 1_400_000 });
+  r.closeInvestment('wf1', []);
+  const b = r.status().barren;
+  assert.equal(b.length, 1);
+  assert.equal(b[0].agents, 8);
+  assert.equal(b[0].tokens, 1_400_000);
+});
+
+t('有產出的委派不會被誤報', () => {
+  const r = rt();
+  r.recordInvestment({ id: 'wf1', agents: 22 });
+  r.closeInvestment('wf1', ['AUDIT.md']);
+  assert.equal(r.status().barren.length, 0);
+});
+
+t('北極星跨重啟活著,忘了目標飄移就永遠量不出來', () => {
+  clock = T0 + 600_000;
+  const a = rt();
+  a.setGoal(['src/auth']);
+  a.recordFailure(clock);
+  a.ingest([ev('w1', 'Write', 'src/auth/x.js', 0)]);
+  const text = a.save();
+
+  const b = rt();
+  b.restore(text);
+  assert.deepEqual([...b.inspect().anchor.topics], ['src/auth']);
+  assert.equal(b.inspect().anchor.inferred, false);
+  assert.ok(b.inspect().self_written.includes('src/auth/x.js'), '自己寫過什麼也要活過重啟');
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

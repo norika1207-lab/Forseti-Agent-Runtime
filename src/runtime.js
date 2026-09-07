@@ -43,6 +43,13 @@ import {
 import {
   createSnapshot, serialize, load,
 } from './persist.js';
+import {
+  segment, createAnchor, trajectory, classify, findAbandoned, escapeSignals, driftAlert,
+} from './drift.js';
+import {
+  originMix, checkSourceErasure, checkScopeInflation, checkBarrenInvestment, audit,
+  SHAPES, OUT_OF_SCOPE,
+} from './provenance.js';
 
 /**
  * 建一個 runtime。
@@ -61,6 +68,25 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     edges: [],
     stats: createStats(),
     capture: { total: 0, skipped: 0, skipped_by_reason: {} },
+    /** 北極星。宿主宣告目標時釘下來,沒宣告就從前幾段推。 */
+    anchor: null,
+    /** 宿主宣告過轉向的時間點。有宣告的方向改變不算飄移。 */
+    declaredTurns: [],
+    /** 失敗訊號與摩擦訊號的時間點,由宿主提供。本模組不判讀文字。 */
+    failures: [],
+    friction: [],
+    /** 這個 session 自己寫過的檔案。讀回它們是自產,不是第一手。 */
+    selfWritten: new Set(),
+    /** 委派出去的投入,用來追零產出。 */
+    investments: [],
+    /**
+     * 工具呼叫的原始名稱與時間。
+     *
+     * 採集層只收動到檔案的事件,而派 agent 出去這件事本身沒有 file_path,
+     * 整筆會被擋在 NO_FILE。但「這件事是誰查的」正是來源鏈要問的,
+     * 所以這裡另外留一份,不經過採集層的檔案篩選。
+     */
+    toolCalls: [],
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -83,6 +109,19 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
      * conflicts 是已經發生的撞車(事後),不是攔截 —— 攔截在 requestWrite()。
      */
     ingest(rawEvents) {
+      // 先留一份原始工具名。委派沒有檔案,過不了採集層,但來源鏈需要它。
+      for (const raw of (rawEvents ?? [])) {
+        const at = typeof raw?.at === 'number' ? raw.at : (typeof raw?.timestamp === 'number' ? raw.timestamp : null);
+        const name = raw?.name ?? raw?.tool_name ?? raw?.type ?? null;
+        if (at == null || !name) continue;
+        const input = raw.input ?? raw.tool_input ?? raw.params ?? {};
+        state.toolCalls.push({
+          at, name,
+          file_path: raw.file_path ?? input.file_path ?? input.path ?? null,
+        });
+      }
+      state.toolCalls.sort((a, b) => a.at - b.at);
+
       const r = normalizeStream(rawEvents);
       state.events.push(...r.events);
       state.events.sort((a, b) => a.at - b.at);
@@ -91,6 +130,11 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.capture.skipped += r.skipped;
       for (const [k, v] of Object.entries(r.skipped_by_reason)) {
         state.capture.skipped_by_reason[k] = (state.capture.skipped_by_reason[k] ?? 0) + v;
+      }
+
+      // 自己寫過的檔案要記下來。之後讀回它們,那是自產不是第一手證據。
+      for (const e of r.events) {
+        if (e.action === 'WRITE' && e.file_path) state.selfWritten.add(e.file_path);
       }
 
       const touched = new Set(r.events.map((e) => e.agent_id));
@@ -213,6 +257,168 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       return pickHottest(taskFiles, [...state.coverages.values()], config.coverage);
     },
 
+    // ── 北極星與飄移(M7)──────────────────────────────
+
+    /**
+     * 釘北極星。宿主知道目標時就宣告,不知道就別叫這個,
+     * 讓 driftCheck() 自己從前幾段推,推出來的錨點會標成 inferred。
+     */
+    setGoal(topics) {
+      state.anchor = createAnchor({ declared: topics });
+      return state.anchor;
+    },
+
+    /** 宿主宣告轉向。有宣告的方向改變不是飄移,是決定。 */
+    declareTurn(at = now()) {
+      state.declaredTurns = [...state.declaredTurns, at];
+      return state.declaredTurns.length;
+    },
+
+    /**
+     * 現在離北極星多遠。這是即時的,不是事後分析。
+     *
+     * 事後分析救不了任何人。這個函式要在每一輪做完時被叫,
+     * 讓偏離在還能回頭的時候就講出來。
+     */
+    driftCheck({ recentSegments = 1, config = {} } = {}) {
+      let segs = segment(state.events, { size: config.segmentSize ?? 50 });
+      // 事件還不夠切成一整段時,用手上全部的當一段。
+      // 即時告警要在早期就能開口,不然它只會在來不及的時候才講話。
+      // 這種情況下如果沒有宣告過北極星,就真的判斷不了,因為錨點跟現況會是同一批資料。
+      if (!segs.length) {
+        if (!state.events.length) {
+          return Object.freeze({ level: null, note: 'No events yet; direction cannot be judged.' });
+        }
+        if (!state.anchor) {
+          return Object.freeze({
+            level: null,
+            note: 'Too few events to infer an anchor, and no goal was declared. Declare one with setGoal() to get a reading now.',
+          });
+        }
+        const topics = new Map();
+        for (const e of state.events) {
+          const t = e.file_path.split('/').filter(Boolean).slice(0, 3).join('/');
+          if (t) topics.set(t, (topics.get(t) ?? 0) + 1);
+        }
+        const declaredTurn = state.declaredTurns.some(
+          (t) => t >= state.events[0].at - (config.turnWindowMs ?? 30 * 60 * 1000),
+        );
+        return Object.freeze({
+          ...driftAlert({ recentTopics: topics, anchor: state.anchor, declaredTurn, config: config.drift }),
+          verdict: null,
+          segments: 0,
+          anchor_topics: Object.freeze([...state.anchor.topics]),
+          /** 樣本太少,這是早期讀數不是結論。 */
+          early_reading: true,
+        });
+      }
+      const anchor = state.anchor ?? createAnchor({ segments: segs, warmup: 3 });
+      const recent = segs.slice(-recentSegments);
+      const topics = new Map();
+      for (const sg of recent) for (const [k, v] of sg.topics) topics.set(k, (topics.get(k) ?? 0) + v);
+
+      // 最近有沒有人宣告過轉向
+      const cutoff = recent[0].from;
+      const declaredTurn = state.declaredTurns.some((t) => t >= cutoff - (config.turnWindowMs ?? 30 * 60 * 1000));
+
+      const alert = driftAlert({ recentTopics: topics, anchor, declaredTurn, config: config.drift });
+      const rows = trajectory(segs, anchor, config.drift);
+      return Object.freeze({
+        ...alert,
+        verdict: classify(rows, config.drift),
+        segments: rows.length,
+        anchor_topics: Object.freeze([...anchor.topics]),
+      });
+    },
+
+    /**
+     * 哪些工作被放棄了,以及放棄的那一刻旁邊有沒有失敗訊號。
+     *
+     * 失敗與摩擦的時間點由宿主用 recordFailure / recordFriction 餵進來。
+     * 這裡不讀任何文字,也不判斷任何人的情緒。
+     */
+    abandonedWork({ config = {} } = {}) {
+      const ab = findAbandoned(state.events, { now: now(), config: config.drift });
+      return escapeSignals(ab, { failures: state.failures, friction: state.friction, config: config.drift });
+    },
+
+    /** 記一次失敗。宿主自己決定什麼算失敗(工具錯誤、build 失敗、測試紅)。 */
+    recordFailure(at = now()) { state.failures = [...state.failures, at]; return state.failures.length; },
+
+    /** 記一次摩擦。怎麼判定使用者不滿是宿主的事,這裡只收時間點。 */
+    recordFriction(at = now()) { state.friction = [...state.friction, at]; return state.friction.length; },
+
+    // ── 來源鏈(M8)────────────────────────────────────
+
+    /**
+     * 登記一次委派。之後 provenanceAudit() 會檢查它有沒有產出。
+     * 自白書那個案例:8 個 agent、1.4MB transcript、零產出,
+     * 而且那個 workflow 還被拿來當「交叉驗證」增強對主產出的信心。
+     */
+    recordInvestment({ id, agents, tokens = null }) {
+      const inv = { id, at: now(), agents, tokens, ended_at: null, produced_files: [] };
+      state.investments = [...state.investments, inv];
+      return inv;
+    },
+
+    /** 委派結束,附上它實際產出的檔案。沒有產出就傳空陣列,別編一個。 */
+    closeInvestment(id, producedFiles = []) {
+      state.investments = state.investments.map((i) =>
+        (i.id === id ? { ...i, ended_at: now(), produced_files: [...producedFiles] } : i));
+      return state.investments.find((i) => i.id === id) ?? null;
+    },
+
+    /**
+     * 交付前查核一個宣稱:它點名的檔案是自己開過的,還是別人回報的。
+     *
+     * 這是即時的攔截點。宿主在把一份報告交給人之前叫它,
+     * 而不是等對方發現之後回頭查。
+     *
+     * @param {object} claim { files?: string[], claimed_count?: number }
+     */
+    checkClaim(claim, { config = {} } = {}) {
+      const at = claim.at ?? now();
+      const withAt = { ...claim, at };
+      const findings = [];
+      const a = checkSourceErasure(withAt, state.events, config.provenance);
+      if (a) findings.push(a);
+      const b = checkScopeInflation(withAt, state.events, config.provenance);
+      if (b) findings.push(b);
+      return Object.freeze({
+        findings: Object.freeze(findings),
+        clean: findings.length === 0,
+        checked_shapes: SHAPES,
+        unchecked_shapes: OUT_OF_SCOPE,
+        /** 三個形狀過了不等於乾淨。四個沒驗的必須跟結果一起講。 */
+        note: findings.length === 0
+          ? 'Clear on the three checkable shapes; four others were not examined.'
+          : `${findings.length} finding(s) on three checkable shapes; four others were not examined.`,
+      });
+    },
+
+    /** 一整批宣稱加上所有委派的完整查核。 */
+    provenanceAudit(claims = [], { config = {} } = {}) {
+      return audit({
+        claims: claims.map((c) => ({ ...c, at: c.at ?? now() })),
+        events: state.events,
+        investments: state.investments,
+        config: config.provenance,
+      });
+    },
+
+    /**
+     * 現在這一段的證據有多少是自己查的。
+     *
+     * 這是那條界線的即時讀數:第一手是自己跑的工具,
+     * 委派是別人查的,自產是讀回自己寫的檔案。
+     * 整段平均會把問題稀釋掉,所以這個要配合 checkClaim 逐宣稱看。
+     */
+    evidenceMix({ lastMs = 30 * 60 * 1000 } = {}) {
+      const to = now();
+      // 用原始工具呼叫,不用採集層過濾後的事件:委派沒有檔案,但它正是要問的東西。
+      return originMix(state.toolCalls, { from: to - lastMs, to, selfWritten: state.selfWritten });
+    },
+
     /**
      * 現在的狀況。這裡刻意把「不知道的事」也列出來。
      *
@@ -225,6 +431,16 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         skipped: state.capture.skipped,
         skipped_by_reason: state.capture.skipped_by_reason,
       });
+      const segs = segment(state.events, { size: 50 });
+      const anchor = state.anchor ?? (segs.length ? createAnchor({ segments: segs, warmup: 3 }) : null);
+      const recent = segs.length ? segs.at(-1).topics : null;
+      const drift = (anchor && recent)
+        ? driftAlert({ recentTopics: recent, anchor, declaredTurn: false })
+        : null;
+      const mix = originMix(state.toolCalls, {
+        from: now() - 30 * 60 * 1000, to: now(), selfWritten: state.selfWritten,
+      });
+
       return Object.freeze({
         capture: health,
         automation_rate: automationRate(state.stats),
@@ -232,6 +448,12 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         active_scopes: state.scopes.filter((s) => s.state === 'ACTIVE').length,
         known_agents: [...state.coverages.keys()].sort(),
         event_count: state.events.length,
+        /** 離北極星多遠。錨點是推出來的時 confidence 會標明。 */
+        drift,
+        /** 最近半小時的證據有多少是自己查的。整段平均會稀釋問題,配合 checkClaim 逐宣稱看。 */
+        evidence: mix,
+        /** 燒了資源卻零產出的委派。 */
+        barren: checkBarrenInvestment(state.investments),
         /** 拿不到的資料一律列在這裡,不用預設值蓋過去。 */
         unavailable: Object.freeze([
           ...(state.edges.length ? [] : ['No handoff rules configured; completeTurn will dispatch nothing']),
@@ -239,6 +461,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           ...(health.capture_rate !== null && health.capture_rate < 1
             ? [`Capture dropped ${state.capture.skipped} event(s) (largest cause: ${health.worst_reason?.reason}); every answer below is computed from incomplete data`]
             : []),
+          ...(state.anchor ? [] : ['No goal declared; drift is measured against an inferred anchor and is weaker for it']),
+          ...(state.failures.length || state.friction.length ? [] : ['No failure or friction signals recorded; abandoned work cannot be told apart from finished work']),
         ]),
       });
     },
@@ -253,6 +477,15 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         stats: state.stats,
         edges: state.edges,
         at: now(),
+        // 北極星必須跨重啟活著。忘了目標之後,飄移就再也量不出來了。
+        goal: state.anchor ? { topics: [...state.anchor.topics], inferred: state.anchor.inferred } : null,
+        signals: {
+          declaredTurns: state.declaredTurns,
+          failures: state.failures,
+          friction: state.friction,
+          selfWritten: state.selfWritten,
+          investments: state.investments,
+        },
       }));
     },
 
@@ -272,6 +505,14 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.edges = [...(r.state.edges ?? [])];
       state.stats = r.state.stats ?? createStats();
       state.coverages = new Map((r.state.coverages ?? []).map((c) => [c.agent_id, c]));
+      const g = r.state.goal;
+      state.anchor = g ? createAnchor({ declared: g.inferred ? null : g.topics }) : null;
+      const sig = r.state.signals ?? {};
+      state.declaredTurns = [...(sig.declaredTurns ?? [])];
+      state.failures = [...(sig.failures ?? [])];
+      state.friction = [...(sig.friction ?? [])];
+      state.selfWritten = sig.selfWritten instanceof Set ? new Set(sig.selfWritten) : new Set(sig.selfWritten ?? []);
+      state.investments = [...(sig.investments ?? [])];
       return r;
     },
 
@@ -283,6 +524,9 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         coverages: Object.freeze([...state.coverages.values()]),
         edges: Object.freeze([...state.edges]),
         stats: state.stats,
+        anchor: state.anchor,
+        investments: Object.freeze([...state.investments]),
+        self_written: Object.freeze([...state.selfWritten].sort()),
       });
     },
   });

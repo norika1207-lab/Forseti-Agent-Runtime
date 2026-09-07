@@ -124,12 +124,27 @@ export function createAnchor({ declared = null, segments = [], warmup = 3 } = {}
   });
 }
 
+/**
+ * 一個主題在不在錨點範圍內。
+ *
+ * 用路徑前綴而不是全等,因為宿主宣告目標的粒度不會剛好等於 topicOf 的粒度。
+ * 宣告 src/auth、動的是 src/auth/token.js,那顯然在範圍內,判成走失是錯的。
+ * 邊界卡在斜線上,所以 src/a 不會誤匹配 src/auth。
+ */
+function withinAnchor(topic, anchor) {
+  if (anchor.topics.has(topic)) return true;
+  for (const a of anchor.topics) {
+    if (topic.startsWith(a + '/') || a.startsWith(topic + '/')) return true;
+  }
+  return false;
+}
+
 /** 一段跟錨點的重疊比例。分母是這一段自己,問的是「現在做的事有多少還在原本範圍內」。 */
 export function alignment(segmentTopics, anchor) {
   const keys = segmentTopics instanceof Map ? [...segmentTopics.keys()] : [...(segmentTopics ?? [])];
   if (!keys.length) return null;              // 沒有東西可比,回 null 不是 0
   let hit = 0;
-  for (const k of keys) if (anchor.topics.has(k)) hit += 1;
+  for (const k of keys) if (withinAnchor(k, anchor)) hit += 1;
   return hit / keys.length;
 }
 

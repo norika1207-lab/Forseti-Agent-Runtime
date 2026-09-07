@@ -128,7 +128,19 @@ t('打包一定要有時間，沒有就拋錯不補假的', () =>
 
 t('區塊清單一字不改', () =>
   assert.deepEqual([...SECTIONS],
-    ['capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges']));
+    ['capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges', 'goal', 'signals']));
+
+t('北極星與訊號跨重啟活著,忘了目標就永遠量不出飄移', () => {
+  const snap = createSnapshot({
+    at: T0,
+    goal: { topics: ['src/auth'], inferred: false },
+    signals: { failures: [T0], friction: [], selfWritten: new Set(['a.js']), investments: [] },
+  });
+  const back = deserialize(serialize(snap)).snapshot;
+  assert.deepEqual(back.goal.topics, ['src/auth']);
+  assert.deepEqual(back.signals.failures, [T0]);
+  assert.ok(back.signals.selfWritten instanceof Set, 'selfWritten 是 Set,不能在存讀時被吃掉');
+});
 
 // ---- 坑二：重啟後的復甦 ----
 t('過期的鎖直接清掉，死掉的持有者不該繼續擋人', () => {
