@@ -145,5 +145,27 @@ t('未校準的常數自己說了', () => {
   assert.ok(Object.isFrozen(DEFAULT_CONFIG));
 });
 
+t('經過 JSON 來回的宣告一樣驗得了', () => {
+  // resolve() 原本讀 declaration.verifiable,而 JSON 來回會保留它 ——
+  // 但別條寫入路徑不會產生它。Stop hook 就是那條路徑,於是它一次都沒開口過。
+  const raw = JSON.parse(JSON.stringify({
+    id: 'd1', at: 1000, turn: 1, what: '修 X', targets: ['/p/x.js'], awaiting: false,
+  }));
+  const r = resolve(raw, { events: [], currentTurn: 99, now: 1000 + 60 * 60 * 1000 });
+  assert.equal(r.state, 'OMITTED');
+});
+
+t('手寫 verifiable:true 但沒有 targets,騙不過去', () => {
+  const r = resolve({ id: 'd2', at: 0, turn: 0, targets: [], verifiable: true },
+    { events: [], currentTurn: 99, now: 9e9 });
+  assert.equal(r.state, 'UNVERIFIABLE', '可驗證性是 targets 的函數,不是可宣稱的旗標');
+});
+
+t('手寫 verifiable:false 但有 targets,也騙不過去', () => {
+  const r = resolve({ id: 'd3', at: 0, turn: 0, targets: ['/p/y.js'], verifiable: false },
+    { events: [], currentTurn: 99, now: 9e9 });
+  assert.equal(r.state, 'OMITTED');
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

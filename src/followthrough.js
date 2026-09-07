@@ -64,7 +64,11 @@ export function declare({ id, at, turn, what, targets = [], awaiting = false }) 
     id, at, turn, what: what ?? null,
     targets: Object.freeze([...targets]),
     awaiting: !!awaiting,
-    /** 沒有具體對象的宣告驗不了。標出來,不當成已完成也不當成遺漏。 */
+    /**
+     * 沒有具體對象的宣告驗不了。標出來,不當成已完成也不當成遺漏。
+     * 這是給讀的人看的;resolve() 不讀這個欄位,它自己從 targets 算,
+     * 因為經過 JSON 來回或別條寫入路徑的紀錄不會帶著它。
+     */
     verifiable: targets.length > 0,
   });
 }
@@ -81,7 +85,19 @@ export function declare({ id, at, turn, what, targets = [], awaiting = false }) 
  */
 export function resolve(declaration, { events = [], currentTurn, now, config = DEFAULT_CONFIG } = {}) {
   const c = { ...DEFAULT_CONFIG, ...config };
-  if (!declaration.verifiable) {
+  /**
+   * 可驗證性是 targets 的函數,不是一個要呼叫方記得填的欄位。
+   *
+   * 原本這裡讀 `declaration.verifiable`,而那個欄位只有 declare() 會產生。
+   * Stop hook 從 declarations.json 讀回來的是純 JSON,欄位是 undefined,
+   * 於是每一筆都被判成 UNVERIFIABLE,整個 Stop hook 一次都不會開口 ——
+   * 單元測試全過,裝上去是死的。端到端測試 AT-HOOK-08 抓到。
+   *
+   * 一個「靠呼叫方記得填」的旗標遲早會有一條路徑忘了填,
+   * 所以這裡自己算。
+   */
+  const verifiable = (declaration.targets ?? []).length > 0;
+  if (!verifiable) {
     return Object.freeze({
       id: declaration.id, state: 'UNVERIFIABLE',
       reason: 'The declaration named no concrete target, so nothing can confirm or refute it.',

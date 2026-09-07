@@ -1,0 +1,27 @@
+{
+  "north_star": "聚焦完成 Forseti。其他過去的都不管。",
+  "scope": [
+    "/Volumes/NewDrive/AI Project/Forseti",
+    "Forseti",
+    "forseti-repo",
+    "src",
+    "test",
+    "hooks",
+    "tools",
+    "adapters"
+  ],
+  "done_when": [
+    "規格書 v0.1 裡事件流支援得了的機制,全部實作並接進 runtime",
+    "第 14 節十條驗收測試全過",
+    "常數用真實 transcript 校準,每一個都寫得出來源",
+    "裝成 hook 並且真的擋下東西,延遲量過並寫明",
+    "稽核寫它的那個 session,抓到的問題要修不是記下來"
+  ],
+  "not_now": [
+    "Inline annotation adapter — Claude Code 沒有那個掛鉤點",
+    "語意偷換與地板當天花板的偵測 — 事件流裡沒有判準",
+    "T_runtime 權重擬合 — 需要可靠標籤,而現有標籤已知不可靠"
+  ],
+  "declared_at": "2026-09-08",
+  "declared_by": "norika"
+}

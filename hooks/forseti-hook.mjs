@@ -55,13 +55,29 @@ function projectRoot(cwd) {
 }
 function stateFile(cwd) { return join(projectRoot(cwd), '.forseti', 'state.json'); }
 function goalFile(cwd) { return join(projectRoot(cwd), '.forseti', 'goal.json'); }
+function userGoalFile() {
+  const home = process.env.HOME || process.env.USERPROFILE;
+  return home ? join(home, '.forseti', 'goal.json') : null;
+}
 function streakFile(cwd) { return join(projectRoot(cwd), '.forseti', 'streak.json'); }
 
-/** 讀宣告過的目標範圍。沒有就回一個不作用的範圍,絕不推測。 */
+/**
+ * 讀宣告過的目標範圍。沒有就回一個不作用的範圍,絕不推測。
+ *
+ * 先看專案自己的,再看使用者的。兩層是有必要的:
+ * 專案層的北極星只在那個 repo 裡讀得到,而「這陣子只做 X」這種北極星
+ * 最該開口的場合,正是人跑到別的目錄去做別的事的時候 ——
+ * 那時候專案層的檔案根本不在腳下。只讀專案層等於在最需要的場合關機。
+ */
+function firstExisting(paths) {
+  for (const p of paths) { if (p && existsSync(p)) return p; }
+  return null;
+}
+
 async function loadScope(cwd) {
   const { createScope } = await import(join(HERE, '..', 'src', 'scope.js'));
-  const p = goalFile(cwd);
-  if (!existsSync(p)) return createScope({});
+  const p = firstExisting([goalFile(cwd), userGoalFile()]);
+  if (!p) return createScope({});
   try {
     const g = JSON.parse(readFileSync(p, 'utf8'));
     return createScope({ northStar: g.north_star ?? null, paths: g.scope ?? [] });

@@ -1,6 +1,10 @@
 node_modules/
 .DS_Store
 *.log
-.forseti/
+# 執行期狀態不進版控,但北極星要。
+# 搬碟的時候整個 .forseti/ 被忽略,goal.json 沒跟著過來,
+# 於是離題偵測在新位置是關的 —— 而且完全靜默,沒有任何跡象。
+.forseti/*
+!.forseti/goal.json
 ._*
 .DS_Store

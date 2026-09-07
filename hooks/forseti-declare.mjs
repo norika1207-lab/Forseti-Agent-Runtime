@@ -35,8 +35,7 @@ led.open = [...(led.open ?? []), {
   what,
   targets,
   awaiting: false,
-  verifiable: true,
-}];
+}];   // 不寫 verifiable:重複的真相來源。resolve() 自己從 targets 算。
 mkdirSync(dirname(p), { recursive: true });
 writeFileSync(p, JSON.stringify(led));
 console.log(`declared: ${targets.join(', ')}`);
