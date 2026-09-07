@@ -1012,5 +1012,100 @@ t('介入紀錄跨重啟活著,不然介入率永遠是零', () => {
   assert.equal(b.interventionStats().injected, 1);
 });
 
+// ---- 宣告與兌現 ----
+t('不點名具體對象的宣告被拒絕受理', () => {
+  const r = rt().declareWork({ id: 'a', what: '接下來我做剩下的', targets: [] });
+  assert.equal(r.accepted, false);
+  assert.match(r.reason, /Name the files/);
+});
+
+t('點名了就受理,而且之後查得到有沒有做', () => {
+  const r = rt();
+  r.declareWork({ id: 'a', what: 'write it', targets: ['src/x.js'] });
+  clock += 60 * 60 * 1000;
+  const ft = r.followThrough();
+  assert.equal(ft.omitted, 1, '過了寬限期還沒動 = 未兌現');
+  clock = T0 + 600_000;
+});
+
+t('真的做了就算兌現', () => {
+  const r = rt();
+  r.declareWork({ id: 'a', what: 'write it', targets: ['src/x.js'] });
+  r.ingest([{ attributed_agent: 'w1', name: 'Write', at: clock, input: { file_path: 'src/x.js' } }]);
+  assert.equal(r.followThrough().fulfilled, 1);
+});
+
+// ---- 語氣與自我糾錯 ----
+t('信心詞配零證據會被標,有證據就不標', () => {
+  const r = rt();
+  assert.equal(r.confidenceCheck('這是 killer,鐵證').flagged, true);
+  r.verifyArtifact({ kind: 'FILE_CREATED' }, { exists: true, bytes: 900, hash: 'x' });
+  assert.equal(r.confidenceCheck('這是 killer').flagged, false);
+});
+
+t('被推翻的自我糾錯是假坦白', () => {
+  const r = rt();
+  r.recordSelfCorrection({ id: 'c1', accuses: 'src/a.js:10' });
+  const out = r.judgeSelfCorrection('c1', 'OVERTURNED');
+  assert.equal(out.overturned.length, 1);
+  assert.match(out.overturned[0].note, /discredited something that was correct/);
+});
+
+t('沒有自我糾錯紀錄不是清白,是沒紀錄', () =>
+  assert.match(rt().selfCorrectionRecord().note, /Not a clean record - no record/));
+
+// ---- 目標範圍 ----
+t('沒宣告範圍時這個檢查不作用,而且明說', () => {
+  const out = rt().scopeCheck('anything.js');
+  assert.equal(out.notice, null);
+  assert.match(out.inactive_reason, /does nothing until one exists/);
+});
+
+t('連續離題才說話,回到範圍內就歸零', () => {
+  const r = rt();
+  r.setScope({ northStar: 'ship auth', paths: ['src/auth'] });
+  for (let i = 0; i < 4; i++) assert.equal(r.scopeCheck('docs/x' + i + '.md').notice, null);
+  assert.ok(r.scopeCheck('docs/x5.md').notice, '第五次才說話');
+  r.scopeCheck('src/auth/a.js');
+  assert.equal(r.scopeStats().current_streak, 0);
+});
+
+// ---- 一致性報告(規格書第 16 節)----
+t('每個偵測器都交出七項,不然標成實驗性', () => {
+  const r = rt();
+  r.setGoal(['src/auth']);
+  r.ingest([{ attributed_agent: 'w1', name: 'Write', at: clock - 1000, input: { file_path: 'src/auth/a.js' } }]);
+  const rep = r.conformanceReport();
+  assert.ok(rep.results.length >= 3);
+  for (const x of rep.results) {
+    assert.ok(x.conformant, `${x.detector} 缺: ${x.missing_fields.join(', ')}`);
+  }
+  assert.equal(rep.summary.experimental, 0);
+});
+
+t('目標不可靠時,drift 交出的是「判斷不了」而不是一個結論', () => {
+  const r = rt();
+  for (let i = 0; i < 200; i++) {
+    r.ingest([{ attributed_agent: 'w1', name: 'Read', at: clock - 200_000 + i * 100, input: { file_path: `area${i % 9}/sub/f.js` } }]);
+  }
+  const rep = r.conformanceReport();
+  const drift = rep.results.find((x) => x.detector === 'drift');
+  assert.equal(drift.epistemic, 'UNKNOWN');
+  assert.match(drift.explanation, /cannot be determined/);
+});
+
+t('宣告、自我糾錯、範圍都跨重啟活著', () => {
+  const a = rt();
+  a.declareWork({ id: 'd', what: 'x', targets: ['src/y.js'] });
+  a.recordSelfCorrection({ id: 'c', accuses: 'z' });
+  a.setScope({ northStar: 'ns', paths: ['src'] });
+  const b = rt();
+  b.restore(a.save());
+  assert.equal(b.followThrough().by_state.OMITTED ?? b.followThrough().by_state.PENDING, 1);
+  assert.equal(b.selfCorrectionRecord().total, 1);
+  assert.equal(b.scopeCheck('docs/a.md').notice, null, '範圍活著才會開始累積');
+  assert.equal(b.scopeStats().checked, 1);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

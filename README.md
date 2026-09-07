@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 798 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 809 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -596,7 +596,7 @@ Core logic is complete and verified. Nothing is wired to a host yet.
 | `scope.js` | 15 | Verified |
 | `heartbeat.js` | 34 | Verified |
 | `thermometer.js` | 25 | Verified |
-| `runtime.js` | 117 | Verified |
+| `runtime.js` | 128 | Verified |
 | acceptance (spec §14) | 10 | All passing |
 | end-to-end | 17 | Verified |
 

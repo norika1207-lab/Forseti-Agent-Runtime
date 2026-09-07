@@ -72,6 +72,10 @@ import {
 import {
   buildProbe, evaluateProbe, canIntervene, recordIntervention, interventionRate,
 } from './intervention.js';
+import { detectorResult, conformanceSummary, cannotDetermine } from './conformance.js';
+import { declare, declareStrict, resolve as resolveDeclaration, followThroughRate } from './followthrough.js';
+import { confidenceLoad, falseConfessions } from './rhetoric.js';
+import { createScope, check as checkScope, createStreak, offScopeRate } from './scope.js';
 import { buildGraph, computeCostVector } from './cost.js';
 import {
   createCapsule, createBudget, createContract, remainingBudget,
@@ -155,6 +159,13 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     interventions: [],
     /** 使用者的回合數,用來算實際介入率。 */
     turns: 0,
+    /** 宣告過要做的事,以及它們後來怎麼了。 */
+    declarations: [],
+    /** 自我糾錯的紀錄。被推翻的那些是假坦白。 */
+    selfCorrections: [],
+    /** 目標範圍與離題累積。 */
+    scope: createScope({}),
+    scopeStreak: createStreak(),
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -668,6 +679,171 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
      */
     runtimeTemperature(extra = {}) {
       return composite(this.signals(extra), config.signals);
+    },
+
+    // ── 宣告與兌現 ────────────────────────────────────
+
+    /**
+     * 記一筆宣告。
+     *
+     * 預設用嚴格版:不點名具體對象的宣告會被拒絕受理,並回一個理由。
+     * 掃自己的紀錄時發現六成的宣告驗不了,因為它們什麼都沒點名。
+     * 那些宣告連被檢查的資格都沒有。
+     */
+    declareWork(fields, { strict = true } = {}) {
+      const withPos = { ...fields, at: fields.at ?? now(), turn: fields.turn ?? state.turns };
+      if (!strict) {
+        const d = declare(withPos);
+        state.declarations = [...state.declarations, d];
+        return Object.freeze({ accepted: true, declaration: d });
+      }
+      const out = declareStrict(withPos);
+      if (out.accepted) state.declarations = [...state.declarations, out.declaration];
+      return out;
+    },
+
+    /**
+     * 哪些宣告沒兌現。
+     *
+     * 分母排除「在等對方回應」與「沒點名對象」的:前者不是遺漏,後者驗不了。
+     * 驗不了的比例會一起回報,因為它決定這個率涵蓋了多少實際說過的話。
+     */
+    followThrough() {
+      const resolutions = state.declarations.map((d) => resolveDeclaration(d, {
+        events: state.events, currentTurn: state.turns, now: now(),
+      }));
+      return Object.freeze({
+        ...followThroughRate(resolutions),
+        omitted_items: Object.freeze(resolutions.filter((r) => r.state === 'OMITTED')),
+      });
+    },
+
+    // ── 語氣與自我糾錯 ────────────────────────────────
+
+    /**
+     * 一段文字的信心詞密度,相對於它背後有幾筆可查的證據。
+     *
+     * 信心詞本身不是問題。問題是信心詞多而證據少,
+     * 而那個「相對於」需要證據計數 —— 這裡用已驗證的產物數當它。
+     */
+    confidenceCheck(text) {
+      const verified = state.artifacts.filter((a) => a.verdict === 'VERIFIED').length;
+      return confidenceLoad(text, { evidenceCount: verified });
+    },
+
+    /**
+     * 記一次自我糾錯。verdict 之後可以用 judgeSelfCorrection 補上。
+     * 被推翻的自我糾錯是假坦白:它在證明可信的那一刻誣賴了正確的東西。
+     */
+    recordSelfCorrection({ id, accuses = null }) {
+      const entry = Object.freeze({ id, at: now(), accuses, verdict: null });
+      state.selfCorrections = [...state.selfCorrections, entry];
+      return entry;
+    },
+
+    /** 裁決一次自我糾錯:UPHELD 或 OVERTURNED。 */
+    judgeSelfCorrection(id, verdict) {
+      state.selfCorrections = state.selfCorrections.map((c) =>
+        (c.id === id ? Object.freeze({ ...c, verdict }) : c));
+      return falseConfessions(state.selfCorrections);
+    },
+
+    /** 假坦白的統計。沒有紀錄時明說那不是清白。 */
+    selfCorrectionRecord() { return falseConfessions(state.selfCorrections); },
+
+    // ── 目標範圍 ──────────────────────────────────────
+
+    /**
+     * 宣告目標範圍。沒宣告的話這個檢查完全不作用,而且會明說。
+     * 這個模組不推測範圍:把工具自己的猜測拿來擋人,比不擋更糟。
+     */
+    setScope({ northStar = null, paths = [] }) {
+      state.scope = createScope({ northStar, paths });
+      state.scopeStreak = createStreak();
+      return state.scope;
+    },
+
+    /**
+     * 這次寫入在不在目標範圍內。
+     *
+     * 回傳 notice 為 null 是最常見的情況,而且應該是。
+     * 連續數次都在範圍外才說話,中間碰回範圍內一次就歸零。
+     */
+    scopeCheck(filePath) {
+      const out = checkScope(filePath, state.scope, state.scopeStreak, config.scope);
+      state.scopeStreak = out.streak;
+      return out;
+    },
+
+    /** 離題比例。回顧用。 */
+    scopeStats() { return offScopeRate(state.scopeStreak); },
+
+    // ── 一致性(規格書第 16 節)────────────────────────
+
+    /**
+     * 把這一刻所有偵測結果收成一份符合第 16 節的報告。
+     *
+     * 每個偵測器都必須交出七項:輸入、版本、門檻、排除條件、
+     * 知識論狀態、給人看的解釋、連結的復原行為。少一項就是實驗性的,
+     * 而且整份報告會說出有幾個是實驗性的 ——
+     * 一份全部由實驗性偵測器組成的報告,看起來會跟一份驗證過的一模一樣。
+     */
+    conformanceReport() {
+      const results = [];
+      const drift = this.driftCheck();
+      const gs = drift.goal_state;
+
+      results.push(gs === 'MISSING' || gs === 'AMBIGUOUS'
+        ? cannotDetermine('drift', drift.verdict?.reason ?? 'goal not reliable', {
+          version: 'drift@0.2', inputs: { events: state.events.length },
+        })
+        : detectorResult({
+          detector: 'drift',
+          verdict: drift.verdict?.is_drift ?? null,
+          epistemic: gs === 'EXPLICIT' ? 'OBSERVED' : 'INFERRED',
+          inputs: { events: state.events.length, segments: drift.segments },
+          version: 'drift@0.2',
+          thresholds: { drifting: 0.5, off_course: 0.2 },
+          exclusions: ['Does not apply when the goal is inferred and the anchor window is unfocused.'],
+          explanation: drift.display ?? null,
+          recovery: drift.verdict?.is_drift ? { action: 'declareTurn or setGoal' } : null,
+        }));
+
+      const nullity = artifactNullity(state.artifacts);
+      results.push(detectorResult({
+        detector: 'artifact-nullity',
+        verdict: nullity.ratio,
+        epistemic: nullity.ratio === null ? 'UNKNOWN' : 'OBSERVED',
+        inputs: { claims: nullity.claimed, unchecked: nullity.unknown },
+        version: 'artifact@0.1',
+        thresholds: { suspicious_bytes: 64 },
+        exclusions: ['Only covers claims the host actually observed; unobserved claims are UNKNOWN.'],
+        explanation: nullity.claimed
+          ? `${nullity.refuted} of ${nullity.claimed} artifact claims did not hold up.`
+          : 'No artifact claims examined.',
+        recovery: nullity.refuted ? { action: 'Re-run the work behind the refuted claims' } : null,
+      }));
+
+      const ft = this.followThrough();
+      results.push(detectorResult({
+        detector: 'follow-through',
+        verdict: ft.rate,
+        epistemic: ft.rate === null ? 'UNKNOWN' : 'OBSERVED',
+        inputs: { declarations: state.declarations.length, judged: ft.judged },
+        version: 'followthrough@0.1',
+        thresholds: { grace_turns: 3 },
+        exclusions: ['Declarations that name no concrete target cannot be judged.',
+          'Declarations awaiting a reply are collaboration, not omission.'],
+        explanation: ft.omitted
+          ? `${ft.omitted} declared item(s) have no matching action in the record.`
+          : 'No unfulfilled declarations that could be checked.',
+        recovery: ft.omitted ? { action: 'Do them, or say they are dropped' } : null,
+      }));
+
+      return Object.freeze({
+        results: Object.freeze(results),
+        summary: conformanceSummary(results),
+      });
     },
 
     // ── 介入(規格書第 9、10、11 節)────────────────────
@@ -1188,6 +1364,11 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           snapshot: state.snapshot,
           interventionLog: state.interventions,
           turns: state.turns,
+          declarations: state.declarations,
+          selfCorrections: state.selfCorrections,
+          scopePaths: state.scope.paths,
+          scopeNorthStar: state.scope.north_star,
+          scopeStreak: state.scopeStreak,
           contracts: [...state.contracts.values()],
           declaredTurns: state.declaredTurns,
           failures: state.failures,
@@ -1235,6 +1416,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.snapshot = sig.snapshot ?? null;
       state.interventions = [...(sig.interventionLog ?? [])];
       state.turns = sig.turns ?? 0;
+      state.declarations = [...(sig.declarations ?? [])];
+      state.selfCorrections = [...(sig.selfCorrections ?? [])];
+      state.scope = createScope({ northStar: sig.scopeNorthStar ?? null, paths: sig.scopePaths ?? [] });
+      state.scopeStreak = sig.scopeStreak ?? createStreak();
       state.budget = r.state.budget ?? null;
       state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
       return r;
