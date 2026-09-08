@@ -6,6 +6,14 @@ node_modules/
 # 於是離題偵測在新位置是關的 —— 而且完全靜默,沒有任何跡象。
 .forseti/*
 !.forseti/goal.json
+# 控制檔必須進版控。它們是給下一個 session 讀的,不在版控裡等於不存在,
+# 而那正是上面那三行記的教訓,只是換一個檔名重演。
+# 執行期狀態(state / streak / declarations / event_ledger)仍然忽略。
+!.forseti/NORTH_STAR.md
+!.forseti/PHASE_STATUS.md
+!.forseti/DECISION_LEDGER.md
+!.forseti/BLOCKERS.md
+!.forseti/REQUIRED_READING.md
 ._*
 .DS_Store
 
