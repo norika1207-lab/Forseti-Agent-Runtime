@@ -8,9 +8,12 @@ import { fileURLToPath } from 'node:url';
 // hooks.e2e 是唯一一支開真程序、看 exit code 的:
 // 前面全部加起來都不能證明裝上去之後它會開口。Stop hook 就是
 // 單元測試全過、實際裝上去一次都不會擋的活例子。
-// v2 那五支排在 v1 模組之後、integration 之前:它們是 §26 的 P0..P6,
-// 是後面 P7+ 的地基,地基自己先過了,上面的整合測試才有意義。
-const suites = ['conformance', 'signals', 'yield', 'windows', 'rescue', 'followthrough', 'scope', 'baseline', 'overhead', 'rhetoric', 'intervention', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'evidence', 'verifier', 'claims', 'goalanchor', 'progress', 'runtime', 'integration', 'acceptance', 'hooks.e2e', 'install', 'spec-v0.1'];
+// v2 那八支排在 v1 模組之後、integration 之前,而且照 §26 的 P 順序排:
+// evidence/verifier/claims/goalanchor/progress 是 P0..P6 的地基,
+// sef/liveness 是 P7,incident 是 P11。地基自己先過了,上面才有意義。
+// FS-IMP-002 特別要求 incident 這一層必須存在,否則 detector hits
+// 會直接淹掉使用者 —— 那正是 owner 遇到的 >25 warning。
+const suites = ['conformance', 'signals', 'yield', 'windows', 'rescue', 'followthrough', 'scope', 'baseline', 'overhead', 'rhetoric', 'intervention', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'evidence', 'verifier', 'claims', 'goalanchor', 'progress', 'sef', 'liveness', 'incident', 'runtime', 'integration', 'acceptance', 'hooks.e2e', 'install', 'spec-v0.1'];
 let bad = 0;
 for (const s of suites) {
   console.log(`\n──── ${s} ────`);

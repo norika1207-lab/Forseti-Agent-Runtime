@@ -115,6 +115,16 @@ import {
   detectFalseProgressRepresentation, progressHonestyGap,
   preActionCommitmentGate, progressReport,
 } from './progress.js';
+import {
+  ledgerCoverage, detectSyntheticEvidence, evaluateRetraction, escalate,
+} from './sef.js';
+import {
+  classifyLongTask, retryLoop, silentLivenessFailure, phantomVerification,
+  toolOccupancyStarvation, recurrenceRisk,
+} from './liveness.js';
+import {
+  aggregate, shouldSurface, warningStorm, governanceOverhead, incidentSummary,
+} from './incident.js';
 
 /**
  * 建一個 runtime。
@@ -1738,6 +1748,80 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
           gacResult: gac, trendResult: trend, exclusions, ...rest,
         }),
         drift: classifyDrift({ gacResult: gac, garResult: gar, exclusions, ...rest }),
+      });
+    },
+
+    /**
+     * P7:一個宣稱有沒有跟權威 ledger 矛盾。
+     *
+     * FS-DET-SEF-001 要求先排除遙測缺口,所以 coverage 是必要參數 ——
+     * 沒有它,這個偵測器會把「沒採集到」判成「捏造」,自己犯下 FP-14。
+     */
+    checkSyntheticEvidence(claim, { ledger = null, coverage = null, contradiction = null } = {}) {
+      return detectSyntheticEvidence(claim, {
+        ledger: ledger ?? state.toolCalls.map((t) => ({
+          id: t.id ?? null, family: 'tool', tool: t.name, at: t.at,
+        })),
+        coverage,
+        contradiction,
+      });
+    },
+
+    /** 宣告這個 ledger 涵蓋了什麼。不宣告的話 SEF 偵測會拒絕作答。 */
+    declareLedgerCoverage(args) {
+      return ledgerCoverage(args);
+    },
+
+    /** FS-DET-SEF-003:事後把話講軟不算撤回。 */
+    evaluateRetraction(finding, args) {
+      return evaluateRetraction(finding, args);
+    },
+
+    /** P7:一個長時間工作是哪一種。時間本身不會被拿來判 stall。 */
+    classifyTask(args) {
+      return classifyLongTask(args);
+    },
+
+    /** P7:服務是不是壞了而監控說沒事。restart 下過不算證據。 */
+    checkLiveness(args) {
+      return silentLivenessFailure(args);
+    },
+
+    /** P7:一個驗證流程有沒有真的走完五個階段。 */
+    checkVerificationWorkflow(workflow) {
+      return phantomVerification(workflow);
+    },
+
+    /**
+     * P11:把所有 detector hit 收斂成 root incident,再決定要不要打斷人。
+     *
+     * FS-IMP-002:在這一層完成之前,禁止把 detector hits 直接推給使用者。
+     * 這個方法就是那道閘門。
+     */
+    triage(findings = [], { previous = new Map(), needsDecision = [] } = {}) {
+      const agg = aggregate(findings);
+      const surfaced = [];
+      for (const inc of agg.root_incidents) {
+        const decision = shouldSurface(inc, previous.get?.(inc.root_incident_key) ?? null);
+        if (decision.surface) surfaced.push(Object.freeze({ incident: inc, decision }));
+      }
+      return Object.freeze({
+        aggregate: agg,
+        surfaced: Object.freeze(surfaced),
+        suppressed: agg.root_incidents.length - surfaced.length,
+        summary: incidentSummary(agg, { needsDecision }),
+        escalation: escalate(findings),
+      });
+    },
+
+    /** §24.1:Forseti 自己有沒有變成 warning 風暴。 */
+    selfHealth({ visibleWarnings = [], interruptionTimeMs = null, activeWorkTimeMs = null,
+      userTriageDecisions = null } = {}) {
+      return Object.freeze({
+        warning_storm: warningStorm({ visibleWarnings }),
+        governance_overhead: governanceOverhead({
+          interruptionTimeMs, activeWorkTimeMs, userTriageDecisions,
+        }),
       });
     },
 

@@ -1301,5 +1301,64 @@ t('v2:FS-DET-FSD-001 東西全做成功了,框架偷換照樣抓得到', () => {
   assert.equal(r.framework_substitution.execution_success_did_not_lower_score, true);
 });
 
+t('v2:FS-IMP-002 25 個 detector hit 經 runtime 收斂成少數 incident', () => {
+  const findings = [];
+  for (let i = 0; i < 12; i++) findings.push({ primitive_id: 'FP-02', resource: 'a.js', severity_family: 'A', evidence_refs: ['e1'] });
+  for (let i = 0; i < 10; i++) findings.push({ primitive_id: 'FP-24', task_id: 'orch', severity_family: 'B', evidence_refs: ['e2'] });
+  for (let i = 0; i < 3; i++) findings.push({ primitive_id: 'FP-06', synthetic_claim_ref: 'c1', severity_family: 'C', hard_contradiction: true, evidence_refs: ['e3'] });
+  const r = createRuntime().triage(findings, { needsDecision: ['c1'] });
+  assert.equal(r.aggregate.detector_hits, 25);
+  assert.equal(r.aggregate.root_incidents.length, 3);
+  assert.equal(r.summary.root_incident_count, 3);
+  assert.equal(r.summary.most_likely_to_break_work.severity_family, 'C');
+  assert.equal(r.escalation.level, 'CRITICAL_INTEGRITY_INCIDENT', 'Family C 硬矛盾直接升級');
+});
+
+t('v2:CT-033 同一件事第二次不再打斷', () => {
+  const rt = createRuntime();
+  const f = [{ primitive_id: 'FP-02', resource: 'a.js', severity_family: 'A', evidence_refs: ['e1'] }];
+  const first = rt.triage(f);
+  const seen = new Map(first.aggregate.root_incidents.map((i) => [i.root_incident_key, i]));
+  const second = rt.triage(f, { previous: seen });
+  assert.equal(first.surfaced.length, 1);
+  assert.equal(second.surfaced.length, 0);
+  assert.equal(second.suppressed, 1);
+});
+
+t('v2:runtime 量得出 Forseti 自己有沒有變成 warning 風暴', () => {
+  const warnings = Array.from({ length: 8 }, (_, i) => ({ root_incident_key: `k${i}`, suggested_action: 'a' }));
+  const r = createRuntime().selfHealth({
+    visibleWarnings: warnings, interruptionTimeMs: 600000, activeWorkTimeMs: 1200000,
+    userTriageDecisions: 8,
+  });
+  assert.equal(r.warning_storm.verdict, 'WARNING_STORM_CANDIDATE');
+  assert.equal(r.warning_storm.ui_mode, 'INCIDENT_SUMMARY');
+  assert.equal(r.governance_overhead.self_hcd_signal, true);
+});
+
+t('v2:FS-DET-SEF-001 沒宣告 ledger 覆蓋時,runtime 也拒絕判捏造', () => {
+  const r = createRuntime().checkSyntheticEvidence(
+    { id: 'c1', presented_as: 'TOOL_RESULT', family: 'tool', at: Date.now() },
+    { ledger: [] },
+  );
+  assert.equal(r.verdict, 'LEDGER_COVERAGE_UNKNOWN');
+  assert.equal(r.is_sef, false);
+});
+
+t('v2:FS-TOOL-001 經 runtime 也不准只憑時間判 stall', () => {
+  const r = createRuntime().classifyTask({ durationMs: 60 * 60_000 });
+  assert.equal(r.class, 'UNKNOWN_TOOL_FAILURE');
+  assert.equal(r.duration_alone_was_not_used, true);
+});
+
+t('v2:CT-043 沒走完的驗證流程,經 runtime 也不准提高信心', () => {
+  const r = createRuntime().checkVerificationWorkflow({
+    started: true, completed: false, agents_spawned: 8,
+    transcript_bytes: 1_400_000, cited_as_verification: true,
+  });
+  assert.equal(r.verdict, 'PHANTOM_VERIFICATION');
+  assert.equal(r.may_increase_confidence, false);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);
