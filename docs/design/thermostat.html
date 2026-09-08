@@ -1,0 +1,787 @@
+<title>Forseti 溫控器</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#FFFFFF;
+  --ground:#F1F3F4;
+  --ink:#16191C;
+  --ink-2:#5A6266;
+  --ink-3:#8C9498;
+  --rule:#DCE0E2;
+  --rule-soft:#E9ECED;
+  --brass:#9A7B33;
+  --brass-soft:#F0E6CE;
+
+  /* 熱色階。黑體輻射的順序，冷藍到燒赤,不經過綠。 */
+  --t0:#6E90A6;
+  --t1:#7E9AA6;
+  --t2:#B79B4A;
+  --t3:#C87F2A;
+  --t4:#AE4326;
+
+  --shadow:0 1px 2px rgba(22,25,28,.06), 0 8px 24px -12px rgba(22,25,28,.18);
+  --shadow-lift:0 2px 4px rgba(22,25,28,.08), 0 18px 40px -18px rgba(22,25,28,.28);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  background:var(--ground);
+  color:var(--ink);
+  font-family:"IBM Plex Sans","PingFang TC","Hiragino Sans TC","Microsoft JhengHei",-apple-system,sans-serif;
+  font-size:15px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:940px;margin:0 auto;padding:0 24px 96px}
+
+/* 刻度銘牌 */
+.plate{
+  border-bottom:1px solid var(--rule);
+  padding:44px 0 28px;
+  margin-bottom:44px;
+}
+.eyebrow{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:11px;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+  color:var(--brass);
+  margin:0 0 14px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+.eyebrow::after{
+  content:"";
+  flex:1;
+  height:1px;
+  background:linear-gradient(90deg,var(--rule),transparent);
+}
+h1{
+  font-family:"Fraunces","PingFang TC","Hiragino Sans TC","Microsoft JhengHei",Georgia,serif;
+  font-optical-sizing:auto;
+  font-weight:600;
+  font-size:clamp(30px,5.2vw,46px);
+  line-height:1.1;
+  letter-spacing:-.015em;
+  margin:0 0 16px;
+  text-wrap:balance;
+}
+.lede{
+  max-width:62ch;
+  font-size:16px;
+  color:var(--ink-2);
+  margin:0;
+}
+.lede strong{font-weight:600;color:var(--ink)}
+
+h2{
+  font-family:"Fraunces","PingFang TC","Hiragino Sans TC","Microsoft JhengHei",Georgia,serif;
+  font-weight:600;
+  font-size:23px;
+  letter-spacing:-.01em;
+  margin:0 0 8px;
+  text-wrap:balance;
+}
+.sub{color:var(--ink-2);margin:0 0 22px;max-width:64ch;font-size:14.5px}
+section{margin-bottom:56px}
+
+/* 儀器 */
+.rig{
+  background:var(--paper);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  box-shadow:var(--shadow);
+  overflow:hidden;
+}
+.rig-head{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:16px;
+  padding:13px 18px;
+  border-bottom:1px solid var(--rule-soft);
+  background:linear-gradient(180deg,var(--paper),color-mix(in srgb,var(--ground) 40%,var(--paper)));
+}
+.rig-title{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:11px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+}
+.rig-body{padding:22px 18px}
+
+/* 溫度控制 */
+.gauge{display:grid;grid-template-columns:auto 1fr;gap:26px;align-items:center}
+@media(max-width:640px){.gauge{grid-template-columns:1fr;gap:18px}}
+
+.readout{text-align:center;min-width:132px}
+.deg{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:56px;
+  font-weight:500;
+  line-height:1;
+  font-variant-numeric:tabular-nums;
+  color:var(--tc,var(--t0));
+  transition:color .35s ease;
+  letter-spacing:-.03em;
+}
+.deg sup{font-size:20px;vertical-align:super;margin-left:2px;font-weight:400}
+.state-name{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:11px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin-top:8px;
+}
+
+.scale{position:relative;padding-top:6px}
+.band{
+  height:9px;
+  border-radius:1px;
+  background:linear-gradient(90deg,var(--t0) 0%,var(--t1) 28%,var(--t2) 55%,var(--t3) 78%,var(--t4) 100%);
+}
+.ticks{position:relative;height:22px;margin-top:5px}
+.tick{
+  position:absolute;
+  top:0;
+  transform:translateX(-50%);
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10px;
+  color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
+}
+.tick::before{
+  content:"";
+  display:block;
+  width:1px;
+  height:5px;
+  background:var(--rule);
+  margin:0 auto 3px;
+}
+input[type=range]{
+  -webkit-appearance:none;
+  appearance:none;
+  width:100%;
+  background:transparent;
+  margin:10px 0 0;
+  cursor:ew-resize;
+}
+input[type=range]::-webkit-slider-runnable-track{height:2px;background:var(--rule)}
+input[type=range]::-moz-range-track{height:2px;background:var(--rule)}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;
+  width:15px;height:15px;
+  margin-top:-6.5px;
+  border-radius:50%;
+  background:var(--paper);
+  border:2px solid var(--tc,var(--t0));
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+  transition:border-color .35s ease;
+}
+input[type=range]::-moz-range-thumb{
+  width:15px;height:15px;
+  border-radius:50%;
+  background:var(--paper);
+  border:2px solid var(--tc,var(--t0));
+  box-shadow:0 1px 3px rgba(0,0,0,.2);
+}
+input[type=range]:focus-visible{outline:2px solid var(--brass);outline-offset:6px;border-radius:2px}
+.hint{
+  font-size:12.5px;
+  color:var(--ink-3);
+  margin-top:12px;
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+}
+
+/* 三態 */
+.tri{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px}
+@media(max-width:760px){.tri{grid-template-columns:1fr}}
+.pane{
+  border:1px solid var(--rule);
+  border-radius:3px;
+  background:var(--paper);
+  padding:0;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+}
+.pane.on{border-color:var(--tc,var(--t0));box-shadow:var(--shadow-lift)}
+.pane-h{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10.5px;
+  letter-spacing:.12em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  padding:10px 13px;
+  border-bottom:1px solid var(--rule-soft);
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+}
+.pane.on .pane-h{color:var(--tc,var(--t0))}
+.pane-b{padding:15px 13px;flex:1;font-size:13px;color:var(--ink-2);line-height:1.55}
+.pane-b p{margin:0 0 9px}
+.pane-b p:last-child{margin:0}
+
+/* 桌面模擬 */
+.desk{
+  background:var(--ground);
+  border:1px solid var(--rule);
+  border-radius:5px;
+  padding:0;
+  position:relative;
+  height:330px;
+  overflow:hidden;
+}
+@media(max-width:560px){
+  .desk{height:300px}
+  .desk-app{right:16px;bottom:150px}
+  .toast{width:auto;left:16px;right:16px}
+}
+.desk-bar{
+  height:26px;
+  background:color-mix(in srgb,var(--ink) 8%,var(--paper));
+  border-bottom:1px solid var(--rule);
+  display:flex;
+  align-items:center;
+  padding:0 10px;
+  gap:6px;
+}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--rule)}
+.desk-app{
+  position:absolute;
+  left:16px;top:44px;right:120px;bottom:16px;
+  background:var(--paper);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  padding:14px;
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10.5px;
+  color:var(--ink-3);
+  line-height:1.9;
+  overflow:hidden;
+}
+.desk-app .l{display:block;height:6px;background:var(--rule-soft);border-radius:1px;margin-bottom:9px}
+.desk-app .l:nth-child(1){width:62%}
+.desk-app .l:nth-child(2){width:88%}
+.desk-app .l:nth-child(3){width:44%}
+.desk-app .l:nth-child(4){width:76%}
+.desk-app .l:nth-child(5){width:30%}
+
+/* 常駐態掛件 */
+.widget{
+  position:absolute;
+  right:16px;
+  top:44px;
+  width:86px;
+  background:var(--paper);
+  border:1px solid var(--rule);
+  border-radius:3px;
+  padding:9px 8px;
+  text-align:center;
+  box-shadow:var(--shadow);
+  transition:box-shadow .3s ease,border-color .3s ease;
+}
+.widget.hot{border-color:var(--tc);box-shadow:var(--shadow-lift)}
+.widget-deg{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:19px;
+  font-weight:500;
+  color:var(--tc,var(--t0));
+  font-variant-numeric:tabular-nums;
+  line-height:1;
+  transition:color .35s ease;
+}
+.widget-bar{
+  height:3px;
+  border-radius:2px;
+  margin-top:7px;
+  background:var(--rule-soft);
+  overflow:hidden;
+}
+.widget-fill{
+  height:100%;
+  background:var(--tc,var(--t0));
+  transition:width .35s ease,background .35s ease;
+}
+.widget-lab{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:8.5px;
+  letter-spacing:.1em;
+  color:var(--ink-3);
+  margin-top:6px;
+  text-transform:uppercase;
+}
+
+/* 介入訊息 */
+.toast{
+  position:absolute;
+  right:16px;
+  bottom:16px;
+  width:290px;
+  background:var(--paper);
+  border:1px solid var(--rule);
+  border-left:3px solid var(--tc);
+  border-radius:3px;
+  padding:13px 14px;
+  box-shadow:var(--shadow-lift);
+  opacity:0;
+  transform:translateY(8px);
+  transition:opacity .4s ease,transform .4s ease;
+  pointer-events:none;
+}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast-t{
+  font-size:12.5px;
+  font-weight:600;
+  margin:0 0 6px;
+  color:var(--ink);
+}
+.toast-b{font-size:12px;color:var(--ink-2);margin:0 0 10px;line-height:1.5}
+.toast-b code{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:11px;
+  background:var(--ground);
+  padding:1px 4px;
+  border-radius:2px;
+}
+.toast-acts{display:flex;gap:7px}
+.btn{
+  font-family:"IBM Plex Sans","PingFang TC",sans-serif;
+  font-size:11.5px;
+  font-weight:500;
+  padding:5px 11px;
+  border-radius:2px;
+  border:1px solid var(--rule);
+  background:var(--paper);
+  color:var(--ink-2);
+  cursor:default;
+}
+.btn.primary{background:var(--ink);color:var(--paper);border-color:var(--ink)}
+
+/* 訊號表 */
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{
+  text-align:left;
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10.5px;
+  letter-spacing:.11em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  font-weight:500;
+  padding:0 10px 9px 0;
+  border-bottom:1px solid var(--rule);
+}
+td{padding:10px 10px 10px 0;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+td:last-child,th:last-child{padding-right:0;text-align:right}
+.num{font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;font-variant-numeric:tabular-nums;font-size:12.5px}
+.chip{
+  display:inline-block;
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10px;
+  letter-spacing:.06em;
+  padding:2px 7px;
+  border-radius:2px;
+  border:1px solid var(--rule);
+  color:var(--ink-3);
+  white-space:nowrap;
+}
+.chip.live{border-color:var(--brass);color:var(--brass);background:var(--brass-soft)}
+.contrib{
+  height:4px;
+  background:var(--rule-soft);
+  border-radius:2px;
+  overflow:hidden;
+  width:76px;
+  display:inline-block;
+  vertical-align:middle;
+  margin-right:9px;
+}
+.contrib i{display:block;height:100%;background:var(--tc,var(--t0));transition:width .4s ease,background .35s ease}
+
+/* 軌跡圖 */
+.chart-scroll{overflow-x:auto;padding-bottom:4px}
+svg.trace{display:block;min-width:660px;width:100%;height:auto}
+.tr-lab{font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;font-size:9.5px;fill:var(--ink-3);letter-spacing:.06em}
+.tr-num text{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;fill:var(--ink-2);font-weight:500}
+.tr-star{font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;font-size:10px;fill:var(--brass);letter-spacing:.1em}
+
+ol.nodes{
+  list-style:none;
+  margin:20px 0 0;
+  padding:0;
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:7px 22px;
+  font-size:12.5px;
+  color:var(--ink-2);
+}
+@media(max-width:760px){ol.nodes{grid-template-columns:1fr}}
+ol.nodes li{display:flex;gap:9px;align-items:baseline;line-height:1.45}
+ol.nodes b{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:10.5px;
+  font-weight:500;
+  color:var(--ink-3);
+  min-width:13px;
+  flex:none;
+}
+ol.nodes li.fix{color:var(--ink)}
+ol.nodes li.fix b{color:var(--t4)}
+
+.legend{display:flex;flex-wrap:wrap;gap:18px;margin-top:16px;font-size:12.5px;color:var(--ink-2)}
+.legend span{display:flex;align-items:center;gap:7px}
+.key{width:12px;height:12px;border-radius:2px;flex:none}
+
+.note{
+  border-left:2px solid var(--brass);
+  padding:2px 0 2px 16px;
+  margin:26px 0 0;
+  font-size:13.5px;
+  color:var(--ink-2);
+  max-width:64ch;
+}
+.note em{font-style:normal;color:var(--ink);font-weight:500}
+
+footer{
+  border-top:1px solid var(--rule);
+  padding-top:22px;
+  font-size:12.5px;
+  color:var(--ink-3);
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  line-height:1.8;
+}
+@media (prefers-reduced-motion:reduce){
+  *{transition:none!important;animation:none!important}
+}
+</style>
+
+<div class="wrap">
+
+<div class="plate">
+  <p class="eyebrow">Forseti · 執行期溫控</p>
+  <h1>它在旁邊看著，溫度上去了才開口</h1>
+  <p class="lede">不是儀表板，不是要你去看的東西。一個掛在桌面邊上的溫控器，量的是<strong>你的 AI 現在還清不清醒</strong>。平常它只有顏色在變，你用餘光就知道現在幾度。</p>
+</div>
+
+<section>
+  <h2>溫度是連續的，不是警報</h2>
+  <p class="sub">拖動看看。同一個數字同時驅動三種形態，因為它們本來就是同一個東西在不同距離下的樣子。</p>
+
+  <div class="rig">
+    <div class="rig-head">
+      <span class="rig-title">Thermostat</span>
+      <span class="rig-title" id="ctxread">context 132,264</span>
+    </div>
+    <div class="rig-body">
+      <div class="gauge">
+        <div class="readout">
+          <div class="deg"><span id="degnum">28</span><sup>°</sup></div>
+          <div class="state-name" id="statename">清醒</div>
+        </div>
+        <div class="scale">
+          <div class="band"></div>
+          <div class="ticks">
+            <span class="tick" style="left:0%">0</span>
+            <span class="tick" style="left:30%">30</span>
+            <span class="tick" style="left:55%">55</span>
+            <span class="tick" style="left:78%">78</span>
+            <span class="tick" style="left:100%">100</span>
+          </div>
+          <input type="range" min="0" max="100" value="28" id="temp" aria-label="模擬溫度">
+          <p class="hint" id="hint">常駐態。它不會說話。</p>
+        </div>
+      </div>
+
+      <div class="tri">
+        <div class="pane" id="p1">
+          <div class="pane-h"><span>常駐</span><span>0–54°</span></div>
+          <div class="pane-b">
+            <p>一個角落的小方塊，只有顏色在動。</p>
+            <p>不彈窗、不出聲、不要求你做任何事。使用者忘記它存在，才算做對。</p>
+          </div>
+        </div>
+        <div class="pane" id="p2">
+          <div class="pane-h"><span>展開</span><span>你點開</span></div>
+          <div class="pane-b">
+            <p>看得到溫度怎麼來的、哪幾個訊號在升溫、軌跡走到哪裡。</p>
+            <p>這一態永遠不會自己出現。</p>
+          </div>
+        </div>
+        <div class="pane" id="p3">
+          <div class="pane-h"><span>介入</span><span>78°+</span></div>
+          <div class="pane-b">
+            <p>跳一則訊息，講三件事：現在怎麼了、建議怎麼做、換過去會失去什麼。</p>
+            <p>一句話講完。不長篇。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>掛在哪裡</h2>
+  <p class="sub">貼在 Claude 或 Codex 桌面 App 旁邊。它是配件不是主角，所以視覺重量必須接近零。下面是真實比例。</p>
+
+  <div class="desk">
+    <div class="desk-bar"><i class="dot"></i><i class="dot"></i><i class="dot"></i></div>
+    <div class="desk-app">
+      <i class="l"></i><i class="l"></i><i class="l"></i><i class="l"></i><i class="l"></i>
+      <span id="deskstate">assistant · 正在讀取來源文件…</span>
+    </div>
+    <div class="widget" id="widget">
+      <div class="widget-deg"><span id="wdeg">28</span>°</div>
+      <div class="widget-bar"><i class="widget-fill" id="wfill" style="width:28%"></i></div>
+      <div class="widget-lab">forseti</div>
+    </div>
+    <div class="toast" id="toast">
+      <p class="toast-t">建議在這裡換一個 session</p>
+      <p class="toast-b">目前 <span id="tctx">178K</span> 裡約 <span id="tdead">68K</span> 已經沒有在用。交接檔寫好在 <code>.forseti/</code>，新視窗會自己讀，你不用複製任何東西。<br>帶不走：剛才在爭論的溫控觸發條件，那還沒有結論。</p>
+      <div class="toast-acts">
+        <span class="btn primary">開新視窗</span>
+        <span class="btn">先講完再換</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>溫度是怎麼算出來的</h2>
+  <p class="sub">六個訊號加權。前三個現在就拿得到，後三個要等 Claim 抽取做完。權重會隨溫度變化，因為高溫時行為訊號比容量準。</p>
+
+  <div class="rig">
+    <div class="rig-head"><span class="rig-title">Signals</span><span class="rig-title" id="sigsum">合成 28°</span></div>
+    <div class="rig-body" style="padding-top:16px">
+      <table>
+        <thead>
+          <tr><th>訊號</th><th>來源</th><th>貢獻</th></tr>
+        </thead>
+        <tbody id="sigrows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <p class="note"><em>後三個一起歸零，比容量滿更危險。</em>那是「什麼都答得出來但什麼都不確定」的狀態，發生的時候 token 可能才用一半，而現有的任何工具都不會有反應。</p>
+</section>
+
+<section>
+  <h2>它怎麼走偏的</h2>
+  <p class="sub">這張圖用的是 2026-09-08 這一場的真實紀錄，不是示意圖。橫軸是時間，縱軸是離北極星多遠。每一個節點是一次決策分岔，紅色那幾根是使用者出手把它拉回來的位置。</p>
+
+  <div class="rig">
+    <div class="rig-head"><span class="rig-title">Drift trace · 2026-09-08</span><span class="rig-title">9 nodes · 4 corrections</span></div>
+    <div class="rig-body">
+      <div class="chart-scroll">
+        <svg class="trace" viewBox="0 0 700 300" role="img" aria-label="偏離度軌跡圖">
+          <defs>
+            <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="var(--t4)" stop-opacity=".16"/>
+              <stop offset="100%" stop-color="var(--t4)" stop-opacity="0"/>
+            </linearGradient>
+          </defs>
+
+          <!-- 北極星基線 -->
+          <line x1="46" y1="248" x2="676" y2="248" stroke="var(--brass)" stroke-width="1" stroke-dasharray="3 3"/>
+          <text class="tr-star" x="46" y="264">北極星　偏離 0</text>
+
+          <!-- 網格 -->
+          <line x1="46" y1="40" x2="676" y2="40" stroke="var(--rule-soft)" stroke-width="1"/>
+          <line x1="46" y1="110" x2="676" y2="110" stroke="var(--rule-soft)" stroke-width="1"/>
+          <line x1="46" y1="179" x2="676" y2="179" stroke="var(--rule-soft)" stroke-width="1"/>
+          <text class="tr-lab" x="10" y="44">高</text>
+          <text class="tr-lab" x="10" y="183">低</text>
+
+          <!-- 偏離面積 -->
+          <path d="M46,236 L124,96 L202,58 L280,214 L358,150 L436,242 L514,240 L592,168 L660,244 L660,248 L46,248 Z" fill="url(#fade)"/>
+          <!-- 偏離線 -->
+          <path d="M46,236 L124,96 L202,58 L280,214 L358,150 L436,242 L514,240 L592,168 L660,244"
+                fill="none" stroke="var(--t4)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+
+          <!-- 糾正時刻的垂直線 -->
+          <g stroke="var(--t4)" stroke-width="1" stroke-dasharray="2 3" opacity=".5">
+            <line x1="280" y1="58" x2="280" y2="248"/>
+            <line x1="436" y1="58" x2="436" y2="248"/>
+            <line x1="660" y1="58" x2="660" y2="248"/>
+          </g>
+
+          <!-- 節點 -->
+          <g>
+            <circle cx="46"  cy="236" r="3.5" fill="var(--paper)" stroke="var(--t1)" stroke-width="2"/>
+            <circle cx="124" cy="96"  r="3.5" fill="var(--paper)" stroke="var(--t3)" stroke-width="2"/>
+            <circle cx="202" cy="58"  r="4.5" fill="var(--t4)"/>
+            <circle cx="280" cy="214" r="4.5" fill="var(--paper)" stroke="var(--t4)" stroke-width="2.5"/>
+            <circle cx="358" cy="150" r="3.5" fill="var(--paper)" stroke="var(--t3)" stroke-width="2"/>
+            <circle cx="436" cy="242" r="4.5" fill="var(--paper)" stroke="var(--t4)" stroke-width="2.5"/>
+            <circle cx="514" cy="240" r="3.5" fill="var(--paper)" stroke="var(--t1)" stroke-width="2"/>
+            <circle cx="592" cy="168" r="3.5" fill="var(--paper)" stroke="var(--t2)" stroke-width="2"/>
+            <circle cx="660" cy="244" r="4.5" fill="var(--paper)" stroke="var(--t4)" stroke-width="2.5"/>
+          </g>
+
+          <!-- 節點編號。編號是真的時間序列,不是裝飾 -->
+          <g class="tr-num">
+            <text x="46"  y="224" text-anchor="middle">1</text>
+            <text x="124" y="84"  text-anchor="middle">2</text>
+            <text x="202" y="45"  text-anchor="middle">3</text>
+            <text x="280" y="202" text-anchor="middle">4</text>
+            <text x="358" y="138" text-anchor="middle">5</text>
+            <text x="436" y="230" text-anchor="middle">6</text>
+            <text x="514" y="228" text-anchor="middle">7</text>
+            <text x="592" y="156" text-anchor="middle">8</text>
+            <text x="660" y="232" text-anchor="middle">9</text>
+          </g>
+
+          <text class="tr-lab" x="46"  y="284">09:40</text>
+          <text class="tr-lab" x="660" y="284" text-anchor="end">19:10</text>
+        </svg>
+      </div>
+
+      <ol class="nodes">
+        <li><b>1</b>接手這條線</li>
+        <li><b>2</b>九份來源文件只讀了一份</li>
+        <li><b>3</b>掃 15,130 則訊息，只留下五個平均值</li>
+        <li class="fix"><b>4</b>「你事實上根本沒達到我的 Goal」</li>
+        <li><b>5</b>把 scope 定義當成北極星</li>
+        <li class="fix"><b>6</b>「你真的知道我的北極星？？」</li>
+        <li><b>7</b>寫下 soul.md 與 bible.md</li>
+        <li><b>8</b>又問一次她已經回答過的事</li>
+        <li class="fix"><b>9</b>「你去開相關檔案」</li>
+      </ol>
+
+      <div class="legend">
+        <span><i class="key" style="background:var(--t4)"></i>偏離度</span>
+        <span><i class="key" style="background:var(--paper);border:2px solid var(--t4)"></i>使用者糾正</span>
+        <span><i class="key" style="background:var(--brass)"></i>北極星基線</span>
+      </div>
+    </div>
+  </div>
+
+  <p class="note">兩個峰值都不是突然的。<em>第一次爬升在她開口之前一小時就開始了</em>，跡象是讀的文件比例掉下來、引用出處變少。溫控器要抓的就是那一段爬坡，不是等到峰頂才響。</p>
+</section>
+
+<section>
+  <h2>它不做什麼</h2>
+  <div class="rig">
+    <div class="rig-body">
+      <table>
+        <tbody>
+          <tr><td style="width:34%">不要另外打開</td><td>沒有要你回來檢查的頁面。忘記它存在是正常的。</td></tr>
+          <tr><td>不用紅色警報</td><td>它是溫控器不是火災警報器。語氣是提醒，不是警告。</td></tr>
+          <tr><td>不代你決定</td><td>換不換 session 是你的事。它給的是一份帳，不是一個指令。</td></tr>
+          <tr><td>不要你搬東西</td><td>交接檔落地成檔案，新視窗自己讀。你只要開新視窗。</td></tr>
+          <tr><td style="border:none">不動原始紀錄</td><td style="border:none">jsonl 只讀不寫。錯了重建，因為底還在。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  設計提案 · 2026-09-08<br>
+  溫度模型與訊號權重為設計稿，未實作。表中前三個訊號的來源已驗證可取得。<br>
+  軌跡圖資料出自本場對話紀錄；偏離度為人工標定，尚無自動量測。
+</footer>
+
+</div>
+
+<script>
+(function(){
+  function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+  function hex2rgb(h){h=h.trim().replace('#','');return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];}
+  function mix(a,b,t){var A=hex2rgb(a),B=hex2rgb(b);return 'rgb('+Math.round(A[0]+(B[0]-A[0])*t)+','+Math.round(A[1]+(B[1]-A[1])*t)+','+Math.round(A[2]+(B[2]-A[2])*t)+')';}
+
+  function tempColor(v){
+    var pts=[[0,css('--t0')],[28,css('--t1')],[55,css('--t2')],[78,css('--t3')],[100,css('--t4')]];
+    for(var i=0;i<pts.length-1;i++){
+      if(v<=pts[i+1][0]){
+        var t=(v-pts[i][0])/(pts[i+1][0]-pts[i][0]);
+        return mix(pts[i][1],pts[i+1][1],t);
+      }
+    }
+    return css('--t4');
+  }
+
+  var signals=[
+    {n:'context 佔用',        s:'jsonl usage',        live:true,  base:.30, gain:.55},
+    {n:'連三輪零磁碟變化',    s:'照妖鏡 streak',      live:true,  base:.02, gain:.85},
+    {n:'宣稱對不上磁碟',      s:'照妖鏡 bluff',       live:true,  base:.05, gain:.70},
+    {n:'講「不知道」歸零',    s:'待做',               live:false, base:.00, gain:.95},
+    {n:'回頭修正自己歸零',    s:'待做',               live:false, base:.00, gain:.90},
+    {n:'引用證據比例下滑',    s:'待做',               live:false, base:.08, gain:.80}
+  ];
+
+  var tbody=document.getElementById('sigrows');
+  signals.forEach(function(sg,i){
+    var tr=document.createElement('tr');
+    tr.innerHTML='<td>'+sg.n+'</td>'+
+      '<td><span class="chip'+(sg.live?' live':'')+'">'+(sg.live?'已可取得':'階段 2')+' · '+sg.s+'</span></td>'+
+      '<td><span class="contrib"><i id="c'+i+'" style="width:0%"></i></span><span class="num" id="v'+i+'">0</span></td>';
+    tbody.appendChild(tr);
+  });
+
+  var el={
+    temp:document.getElementById('temp'),
+    deg:document.getElementById('degnum'),
+    wdeg:document.getElementById('wdeg'),
+    wfill:document.getElementById('wfill'),
+    widget:document.getElementById('widget'),
+    name:document.getElementById('statename'),
+    hint:document.getElementById('hint'),
+    toast:document.getElementById('toast'),
+    ctx:document.getElementById('ctxread'),
+    tctx:document.getElementById('tctx'),
+    tdead:document.getElementById('tdead'),
+    sum:document.getElementById('sigsum'),
+    deskstate:document.getElementById('deskstate'),
+    panes:[document.getElementById('p1'),document.getElementById('p2'),document.getElementById('p3')]
+  };
+
+  function render(v){
+    var col=tempColor(v);
+    document.documentElement.style.setProperty('--tc',col);
+
+    el.deg.textContent=v;
+    el.wdeg.textContent=v;
+    el.wfill.style.width=v+'%';
+    el.sum.textContent='合成 '+v+'°';
+
+    var ctxTok=Math.round(30000+v*1900);
+    el.ctx.textContent='context '+ctxTok.toLocaleString();
+    // 死掉的部分:讀過一次就沒回頭的檔案內容、失敗的工具輸出、重複讀取。
+    // 溫度越高佔比越大,這就是「腫大但笨」的量化形式。
+    var dead=Math.max(0, Math.round(ctxTok*(v-40)/100));
+    el.tctx.textContent=Math.round(ctxTok/1000)+'K';
+    el.tdead.textContent=Math.round(dead/1000)+'K';
+
+    var state, hint, desk;
+    if(v<55){ state='清醒'; hint='常駐態。它不會說話。'; desk='assistant · 正在讀取來源文件…'; }
+    else if(v<78){ state='開始鈍'; hint='仍是常駐態。顏色變了，還是不出聲。'; desk='assistant · 第 3 次讀同一個檔案…'; }
+    else { state='該換了'; hint='介入態。跳一則訊息，只跳一次。'; desk='assistant · 宣稱已修正，磁碟無變動…'; }
+    el.name.textContent=state;
+    el.hint.textContent=hint;
+    el.deskstate.textContent=desk;
+
+    el.toast.classList.toggle('show', v>=78);
+    el.widget.classList.toggle('hot', v>=55);
+
+    var active = v<55?0:(v<78?0:2);
+    el.panes.forEach(function(p,i){p.classList.toggle('on', i===active);});
+
+    signals.forEach(function(sg,i){
+      var raw=Math.min(100, Math.max(0,(sg.base+ (v/100)*sg.gain)*100 - (sg.live?0:12)));
+      var val=Math.round(raw*(sg.live?1:(v>60?1:.35)));
+      document.getElementById('c'+i).style.width=val+'%';
+      document.getElementById('v'+i).textContent=val;
+    });
+  }
+
+  el.temp.addEventListener('input',function(){render(parseInt(this.value,10));});
+  render(28);
+})();
+</script>
