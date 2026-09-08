@@ -19,6 +19,7 @@
     python3 apps/forseti-cli/forseti.py doctor
     python3 apps/forseti-cli/forseti.py status
     python3 apps/forseti-cli/forseti.py gate takeover
+    python3 apps/forseti-cli/forseti.py context [--all|<path.jsonl>]
 """
 
 from __future__ import annotations
@@ -397,6 +398,25 @@ def cmd_gate_takeover(rep: Report) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Context 佔用
+# ---------------------------------------------------------------------------
+#
+# 實作在 context_meter.py，那邊有自己的約束說明。這裡只負責轉接。
+# 分開的理由：forseti.py 的約束是「只讀控制檔」，而 context 讀的是
+# ~/.claude/projects 底下的 jsonl，來源不同、失效方式也不同，混在一起
+# 會讓「這個指令讀不到東西」變成兩種完全不同的意思。
+
+def cmd_context(args: list[str]) -> int:
+    try:
+        import context_meter
+    except ImportError:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import context_meter  # noqa: E402
+
+    return context_meter.main(["context_meter", *args])
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -412,6 +432,8 @@ def main(argv: list[str]) -> int:
         return cmd_status(rep)
     if cmd == "gate" and len(argv) > 2 and argv[2] == "takeover":
         return cmd_gate_takeover(rep)
+    if cmd == "context":
+        return cmd_context(argv[2:])
 
     print(__doc__)
     return 2
