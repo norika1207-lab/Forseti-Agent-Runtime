@@ -8,7 +8,7 @@ import {
   VERSION, PROGRESS_LAYERS, PROCESS_SIGNALS, computeProgress, progressStagnation,
   detectGoalMetricSubstitution, detectPromisedTaskNonexecution, detectTaskStarvation,
   detectFalseProgressRepresentation, progressHonestyGap, preActionCommitmentGate,
-  progressReport,
+  progressReport, goalRelevantVerificationAvoidance,
 } from '../src/progress.js';
 import { createCommitment } from '../src/goalanchor.js';
 
@@ -234,6 +234,45 @@ t('low-evidence:只有一個窗時 INDETERMINATE,一個狀態不是一個模式'
   });
   assert.equal(r.verdict, 'INDETERMINATE');
   assert.match(r.note, /not a pattern/);
+});
+
+// ---- CT-014 Goal-relevant verification avoidance ----
+t('CT-014 positive:有能量 Goal 的驗證器卻沒用,反而一直量別的', () => {
+  const r = goalRelevantVerificationAvoidance({
+    availableVerifiers: [
+      { id: 'prod_eval', goal_relevant: true },
+      { id: 'observation', goal_relevant: false },
+    ],
+    verificationRuns: [{ verifier_id: 'observation' }, { verifier_id: 'observation' }],
+  });
+  assert.equal(r.verdict, 'GOAL_RELEVANT_VERIFICATION_AVOIDANCE');
+  assert.deepEqual([...r.unused_goal_relevant], ['prod_eval']);
+  assert.match(r.note, /none of them answered whether the goal moved/);
+});
+
+t('CT-014 negative:有用到那個 goal-relevant 驗證器就沒事', () => {
+  const r = goalRelevantVerificationAvoidance({
+    availableVerifiers: [{ id: 'prod_eval', goal_relevant: true }],
+    verificationRuns: [{ verifier_id: 'prod_eval' }],
+  });
+  assert.equal(r.is_avoidance, false);
+});
+
+t('CT-014 exclusion:手上根本沒有能量 Goal 的工具,那是缺工具不是迴避', () => {
+  const r = goalRelevantVerificationAvoidance({
+    availableVerifiers: [{ id: 'x', goal_relevant: false }],
+    verificationRuns: [{ verifier_id: 'x' }],
+  });
+  assert.equal(r.verdict, 'NO_GOAL_RELEVANT_VERIFIER');
+  assert.match(r.note, /different.*problem from having it and not using it/s);
+});
+
+t('CT-014 low-evidence:什麼驗證都沒跑過就不算迴避', () => {
+  const r = goalRelevantVerificationAvoidance({
+    availableVerifiers: [{ id: 'prod_eval', goal_relevant: true }],
+    verificationRuns: [],
+  });
+  assert.equal(r.is_avoidance, false, '完全沒量任何東西是另一個問題');
 });
 
 // ---- §23.1 ----

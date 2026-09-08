@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 // FS-IMP-001 要求 P3..P6 先於任何 drift classifier;
 // FS-IMP-002 要求 incident 這一層必須存在,否則 detector hits 會直接
 // 淹掉使用者 —— 那正是 owner 遇到的 >25 warning。
-const suites = ['conformance', 'signals', 'yield', 'windows', 'rescue', 'followthrough', 'scope', 'baseline', 'overhead', 'rhetoric', 'intervention', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'evidence', 'verifier', 'claims', 'goalanchor', 'progress', 'sef', 'liveness', 'incident', 'primitives', 'risk', 'challenge', 'topology', 'recovery', 'collaboration', 'runtime', 'integration', 'acceptance', 'hooks.e2e', 'install', 'spec-v0.1', 'spec-v2'];
+const suites = ['conformance', 'signals', 'yield', 'windows', 'rescue', 'followthrough', 'scope', 'baseline', 'overhead', 'rhetoric', 'intervention', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'evidence', 'verifier', 'claims', 'goalanchor', 'progress', 'sef', 'liveness', 'incident', 'primitives', 'risk', 'challenge', 'topology', 'recovery', 'collaboration', 'runtime', 'integration', 'acceptance', 'hooks.e2e', 'install', 'acceptance-v2', 'spec-v0.1', 'spec-v2'];
 let bad = 0;
 for (const s of suites) {
   console.log(`\n──── ${s} ────`);

@@ -332,6 +332,57 @@ export function detectFalseProgressRepresentation({
 }
 
 /**
+ * Goal-Relevant Verification Avoidance。§23 把它列為 PS 的 detector input,
+ * 不是獨立的 FP 編號。對應 CT-014。
+ *
+ * CASE-D 的原案:手上有一個 production eval set,可以直接量 Goal 有沒有
+ * 前進,卻只拿它去做 observation,而 observation 量的是別的維度。
+ *
+ * 這個形狀很難自己發現,因為每一次量測都是真的量測、都有數字、都可以
+ * 寫進報告。缺的是「這個數字跟 owner 要的東西有沒有關係」。
+ *
+ * 判準不碰語意:手上有沒有一個宣告為 goal-relevant 的驗證器,
+ * 以及它在這段期間被用了幾次。
+ */
+export function goalRelevantVerificationAvoidance({
+  availableVerifiers = [],
+  verificationRuns = [],
+} = {}) {
+  const goalRelevant = availableVerifiers.filter((v) => v.goal_relevant === true);
+  if (!goalRelevant.length) {
+    return Object.freeze({
+      verdict: 'NO_GOAL_RELEVANT_VERIFIER',
+      is_avoidance: false,
+      /** 手上沒有能直接量 Goal 的東西,不算迴避,是缺工具。 */
+      note: 'No verifier is declared goal-relevant. Not having the tool is a different '
+        + 'problem from having it and not using it.',
+      version: VERSION,
+    });
+  }
+
+  const usedIds = new Set(verificationRuns.map((r) => r.verifier_id));
+  const unused = goalRelevant.filter((v) => !usedIds.has(v.id));
+  const otherRuns = verificationRuns.filter((r) =>
+    !goalRelevant.some((v) => v.id === r.verifier_id));
+
+  const isAvoidance = unused.length > 0 && otherRuns.length > 0;
+  return Object.freeze({
+    verdict: isAvoidance ? 'GOAL_RELEVANT_VERIFICATION_AVOIDANCE' : 'OK',
+    is_avoidance: isAvoidance,
+    available_goal_relevant: Object.freeze(goalRelevant.map((v) => v.id)),
+    unused_goal_relevant: Object.freeze(unused.map((v) => v.id)),
+    other_verification_runs: otherRuns.length,
+    feeds_metric: 'PS',
+    note: isAvoidance
+      ? `${unused.length} goal-relevant verifier(s) went unused while ${otherRuns.length} `
+        + 'other verification(s) ran. Every one of those runs produced a real number; '
+        + 'none of them answered whether the goal moved.'
+      : null,
+    version: VERSION,
+  });
+}
+
+/**
  * §23.1 Progress Honesty Gap。
  *
  * ```
