@@ -80,6 +80,35 @@ function insideRepo(cwd) {
   return c === REPO_ROOT || c.startsWith(REPO_ROOT + sep);
 }
 
+/**
+ * 對外部專案的保護,預設關閉。
+ *
+ * 2026-09-08 擁有者的裁決:先把「監控別的專案」這個能力寫出來,
+ * 但不准讓它自動生效。上次事故的教訓不是門檻設太敏感,是範圍在
+ * 沒有人確認過的情況下自己擴大了 —— 這次不能重蹈覆轍。
+ *
+ * 所以這裡不是 insideRepo() 的替代品,是疊加在它之上的第二條路:
+ * 目標專案必須自己在 `.forseti/config.json` 明確寫
+ * `cross_project_enabled: true` 才算數。檔案不存在、讀不到、
+ * 格式壞掉、或值不是 true(例如字串 "true"),一律當作 false ——
+ * 一個壞掉的設定檔絕不能被解讀成「生效」,那正是安裝腳本
+ * (tools/install.mjs)只會寫 false、要人自己動手改的理由。
+ *
+ * insideRepo() 本身完全不受這個函式影響:Forseti repo 自己的保護
+ * 永遠是無條件的,不看設定、不看環境變數。
+ */
+function crossProjectEnabled(cwd) {
+  if (!cwd) return false;
+  try {
+    const p = join(resolvePath(cwd), '.forseti', 'config.json');
+    if (!existsSync(p)) return false;
+    const cfg = JSON.parse(readFileSync(p, 'utf8'));
+    return cfg.cross_project_enabled === true;
+  } catch {
+    return false;
+  }
+}
+
 
 /**
  * 說話,但不擋。
@@ -242,7 +271,8 @@ async function main() {
   if (!input) OK();
 
   // 邊界最先檢查,在讀任何狀態、建任何目錄之前。
-  if (!insideRepo(process.env.CLAUDE_PROJECT_DIR || input.cwd)) OK();
+  const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+  if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
 
   const { createRuntime } = await import(join(HERE, '..', 'src', 'runtime.js'));
   const rt = createRuntime();

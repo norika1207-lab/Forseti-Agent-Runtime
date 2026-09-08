@@ -254,13 +254,66 @@ t('AT-HOOK-B3 repo 裡面照常運作,邊界不是把功能關掉', () => {
   rmSync(join(repo, '.forseti', 'streak.json'), { force: true });
 });
 
-t('AT-HOOK-B4 邊界不可以靠設定關掉', () => {
+t('AT-HOOK-B4 insideRepo() 本身不可以被設定影響,也不准有無條件繞過開關', () => {
+  // 2026-09-08 之後,repo 自己的保護(insideRepo)跟能不能監控別的專案
+  // (crossProjectEnabled)是兩條分開的路。這條只守前者:Forseti repo
+  // 自己的保護必須永遠是無條件的、寫死的,不能因為任何設定檔而被關掉。
+  // 「允許監控別的專案」不是繞過,是 owner 明確要的新功能,見 B5-B7。
   for (const f of ['forseti-hook.mjs', 'forseti-stop-hook.mjs']) {
     const text = readFileSync(join(HERE, '..', 'hooks', f), 'utf8');
     assert.match(text, /insideRepo\(/, `${f} 要呼叫邊界檢查`);
-    assert.ok(!/insideRepo[\s\S]{0,200}?config\.|allowOutside|SKIP_BOUNDARY/.test(text),
-      `${f} 的邊界不准有繞過開關`);
+    assert.ok(!/allowOutside|SKIP_BOUNDARY/.test(text),
+      `${f} 不准有無條件繞過整條邊界的開關`);
+    // insideRepo 的函式本體(從定義到右大括號)不准提到任何設定或環境變數。
+    const body = text.match(/function insideRepo\([^)]*\)\s*\{[\s\S]*?\n\}/)?.[0] ?? '';
+    assert.ok(body.length > 0, `${f} 要找得到 insideRepo 的函式本體`);
+    assert.ok(!/config|process\.env/.test(body),
+      `${f} 的 insideRepo() 本身不准看設定或環境變數,那是 crossProjectEnabled 的事`);
   }
+});
+
+t('AT-HOOK-B5 跨專案開關預設關閉:沒有設定檔的外部目錄完全不動作', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'forseti-outside-noconf-'));
+  const r = runHook(PRE, write(outside, 'x', join(outside, 'a.js')));
+  assert.equal(r.code, 0);
+  assert.equal(readdirSync(outside).length, 0, '沒開關就不准動,連狀態檔都不建');
+  rmSync(outside, { recursive: true, force: true });
+});
+
+t('AT-HOOK-B6 跨專案開關存在但沒開,外部目錄依然不動作', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'forseti-outside-off-'));
+  mkdirSync(join(outside, '.forseti'), { recursive: true });
+  writeFileSync(join(outside, '.forseti', 'config.json'),
+    JSON.stringify({ cross_project_enabled: false }));
+  const r = runHook(PRE, write(outside, 'x', join(outside, 'a.js')));
+  assert.equal(r.code, 0);
+  assert.deepEqual(readdirSync(join(outside, '.forseti')), ['config.json'],
+    '除了自己寫的設定檔,不該多出任何東西');
+  rmSync(outside, { recursive: true, force: true });
+});
+
+t('AT-HOOK-B6b 壞掉或非布林值的開關,一律當作關閉,不能意外生效', () => {
+  for (const bad of ['{invalid json', JSON.stringify({ cross_project_enabled: 'true' }), '{}']) {
+    const outside = mkdtempSync(join(tmpdir(), 'forseti-outside-bad-'));
+    mkdirSync(join(outside, '.forseti'), { recursive: true });
+    writeFileSync(join(outside, '.forseti', 'config.json'), bad);
+    const r = runHook(PRE, write(outside, 'x', join(outside, 'a.js')));
+    assert.equal(r.code, 0, `payload=${bad}`);
+    assert.deepEqual(readdirSync(join(outside, '.forseti')), ['config.json'], `payload=${bad}`);
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+t('AT-HOOK-B7 設定檔明確寫 cross_project_enabled:true,外部目錄才真的受保護', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'forseti-outside-on-'));
+  mkdirSync(join(outside, '.forseti'), { recursive: true });
+  writeFileSync(join(outside, '.forseti', 'config.json'),
+    JSON.stringify({ cross_project_enabled: true }));
+  const r = runHook(PRE, write(outside, 'x', join(outside, 'a.js')));
+  assert.equal(r.code, 0);
+  assert.ok(existsSync(join(outside, '.forseti', 'state.json')),
+    '明確開啟之後,PostToolUse 要真的記錄狀態');
+  rmSync(outside, { recursive: true, force: true });
 });
 
 // ── 2026-09-08 的迴歸:整晚被擋 ─────────────────────────────

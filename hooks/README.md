@@ -33,7 +33,15 @@ So every internal failure exits 0 and lets the work through. A crash in Forseti 
 
 ## Install
 
-Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`):
+**Never add this to `~/.claude/settings.json`.** That file applies to every
+project on this machine, not just one. On 2026-09-08 that exact mistake
+blocked nine hours of unrelated work with no error and no warning - full
+account in `docs/工程規格書.md` §9.2 and `.claude/README.md`.
+
+### Into this repo itself
+
+Add to **this repo's** `.claude/settings.json` (already committed there -
+you only need this if you deleted it or are setting up a fork):
 
 ```json
 {
@@ -42,7 +50,7 @@ Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`):
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "node /absolute/path/to/forseti/hooks/forseti-hook.mjs" }
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/forseti-hook.mjs\"" }
         ]
       }
     ],
@@ -50,15 +58,36 @@ Add to `~/.claude/settings.json` (or a project's `.claude/settings.json`):
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "node /absolute/path/to/forseti/hooks/forseti-hook.mjs" }
+          { "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/forseti-hook.mjs\"" }
         ]
       }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/forseti-stop-hook.mjs\"" }] }
     ]
   }
 }
 ```
 
 Restart Claude Code. Node 22+, no dependencies to install.
+
+### Into a different project
+
+`insideRepo()` in `forseti-hook.mjs` only ever activates for work done
+inside this Forseti repo, wherever it's cloned - pointing another project's
+settings at these hook files does nothing by itself. To monitor a different
+project:
+
+```bash
+node tools/install.mjs /path/to/that/project
+```
+
+This writes that project's own `.claude/settings.json` (never the user-level
+one - the script refuses if the target resolves to your home directory) and
+a `.forseti/config.json` with `cross_project_enabled: false`. **It does
+nothing yet.** Forseti will not touch that project until you manually edit
+that file and set it to `true` - installing and enabling are two separate,
+both-manual steps on purpose, for the same reason as the warning above.
 
 ### Why PostToolUse is not on `*`
 
@@ -94,10 +123,25 @@ The header always shows what fraction of the weighted signals actually had data 
 
 ## Verifying it works
 
+The `cwd` in the example below must be inside this repo - `insideRepo()`
+exits 0 without doing anything for any path outside it, silently. A path
+like `/tmp/fh` will make this example print nothing and exit 0 on both
+calls, which looks like success but has verified nothing.
+
 ```bash
-rm -rf /tmp/fh && \
-echo '{"hook_event_name":"PostToolUse","session_id":"A","cwd":"/tmp/fh","tool_name":"Write","tool_input":{"file_path":"/tmp/x.js"}}' | node hooks/forseti-hook.mjs && \
-echo '{"hook_event_name":"PreToolUse","session_id":"B","cwd":"/tmp/fh","tool_name":"Write","tool_input":{"file_path":"/tmp/x.js"}}' | node hooks/forseti-hook.mjs
+FH=$(mktemp -d "$(pwd)/.tmp-verify-XXXXXX") && \
+echo "{\"hook_event_name\":\"PostToolUse\",\"session_id\":\"A\",\"cwd\":\"$FH\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$FH/x.js\"}}" | node hooks/forseti-hook.mjs && \
+echo "{\"hook_event_name\":\"PreToolUse\",\"session_id\":\"B\",\"cwd\":\"$FH\",\"tool_name\":\"Write\",\"tool_input\":{\"file_path\":\"$FH/x.js\"}}" | node hooks/forseti-hook.mjs; \
+rm -rf "$FH"
 ```
 
-The second call should exit 2 and print a message naming session A.
+The second call should exit 0 and print a `systemMessage` naming session A -
+not exit 2. As of the 2026-09-08 fix (§9.2 of `docs/工程規格書.md`), a
+collision only reaches `exit(2)` if `intervention.js`'s `canIntervene`
+grants `BLOCK_HIGH_RISK`, which requires a hard prerequisite to be unknown
+or refuted. A same-file collision alone never supplies that - it's a
+probability, not a missing prerequisite - so this call speaks and lets the
+write through every time. That is intentional, not a bug: see `hooks/forseti-hook.mjs`'s
+own comment on the incident this replaced. This file said "should exit 2"
+for a while after that fix landed and nobody had re-run this example to
+notice it no longer matched.

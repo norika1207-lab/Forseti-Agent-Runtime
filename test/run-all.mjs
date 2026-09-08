@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 // hooks.e2e 是唯一一支開真程序、看 exit code 的:
 // 前面全部加起來都不能證明裝上去之後它會開口。Stop hook 就是
 // 單元測試全過、實際裝上去一次都不會擋的活例子。
-const suites = ['conformance', 'signals', 'yield', 'windows', 'rescue', 'followthrough', 'scope', 'baseline', 'overhead', 'rhetoric', 'intervention', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'runtime', 'integration', 'acceptance', 'hooks.e2e', 'spec-v0.1'];
+const suites = ['conformance', 'signals', 'yield', 'windows', 'rescue', 'followthrough', 'scope', 'baseline', 'overhead', 'rhetoric', 'intervention', 'artifact', 'capture', 'shell', 'adapter-claude-code', 'imports', 'cost', 'capsule', 'admission', 'coverage', 'handoff', 'persist', 'drift', 'provenance', 'heartbeat', 'thermometer', 'runtime', 'integration', 'acceptance', 'hooks.e2e', 'install', 'spec-v0.1'];
 let bad = 0;
 for (const s of suites) {
   console.log(`\n──── ${s} ────`);

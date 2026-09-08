@@ -51,6 +51,23 @@ function insideRepo(cwd) {
   return c === REPO_ROOT || c.startsWith(REPO_ROOT + sep);
 }
 
+/**
+ * 對外部專案的保護,預設關閉。完整理由見 forseti-hook.mjs 同名函式的註解 ——
+ * 兩份保持一致,是刻意留著的重複,不是漏改;test/hooks.e2e.test.mjs 的
+ * AT-HOOK-B4 逐一比對兩個檔案,兩邊不一致會被抓到。
+ */
+function crossProjectEnabled(cwd) {
+  if (!cwd) return false;
+  try {
+    const p = join(resolvePath(cwd), '.forseti', 'config.json');
+    if (!existsSync(p)) return false;
+    const cfg = JSON.parse(readFileSync(p, 'utf8'));
+    return cfg.cross_project_enabled === true;
+  } catch {
+    return false;
+  }
+}
+
 process.on('uncaughtException', OK);
 process.on('unhandledRejection', OK);
 
@@ -75,7 +92,8 @@ async function main() {
   if (!input || input.hook_event_name !== 'Stop') OK();
 
   // 邊界最先檢查,在讀任何狀態、建任何目錄之前。
-  if (!insideRepo(process.env.CLAUDE_PROJECT_DIR || input.cwd)) OK();
+  const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+  if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
 
   const cwd = input.cwd;
   const led = load(cwd);
