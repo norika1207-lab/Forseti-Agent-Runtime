@@ -125,6 +125,23 @@ import {
 import {
   aggregate, shouldSurface, warningStorm, governanceOverhead, incidentSummary,
 } from './incident.js';
+import {
+  REGISTRY as PRIMITIVE_REGISTRY, ucwe, evidenceIndependenceCollapse,
+  findingToAchievement, statePromotionWithoutGate, unsupportedCausalCompletion,
+  unauthorizedConstraintExpansion, prematureClosure, mechanismAttributionSubstitution,
+  samplingToPopulationInflation, correctionAbsorptionFailure,
+  invalidatedNarrativePersistence,
+} from './primitives.js';
+import { compositeRisk, trend as riskTrend, reading as riskReading } from './risk.js';
+import {
+  buildChallenge, shouldChallenge, crossCheck, semanticReadAllowed,
+} from './challenge.js';
+import { createGraph, reconstructSubstitutionPath } from './topology.js';
+import {
+  chooseIntervention, buildRecoveryCapsule, rescueCard,
+  selectHealthyContext, verifyFirstResumedAction,
+} from './recovery.js';
+import { correctionBurden, collaborationDegradation } from './collaboration.js';
 
 /**
  * 建一個 runtime。
@@ -1822,6 +1839,120 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         governance_overhead: governanceOverhead({
           interruptionTimeMs, activeWorkTimeMs, userTriageDecisions,
         }),
+      });
+    },
+
+    /** 二十五個 primitive 的清單,含每一個做在哪個模組。 */
+    primitives() {
+      return PRIMITIVE_REGISTRY;
+    },
+
+    /**
+     * 剩下十一個 primitive 的入口。集中在一個方法,是因為它們的輸入
+     * 各自不同,而分成十一個 runtime 方法只會讓接手的人記不住。
+     */
+    detect(primitiveId, args = {}) {
+      const table = {
+        'FP-01': ucwe,
+        'FP-05': evidenceIndependenceCollapse,
+        'FP-10': findingToAchievement,
+        'FP-11': statePromotionWithoutGate,
+        'FP-14': unsupportedCausalCompletion,
+        'FP-15': unauthorizedConstraintExpansion,
+        'FP-16': prematureClosure,
+        'FP-18': mechanismAttributionSubstitution,
+        'FP-19': samplingToPopulationInflation,
+        'FP-21': correctionAbsorptionFailure,
+        'FP-22': invalidatedNarrativePersistence,
+      };
+      const fn = table[primitiveId];
+      if (!fn) {
+        const known = PRIMITIVE_REGISTRY.find((p) => p.id === primitiveId);
+        throw new TypeError(known
+          ? `${primitiveId} (${known.code}) is implemented in ${known.implemented_in}, not here.`
+          : `Unknown primitive: ${primitiveId}.`);
+      }
+      return fn(args);
+    },
+
+    /**
+     * P10:composite risk 加 trend。
+     *
+     * FS-RSK-001:R 跟 EvidenceCoverage 一起回,不可分開引用。
+     */
+    risk(metrics = [], history = [], opts = {}) {
+      return riskReading(metrics, history, opts);
+    },
+
+    /** P9:要不要問,以及問什麼。FS-CHL-001 禁止的問法會被擋下。 */
+    challenge(args = {}) {
+      const decision = shouldChallenge(args);
+      return Object.freeze({
+        decision,
+        challenge: decision.challenge ? buildChallenge({ triggerReason: decision.reason }) : null,
+      });
+    },
+
+    /** P9:把回答跟可觀測的東西對照。答得好不影響結論。 */
+    crossCheckChallenge(answers, observed) {
+      return crossCheck(answers, observed);
+    },
+
+    /** §10:這個階段准不准讀語意。 */
+    semanticReadAllowed(args) {
+      return semanticReadAllowed(args);
+    },
+
+    /** P8:開一張拓撲圖。看不到的關係要標 UNKNOWN_EDGE 並說明原因。 */
+    graph() {
+      return createGraph();
+    },
+
+    /** P8:重建一條框架替換的路徑。 */
+    reconstructPath(graph, args) {
+      return reconstructSubstitutionPath(graph, args);
+    },
+
+    /** P12:選一個介入等級。預設 observe-first,硬擋預設關閉。 */
+    intervention(args) {
+      return chooseIntervention(args);
+    },
+
+    /**
+     * §17:做一個 recovery capsule。
+     *
+     * 失效的敘事不會被帶走,而且會被列出來讓人看見它留在原地。
+     */
+    recoveryCapsule(args) {
+      return buildRecoveryCapsule(args);
+    },
+
+    /** §17:給人看的那一張卡。一個方案,不是一堆告警。 */
+    rescueCard(capsule, args) {
+      return rescueCard(capsule, args);
+    },
+
+    /** P13:挑給下一個 session 的 context。不是拿最新的。 */
+    selectContext(fragments) {
+      return selectHealthyContext(fragments);
+    },
+
+    /** §28.5:successor 的第一個動作驗過了沒。 */
+    verifyResume(args) {
+      return verifyFirstResumedAction(args);
+    },
+
+    /**
+     * §13:協作有沒有翻過來,使用者是不是變成 QA。
+     *
+     * 這個方法不接受任何情緒輸入,連參數都沒有。量的是 corrective labor,
+     * 不是使用者的心情(FS-MET-CB-001)。
+     */
+    collaboration({ events = [], autonomousVerifiedProgress = null, cbWindows = [],
+      underDeliverySignals = [], ...rest } = {}) {
+      return Object.freeze({
+        correction_burden: correctionBurden({ events, autonomousVerifiedProgress }),
+        degradation: collaborationDegradation({ cbWindows, underDeliverySignals, ...rest }),
       });
     },
 
