@@ -14,6 +14,30 @@ Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
 ---
 
+## Read this before you trust it
+
+The author of this tool made seventeen of the mistakes it exists to catch, while building it.
+
+That is not automatically damning. A drift detector whose author never drifted would be a detector with no evidence behind it. What matters is who caught each one.
+
+Fourteen of the seventeen were caught by the tooling or the tests. Three were caught by the owner. But that ratio flatters the tool, because most of the seventeen are ordinary programming errors, not the class of failure Forseti is about. Narrow it to the five that actually fall in its target domain:
+
+| # | What happened | Shape | Caught by |
+|---|---|---|---|
+| 5 | "Three implemented plus four out of scope is seven" — used arithmetic to paper over one shape that was neither | scope inflation | the owner |
+| 9 | Documentation stated "zero orphan modules" while two existed | unverified stated as verified | the tooling |
+| 13 | The Stop hook was installed and could never fire; every declaration resolved as uncheckable | false progress | the tests |
+| 14 | The north star was never committed, so drift detection was silently off after a move | false progress | the tests |
+| 16 | Scope expanded, without consent, from one session to every session on the owner's machine | drift | the owner |
+
+The three the tooling caught had not hurt anyone yet. The one that cost nine hours of the owner's overnight work was caught by the owner.
+
+**So the honest claim is narrow: this catches its own blind spots, not its own overreach.** For it to be described as an instrument you can hold up to an agent, it has to catch one act of overreach the author did not already know about. It has not done that yet.
+
+The full log is in [docs/工程規格書.md](docs/工程規格書.md) §6.1, one row per mistake, including the ones that make this project look bad. A shorter list would be the same failure as row 5.
+
+---
+
 ## The problem
 
 Multi-agent AI coding breaks in ways single-agent coding does not.
