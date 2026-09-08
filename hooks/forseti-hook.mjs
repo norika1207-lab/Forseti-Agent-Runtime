@@ -13,8 +13,26 @@
  * A hook that gets in the way gets uninstalled, and an uninstalled guard
  * protects nobody. So: any internal failure exits 0 and lets the work
  * through. A crash in Forseti must never become a crash in someone's
- * editor. The only non-zero exit is a deliberate, explained decision
- * about a real conflict.
+ * editor.
+ *
+ * ── 2026-09-08:這裡曾經直接擋人,擋了一個晚上 ──────────────────
+ *
+ * 這個檔案原本有三個 process.exit(2),一個都沒有問過 intervention.js
+ * 的 canIntervene —— 而那個模組存在的唯一理由就是回答「這種程度可不可以
+ * 擋人」。它的答案一直都是對的:只有溫度高的時候,六個介入動作裡它只放行
+ * QUIET_ANNOTATION,包含 BLOCK_HIGH_RISK 在內的其他五個全部拒絕,理由是
+ * 「A high temperature alone is never sufficient」。
+ *
+ * 沒問的代價:裝上去之後,一個只寫著某個專案路徑的 scope 對整台機器每一個
+ * 目錄生效,擁有者其他所有工作連續寫五個檔就被 deny 一次,而 streak 不會
+ * 自己清掉。整整九個小時。留下的證據是 streak.json 的
+ * total_checked: 12, total_off: 8。
+ *
+ * 這違反的是規格書自己第 9 條:MUST NOT block low-risk normal work solely
+ * because a heuristic score is elevated。系統裡有一個模組專門守這條,
+ * 而唯一真的會擋人的程式碼沒有接上它。
+ *
+ * 現在:每一個攔截點都要先過 gate()。閘門說只能安靜標註,就只說話,exit 0。
  *
  * ── What it does ────────────────────────────────────────────────────
  *
@@ -31,12 +49,52 @@
  * State lives in one JSON file per project, because each hook invocation
  * is a fresh process with no memory of the last one.
  */
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OK = () => process.exit(0);
+
+/**
+ * 說話,但不擋。
+ *
+ * 規格書 §8.4 的設計目標是 OBSERVE 99% / INTERRUPT 1%。這個函式是那個
+ * 99% 的實作:把觀察到的事講出來,然後讓工作過去。
+ *
+ * 只走 systemMessage 與 stderr,兩個都是給人看的。
+ *
+ * 這裡原本還寫了 additionalContext,那個欄位會把文字接進被觀測對象的
+ * prompt —— 正是規格書 §8.4 的「MUST be external to the model prompt」
+ * 與 §9.1 的 observer-effect prohibition 禁止的事。持續改動被觀測的
+ * context,量到的就不再是原本那個東西。
+ *
+ * 那行是修「擋整晚」的時候順手加的,十分鐘後被規格測試第 26 條抓到。
+ * 寫的時候的念頭是「要讓訊息看得到」,而那個念頭直接壓過了規格。
+ *
+ * 【輸出格式未實測。】要驗證宿主怎麼呈現這段文字,得把 hook 裝回全域,
+ * 而那件事現在不做。無論如何都 exit 0。
+ */
+function speak(text) {
+  try {
+    process.stdout.write(JSON.stringify({ systemMessage: text }));
+    process.stderr.write(text + '\n');
+  } catch { /* 說不出話也不能擋人 */ }
+  process.exit(0);
+}
+
+/**
+ * 問閘門:這種程度可不可以擋人。
+ *
+ * ctx 裡刻意不放溫度。溫度高從來不是擋人的理由,而把它放進來只會製造
+ * 「調高門檻就可以擋」的錯覺。要擋人只有一條路:證明有一個硬前提是未知的,
+ * 而那要拿得出證據,不是算得出分數。
+ */
+async function gate(ctx) {
+  const { canIntervene } = await import(join(HERE, '..', 'src', 'intervention.js'));
+  return canIntervene('BLOCK_HIGH_RISK', ctx);
+}
 
 // Anything unexpected: get out of the way.
 process.on('uncaughtException', OK);
@@ -119,6 +177,36 @@ function saveState(rt, path) {
 const WRITE_TOOLS = /^(Write|Edit|MultiEdit|NotebookEdit)$/;
 
 /**
+ * 超過這個大小就只記大小,不算指紋。
+ * 【1 MB 沒有實測校準。】算指紋要把整個檔案讀進來,而這段程式跑在
+ * 每一次寫檔的路徑上。讀一個大檔的成本會直接變成使用者的等待。
+ */
+const MAX_HASH_BYTES = 1024 * 1024;
+
+/**
+ * 事件當下的輕量證據:大小與內容指紋。
+ *
+ * 規格書 §9 要求前向採集在事件當下就留下 path、size、hash、timestamps、
+ * exit code。這三樣裡只有 path 跟 timestamp 是事後還問得到的;檔案被改過、
+ * 被覆寫、被刪掉之後,當時的大小與指紋就永遠沒有了 —— 而那正是判斷一個
+ * 宣稱有沒有兌現的憑據。所以要在這裡量,不是之後補。
+ *
+ * 量不到就回 null。不填 0:零位元組是一個事實,拿不到是另一回事。
+ */
+function evidenceFor(file) {
+  try {
+    const st = statSync(file);
+    if (!st.isFile()) return { bytes: null, hash: null };
+    const hash = st.size <= MAX_HASH_BYTES
+      ? createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 16)
+      : null;
+    return { bytes: st.size, hash };
+  } catch {
+    return { bytes: null, hash: null };
+  }
+}
+
+/**
  * 多久算「同時」。
  * 【15 秒沒有實測校準】,跟 admission.js 用同一個值,理由也一樣:
  * 它是個保守的起點,不是量出來的。太寬會一直誤攔,太窄會漏掉真的撞車。
@@ -162,11 +250,9 @@ async function main() {
         const out = check(file, scope, loadStreak(input.cwd));
         saveStreak(input.cwd, out.streak);
         if (out.notice) {
-          process.stderr.write(JSON.stringify({
-            hookSpecificOutput: { permissionDecision: 'ask' },
-            systemMessage: 'Forseti: ' + out.notice.text,
-          }));
-          process.exit(2);
+          // 離題不是硬前提未知,所以閘門不會放行擋人,連問都不必問。
+          // 這正是擋掉擁有者一整晚的那一段。
+          speak('Forseti: ' + out.notice.text);
         }
       }
       OK();
@@ -176,19 +262,35 @@ async function main() {
       const who = others
         .map((o) => `${String(o.agent_id).slice(0, 8)} (${o.seconds_ago.toFixed(0)}s ago)`)
         .join(', ');
-      process.stderr.write(JSON.stringify({
-        hookSpecificOutput: { permissionDecision: 'ask' },
-        systemMessage:
-          `Forseti: another session wrote ${file} within the last ${WINDOW_MS / 1000}s - ${who}. ` +
-          'Your write may overwrite theirs. This is a lower bound: writes made through opaque shell ' +
-          'commands are invisible here.',
-      }));
-      process.exit(2);
+      const text =
+        `Forseti: another session wrote ${file} within the last ${WINDOW_MS / 1000}s - ${who}. `
+        + 'Your write may overwrite theirs. This is a lower bound: writes made through opaque shell '
+        + 'commands are invisible here.';
+
+      // 撞車是這裡面最接近「該擋」的一個,所以它要真的去問,不是自己決定。
+      // 閘門要的是硬前提未知,而「可能撞車」是機率不是前提,所以它會拒絕。
+      // 拒絕的時候把理由一起講出來,不要讓人以為 Forseti 沒看到。
+      const g = await gate({ collision: true, other_sessions: others.length });
+      if (g.allowed) {
+        process.stderr.write(JSON.stringify({
+          hookSpecificOutput: { permissionDecision: 'deny' },
+          systemMessage: text + ' Blocked: ' + g.requires,
+        }));
+        process.exit(2);
+      }
+      speak(text);
     }
     OK();
   }
 
   if (input.hook_event_name === 'PostToolUse') {
+    const file = input.tool_input?.file_path;
+    if (file && WRITE_TOOLS.test(String(input.tool_name))) {
+      Object.assign(event, evidenceFor(file));
+    }
+    if (typeof input.tool_response?.exit_code === 'number') {
+      event.exit_code = input.tool_response.exit_code;
+    }
     rt.ingest([event]);
     saveState(rt, path);
     OK();

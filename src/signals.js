@@ -221,7 +221,33 @@ export const WEIGHTS = Object.freeze({
  * 二,沒量到的訊號不當成 0。它們被排除在分子與分母之外,
  *   而且 measured_weight 會告訴你這個分數是用多少比重的資料算出來的。
  *   用 0 頂替沒量到的訊號,會讓一個什麼都沒接的系統得到滿分健康。
+ *
+ * 三,量到的太少時,燈號要封頂。
+ *
+ *   第二條只防了一個方向。反方向一樣壞,而且更容易發生:只有一個
+ *   佔 6% 權重的訊號有值,加權平均就是那個值本身,於是 S9(取消壓力)
+ *   拉滿一個就得到 temperature 1.0 與 CRITICAL。規格書 §0.2 明文寫著
+ *   「MUST NOT classify anger, profanity, or frustration alone as model
+ *   failure」,而 S9 與 S6 正是使用者中斷與更正的量。只憑它們亮紅燈,
+ *   就是規格書禁止的那件事。
+ *
+ *   這是對照規格書逐條驗的時候抓到的,不是寫的時候想到的。同一個模組的
+ *   註解早就寫了「不能讓沒接東西的系統得到滿分健康」,卻沒有想到反過來
+ *   一樣要防。
+ *
+ *   temperature 本身照舊是已測訊號的加權平均,那個數字沒有錯。封頂的是
+ *   state,因為 state 是要給人看的燈號,而燈號要對得起它宣稱的代表性。
  */
+/**
+ * 低於這個比重就不准亮警報燈。
+ * 【0.5 沒有實測校準。】它跟下面 note 的門檻是同一個數字,刻意不另創一個 ——
+ * 「這個讀數不可信」跟「這個讀數不可以拿來報警」本來就該是同一條線。
+ */
+export const MIN_WEIGHT_FOR_ALARM = 0.5;
+
+/** 代表性不足時,燈號最高只能到這一級。 */
+const CAPPED_STATE = 'WATCH';
+
 export function composite(signals, config = {}) {
   const w = { ...WEIGHTS, ...(config.weights ?? {}) };
   const list = signals ?? [];
@@ -248,16 +274,26 @@ export function composite(signals, config = {}) {
   }
   const t = clamp01(num / den);
   contrib.sort((a, b) => b.contribution - a.contribution);
+  const measured = den / totalWeight;
+  const raw = stateOf(t);
+  const thin = measured < (config.minWeightForAlarm ?? MIN_WEIGHT_FOR_ALARM);
+  const capped = thin && STATES.indexOf(raw) > STATES.indexOf(CAPPED_STATE);
   return Object.freeze({
     temperature: t,
-    state: stateOf(t),
+    state: capped ? CAPPED_STATE : raw,
+    /** 沒封頂時跟 state 一樣。封頂時這裡是原始燈號,不藏起來。 */
+    uncapped_state: raw,
+    state_capped: capped,
     /** 這個分數是用多少比重的資料算出來的。低就代表它不可信。 */
-    measured_weight: den / totalWeight,
+    measured_weight: measured,
     top_contributors: Object.freeze(contrib.slice(0, 3).map(Object.freeze)),
     unmeasured: Object.freeze(list.filter((s) => s.value === null).map((s) => s.id)),
-    note: den / totalWeight < 0.5
-      ? 'Fewer than half the weighted signals were measurable; treat this number as indicative only.'
-      : null,
+    note: capped
+      ? `Only ${(measured * 100).toFixed(0)}% of the weighted signals were measurable, so the reading `
+        + `is held at ${CAPPED_STATE} instead of ${raw}. A handful of measured signals cannot carry an alarm.`
+      : (thin
+        ? 'Fewer than half the weighted signals were measurable; treat this number as indicative only.'
+        : null),
     version: VERSION,
   });
 }

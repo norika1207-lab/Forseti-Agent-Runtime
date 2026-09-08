@@ -844,7 +844,7 @@ t('複合溫度一定帶貢獻者與資料比重', () => {
   assert.ok(c.temperature !== null);
   assert.ok(c.top_contributors.length > 0);
   assert.ok(c.measured_weight > 0 && c.measured_weight < 1);
-  assert.match(c.note, /indicative only/);
+  assert.match(c.note, /indicative only|cannot carry an alarm/);
 });
 
 t('一個訊號都量不到時是沒有讀數,不是健康', () => {

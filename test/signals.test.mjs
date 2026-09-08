@@ -149,7 +149,7 @@ t('用了多少比重的資料算出來的,要看得到', () => {
 });
 
 t('資料不到一半時要標明這個數字只能參考', () =>
-  assert.match(composite(measured()).note, /indicative only/));
+  assert.match(composite(measured()).note, /indicative only|cannot carry an alarm/));
 
 t('一個訊號都量不到時是「沒有讀數」,不是「健康」', () => {
   const c = composite([s1ToolOccupancy({}), s7ProgressStagnation({})]);
@@ -202,6 +202,34 @@ t('三條貫穿規則寫在原始碼裡,不可被靜默刪除', () => {
 t('權重是暫定的這件事寫在原始碼裡', () => {
   const src = readFileSync(new URL('../src/signals.js', import.meta.url), 'utf8');
   assert.ok(/provisional|暫定/.test(src));
+});
+
+t('只有一兩個訊號有值時,燈號要封頂', () => {
+  // 規格書 §0.2:MUST NOT classify anger, profanity, or frustration alone
+  // as model failure。S9 是取消壓力,S6 是更正負擔,都是使用者那一側的量。
+  // 原本只有 S9=1 就會得到 temperature 1.0 與 CRITICAL,而它只佔 6% 權重。
+  for (const id of ['S9', 'S6']) {
+    const r = composite([{ id, value: 1 }]);
+    assert.equal(r.temperature, 1, '加權平均本身沒有錯,不要動它');
+    assert.equal(r.uncapped_state, 'CRITICAL', '原始燈號不藏起來');
+    assert.equal(r.state, 'WATCH', `${id} 單獨拉滿不准亮到紅燈`);
+    assert.equal(r.state_capped, true);
+    assert.match(r.note, /cannot carry an alarm/);
+  }
+});
+
+t('量到夠多的時候,該紅就要紅', () => {
+  const many = ['S1', 'S2', 'S4', 'S5', 'S7', 'S8'].map((id) => ({ id, value: 0.9 }));
+  const r = composite(many);
+  assert.ok(r.measured_weight >= 0.5);
+  assert.equal(r.state_capped, false, '資料夠就不該封頂');
+  assert.equal(r.state, 'CRITICAL', '封頂不是把警報關掉');
+});
+
+t('封頂只壓燈號,不壓數字', () => {
+  const r = composite([{ id: 'S9', value: 1 }]);
+  assert.equal(r.temperature, 1);
+  assert.notEqual(r.state, r.uncapped_state);
 });
 
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);

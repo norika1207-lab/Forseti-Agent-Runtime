@@ -13,7 +13,7 @@
  * 一個誤攔的 hook 會被拔掉,而被拔掉的守衛保護不了任何人。
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,15 +63,13 @@ const about = (cwd, session, file) => ({
 
 // ── 撞車 ──────────────────────────────────────────────────────
 
-t('AT-HOOK-01 另一個 session 剛寫過同一個檔,會擋', () => {
+t('AT-HOOK-01 另一個 session 剛寫過同一個檔,會講但不擋', () => {
   const dir = sandbox();
   runHook(PRE, write(dir, 'session-aaaaaaaa', '/p/shared.js'));
   const r = runHook(PRE, about(dir, 'session-bbbbbbbb', '/p/shared.js'));
-  assert.equal(r.code, 2, `預期 exit 2,得到 ${r.code}`);
-  const out = JSON.parse(r.stderr);
-  assert.equal(out.hookSpecificOutput.permissionDecision, 'ask');
-  assert.match(out.systemMessage, /another session wrote/);
-  assert.match(out.systemMessage, /session-/, '訊息要指出是誰');
+  assert.equal(r.code, 0, '撞車是機率不是硬前提,閘門不放行擋人');
+  assert.match(r.stderr, /another session wrote/, '不擋不等於不說');
+  assert.match(r.stderr, /session-/, '訊息要指出是誰');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -101,17 +99,18 @@ t('AT-HOOK-04 離題一兩次不出聲,連續五次才擋', () => {
   for (let i = 1; i <= 5; i += 1) {
     codes.push(runHook(PRE, about(dir, 's', `/elsewhere/other${i}.js`)).code);
   }
-  assert.deepEqual(codes.slice(0, 4), [0, 0, 0, 0], '前四次必須安靜');
-  assert.equal(codes[4], 2, '第五次才該開口');
+  assert.deepEqual(codes, [0, 0, 0, 0, 0], '從頭到尾都不准擋');
+  const last = runHook(PRE, about(dir, 's', '/elsewhere/other6.js'));
+  assert.match(last.stderr, /scope/i, '不擋,但要開口');
   rmSync(dir, { recursive: true, force: true });
 });
 
 t('AT-HOOK-05 離題的提醒要帶著北極星,不然擋了也沒用', () => {
   const dir = sandbox(GOAL);
   let last;
-  for (let i = 0; i < 5; i += 1) last = runHook(PRE, about(dir, 's', `/elsewhere/x${i}.js`));
-  const out = JSON.parse(last.stderr);
-  assert.match(out.systemMessage, /聚焦完成 Forseti/, '提醒必須複述目標');
+  for (let i = 0; i < 6; i += 1) last = runHook(PRE, about(dir, 's', `/elsewhere/x${i}.js`));
+  assert.equal(last.code, 0);
+  assert.match(last.stderr, /聚焦完成 Forseti/, '提醒必須複述目標');
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -141,11 +140,11 @@ t('AT-HOOK-07b 專案裡沒有北極星時,讀使用者家目錄的', () => {
   const home = sandbox(GOAL);          // 北極星放在「家目錄」
   const elsewhere = sandbox();         // 工作目錄自己沒有
   let last;
-  for (let i = 0; i < 5; i += 1) {
+  for (let i = 0; i < 6; i += 1) {
     last = runHook(PRE, about(elsewhere, 's', `/way/off/${i}.js`), { HOME: home });
   }
-  assert.equal(last.code, 2, '離開專案目錄之後偵測不該就此關機');
-  assert.match(JSON.parse(last.stderr).systemMessage, /聚焦完成 Forseti/);
+  assert.equal(last.code, 0, '在別人的目錄裡更不准擋');
+  assert.match(last.stderr, /聚焦完成 Forseti/, '離開專案目錄之後偵測不該就此關機');
   rmSync(home, { recursive: true, force: true });
   rmSync(elsewhere, { recursive: true, force: true });
 });
@@ -154,8 +153,9 @@ t('AT-HOOK-07c 專案的北極星蓋過家目錄的', () => {
   const home = sandbox({ north_star: '家目錄的目標', scope: ['/nowhere'] });
   const proj = sandbox({ north_star: '專案自己的目標', scope: ['/nowhere'] });
   let last;
-  for (let i = 0; i < 5; i += 1) last = runHook(PRE, about(proj, 's', `/x/${i}.js`), { HOME: home });
-  assert.match(JSON.parse(last.stderr).systemMessage, /專案自己的目標/);
+  for (let i = 0; i < 6; i += 1) last = runHook(PRE, about(proj, 's', `/x/${i}.js`), { HOME: home });
+  assert.equal(last.code, 0);
+  assert.match(last.stderr, /專案自己的目標/);
   rmSync(home, { recursive: true, force: true });
   rmSync(proj, { recursive: true, force: true });
 });
@@ -166,23 +166,23 @@ function ledger(dir, open) {
   writeFileSync(join(dir, '.forseti', 'declarations.json'), JSON.stringify({ open, blockedAt: null }));
 }
 
-t('AT-HOOK-08 宣告了具體檔案然後零動作就結束,會擋', () => {
+t('AT-HOOK-08 宣告了具體檔案然後零動作就結束,會講但不擋', () => {
   const dir = sandbox();
   ledger(dir, [{ turn: 1, what: '修 imports.js 的路徑解析', targets: ['/p/imports.js'], at: Date.now() }]);
   const r = runHook(STOP, { hook_event_name: 'Stop', cwd: dir });
-  assert.equal(r.code, 2, `預期 exit 2,得到 ${r.code}`);
+  assert.equal(r.code, 0, '「你不做完不准停」會把該停下來問人的情況也擋掉');
   assert.match(r.stderr, /imports\.js/);
-  assert.match(r.stderr, /declared this session with no matching action/);
+  assert.match(r.stderr, /not a block/, '要明說這是觀察不是攔阻');
   rmSync(dir, { recursive: true, force: true });
 });
 
-t('AT-HOOK-09 同一輪不會擋第二次', () => {
+t('AT-HOOK-09 連續結束回合都不會擋', () => {
   const dir = sandbox();
   ledger(dir, [{ turn: 1, what: '做某事', targets: ['/p/a.js'], at: Date.now() }]);
   const first = runHook(STOP, { hook_event_name: 'Stop', cwd: dir });
   const second = runHook(STOP, { hook_event_name: 'Stop', cwd: dir });
-  assert.equal(first.code, 2);
-  assert.equal(second.code, 0, '連擋兩次就變成「不做完不准停」');
+  assert.equal(first.code, 0);
+  assert.equal(second.code, 0);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -200,6 +200,57 @@ t('AT-HOOK-11 沒有任何未結宣告時保持安靜', () => {
   assert.equal(r.code, 0);
   assert.equal(r.stderr, '');
   rmSync(dir, { recursive: true, force: true });
+});
+
+// ── 2026-09-08 的迴歸:整晚被擋 ─────────────────────────────
+
+t('AT-HOOK-R1 重現整晚被擋的那個場景,一次都不准 deny', () => {
+  // 事發經過:家目錄的 goal.json 只寫著某一個專案的路徑,
+  // 而 hook 的 fallback 讓那個 scope 對整台機器每一個目錄生效。
+  // 擁有者其他所有工作,連續寫五個檔就被 deny 一次,streak 不會自己清掉。
+  // 九個小時。留下的證據是 streak.json 的 total_checked:12, total_off:8。
+  //
+  // 這條測試守的是:不管離題多少次,都不准回非零。
+  const home = sandbox({ north_star: '只做專案 A', scope: ['/proj/a'] });
+  const work = sandbox();
+  const codes = [];
+  for (let i = 0; i < 30; i += 1) {
+    codes.push(runHook(PRE, about(work, 'night-shift', `/proj/b/file${i}.js`), { HOME: home }).code);
+  }
+  assert.deepEqual(codes, Array(30).fill(0), `30 次全部要放行,實際:${[...new Set(codes)].join(',')}`);
+  rmSync(home, { recursive: true, force: true });
+  rmSync(work, { recursive: true, force: true });
+});
+
+t('AT-HOOK-R2 撞車也不准 deny,除非閘門真的放行', async () => {
+  // 閘門要的是「授權、授權範圍或安全性的硬前提未知」。
+  // 撞車是機率,不是前提,所以它拿不到放行。
+  const { canIntervene } = await import('../src/intervention.js');
+  const g = canIntervene('BLOCK_HIGH_RISK', { collision: true, other_sessions: 3 });
+  assert.equal(g.allowed, false, '撞車不該拿得到硬擋的許可');
+  const dir = sandbox();
+  runHook(PRE, write(dir, 'a', '/p/hot.js'));
+  for (let i = 0; i < 5; i += 1) {
+    assert.equal(runHook(PRE, about(dir, 'b', '/p/hot.js')).code, 0, '連續撞車也不准擋');
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
+
+t('AT-HOOK-R3 三個 hook 的原始碼裡不准有沒問過閘門的 exit(2)', () => {
+  for (const f of ['forseti-hook.mjs', 'forseti-stop-hook.mjs']) {
+    // 先把註解換成等長的空行,不然這條會抓到解釋這件事的註解本身。
+    const text = readFileSync(join(HERE, '..', 'hooks', f), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/^([^\n]*?)\/\/[^\n]*$/gm, (m, keep) => keep);
+    const lines = text.split('\n');
+    lines.forEach((line, i) => {
+      if (!/process\.exit\(2\)/.test(line)) return;
+      // 往上找 15 行,必須看得到閘門
+      const before = lines.slice(Math.max(0, i - 15), i).join('\n');
+      assert.match(before, /g\.allowed|gate\(/,
+        `${f}:${i + 1} 有一個沒問過閘門的 exit(2)。這正是擋掉擁有者一整晚的那種寫法。`);
+    });
+  }
 });
 
 // ── 壞掉的時候要讓路 ──────────────────────────────────────────

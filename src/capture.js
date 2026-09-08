@@ -75,10 +75,14 @@ export const DEFAULT_CONFIG = Object.freeze({
  * @param {string} p.action          READ | WRITE | SEARCH | OTHER
  * @param {string} p.file_path
  * @param {boolean} p.partial        讀取是否只讀了一部分
+ * @param {number|null} p.bytes      事件當下的檔案大小。拿不到就 null,不要填 0。
+ * @param {string|null} p.hash       事件當下的內容指紋。同上。
+ * @param {number|null} p.exit_code  指令的結束碼。同上。
  */
 export function createEvent({
   at, agent_id, agent_label = null, session_id = null,
   tool, action, file_path, partial = false,
+  bytes = null, hash = null, exit_code = null,
 } = {}) {
   if (!ACTIONS.includes(action)) {
     throw new TypeError(`Unrecognised action: ${String(action)}. Valid values: ${ACTIONS.join(' / ')}`);
@@ -89,6 +93,21 @@ export function createEvent({
   }
   return Object.freeze({
     at, agent_id, agent_label, session_id, tool, action, file_path, partial,
+    /**
+     * 規格書 §9 要求前向採集在事件當下就留下輕量證據:
+     * path、size、hash、timestamps、exit code。
+     *
+     * 原本只有 path 跟 timestamp。少掉的那三個是「事後就再也拿不回來」
+     * 的那種:檔案後來被改過、被刪掉、被覆寫之後,當時的大小與指紋
+     * 就永遠問不到了,而那正是判斷一個宣稱有沒有兌現的憑據。
+     *
+     * 三個都可以是 null。這個模組零依賴,碰不到檔案系統,所以值由宿主
+     * 在事件當下量好傳進來。量不到就是 null,不准填 0 —— 零位元組是一個
+     * 事實,拿不到是另一回事。
+     */
+    bytes: typeof bytes === 'number' ? bytes : null,
+    hash: typeof hash === 'string' && hash ? hash : null,
+    exit_code: typeof exit_code === 'number' ? exit_code : null,
   });
 }
 
@@ -148,6 +167,10 @@ export function defaultAdapter(raw) {
     action,
     file_path,
     partial: action === 'READ' && (input.offset != null || input.limit != null),
+    // 宿主在事件當下量到的輕量證據。沒量就是 null。
+    bytes: raw.bytes ?? raw.size ?? null,
+    hash: raw.hash ?? raw.content_hash ?? null,
+    exit_code: raw.exit_code ?? raw.exitCode ?? null,
   };
 }
 

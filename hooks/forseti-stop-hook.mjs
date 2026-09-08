@@ -94,13 +94,17 @@ async function main() {
   if (!outstanding.length) OK();
 
   const lines = outstanding.map((d) => `  · ${d.targets.join(', ')} — ${(d.what ?? '').slice(0, 70)}`);
+
+  // 說了沒做不是硬前提未知,所以這裡不擋,只講。
+  // 原本這裡是 exit(2),那會變成「你不做完不准停」—— 而有些事本來就該
+  // 停下來問人,把那也擋掉就是把工具的意見凌駕在人的判斷之上。
   process.stderr.write(
     `Forseti: ${outstanding.length} thing(s) declared this session with no matching action on disk.\n`
     + lines.join('\n')
     + '\n\nEither do them now, or say explicitly that they are dropped. '
-    + 'This check fires once per turn and only for declarations that named a concrete file.',
+    + 'This is an observation, not a block.\n',
   );
-  process.exit(2);
+  process.exit(0);
 }
 
 main().then(OK).catch(OK);
