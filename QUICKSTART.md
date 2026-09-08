@@ -44,28 +44,48 @@ node tools/calibrate.mjs ~/.claude/projects/<your-project>
 
 Every threshold in this repo is calibrated against one person's 130 transcripts. Yours will differ. This prints the distributions so you can replace them.
 
-## 4. Run it live (2 minutes)
+## 4. Run it live, against this repo itself (2 minutes)
 
-Add to `~/.claude/settings.json`:
+**Do not add this to `~/.claude/settings.json`.** That file applies to every
+project on your machine, and on 2026-09-08 that exact mistake blocked nine
+hours of unrelated work with no error and no warning - full account in
+`docs/工程規格書.md` §9.2 and `.claude/README.md`.
+
+The hooks also will not do anything useful there yet: `insideRepo()` in
+`hooks/forseti-hook.mjs` computes its protected root from the hook file's own
+location on disk, so right now these hooks only ever activate for work done
+inside this Forseti repo itself, wherever it is cloned. There is no
+install step yet that lets you point them at a different project - see
+"What it will not do (yet)" below.
+
+To run it against this repo, add to **this repo's own** `.claude/settings.json`
+(shared-project scope - only this folder, not `~/.claude/settings.json`):
 
 ```json
 {
   "hooks": {
     "PreToolUse": [{
       "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-      "hooks": [{ "type": "command", "command": "node /abs/path/to/Forseti-Agent-Runtime/hooks/forseti-hook.mjs" }]
+      "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/forseti-hook.mjs\"" }]
     }],
     "PostToolUse": [{
       "matcher": "Write|Edit|MultiEdit|NotebookEdit",
-      "hooks": [{ "type": "command", "command": "node /abs/path/to/Forseti-Agent-Runtime/hooks/forseti-hook.mjs" }]
+      "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/forseti-hook.mjs\"" }]
+    }],
+    "Stop": [{
+      "hooks": [{ "type": "command", "command": "node \"$CLAUDE_PROJECT_DIR/hooks/forseti-stop-hook.mjs\"" }]
     }]
   }
 }
 ```
 
-Restart Claude Code. Now a write pauses if another session touched that same file in the last 15 seconds.
+This is exactly what's already committed at `.claude/settings.json` in this
+repo - you only need this step if you deleted it or are setting up a fork.
+Restart Claude Code. Now a write pauses if another session touched that same
+file in the last 15 seconds.
 
-Cost: 156 ms per write, of which 130 ms is Node startup. Add `.forseti/` to your `.gitignore`.
+Cost: 156 ms per write, of which 130 ms is Node startup. `.forseti/` is
+already in this repo's `.gitignore`.
 
 To also get told when you have drifted off your own stated goal, put this in the project:
 
@@ -88,6 +108,17 @@ node tools/dashboard.mjs /path/to/your/project
 Read-only, at `http://127.0.0.1:7777`. Quiet by default — a cause line appears only at ELEVATED, a diagnosis card only at HIGH.
 
 ---
+
+## What it will not do (yet)
+
+There is no install step that lets you run the live hooks (section 4) against
+a project other than this one. `insideRepo()` derives its protected root from
+the hook file's location on disk, so cloning this repo and pointing your own
+project's settings at it will not activate anything - the hooks will see your
+project's `cwd`, compute this repo's own root, find they don't match, and
+exit 0 without doing anything, silently. The offline tools in sections 2 and
+3 (`analyze-transcripts.mjs`, `self-audit.mjs`, `calibrate.mjs`, the
+dashboard) do accept any project path and work today.
 
 ## What it will not do
 
