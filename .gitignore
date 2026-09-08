@@ -29,3 +29,7 @@ node_modules/
 *profiles.json
 negatives.json
 corpus-*.json
+
+# Python 編譯產物
+__pycache__/
+*.py[cod]
