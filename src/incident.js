@@ -64,23 +64,33 @@ export const DEFAULT_CONFIG = Object.freeze({
  * FS-FP-002:多個 primitive 可以共用同一 root cause。這個函式決定
  * 「共用」的判準,而判準必須是可重播的,不能靠模型看一眼覺得像。
  *
- * 判準:同一個受影響的資源 + 同一組證據來源。兩者都相同才算同一件事。
+ * 判準:受影響的資源。同一個資源上的問題就是同一件事,
+ * severity 取最嚴重的,命中的 primitive 全部列進去。
  *
- * ── 這裡原本寫錯過,留著當紀錄 ────────────────────────
+ * ── 這裡錯過兩次,兩次都是同一個毛病,留著當紀錄 ──────────
  *
- * 第一版把 severity_family 也放進 key。那是錯的:嚴重度是 finding 的
- * 屬性,不是根因的身分。同一個檔案、同一組證據,一個 FP-02(A 級)
- * 加一個 FP-06(C 級),根因是同一個,卻會被拆成兩件事推給使用者 ——
- * 而那正是 FS-FP-002 要防的 25 個 warning。
+ * 第一版把 severity_family 放進 key。錯的:嚴重度是 finding 的屬性,
+ * 不是根因的身分。同一個檔案上一個 A 級加一個 C 級會被拆成兩件事,
+ * 而那正是 FS-FP-002 要防的東西。放進去的理由是「怕 C 級被稀釋」,
+ * 擔心對但解法錯 —— 不被稀釋靠的是 aggregate 對 severity 取 max。
  *
- * 當時放進去的理由是「怕 C 級被 A 級稀釋」。那個擔心本身是對的,
- * 但解法錯了:不被稀釋是靠 aggregate() 對 severity 取最嚴重值,
- * 不是靠把同一件事拆開。拆開反而讓 C 級混在一堆 incident 裡更難看見。
+ * 第二版把 evidence_refs 放進 key。也是錯的,而且更難發現:
+ * CT-034 用人造資料測,那批 findings 共用同一組 evidence_refs,
+ * 所以 25 個 hit 漂亮地收斂成 3 件事。真實資料上每一筆證據的時間戳
+ * 都不同,key 就每次都不同 —— 掃 40 個真實 session 時,63 個 hit
+ * 變成 63 個 incident,壓縮率是 0,聚合層等於不存在。
+ *
+ * FS-ALR-002 其實已經講清楚了:它把「同一 evidence state」列為
+ * **去重的判斷條件**,不是 key 的一部分。證據是 incident 的內容,
+ * 不是它的身分。內容變了要重新評估要不要再說一次(shouldSurface),
+ * 但它從頭到尾都是同一件事。
+ *
+ * 兩次的共同毛病:把不屬於身分的東西放進身分。
  */
 export function rootIncidentKey(finding) {
-  const resource = finding?.resource ?? finding?.synthetic_claim_ref ?? finding?.task_id ?? 'unknown';
-  const evidence = [...(finding?.evidence_refs ?? [])].sort().join(',') || 'none';
-  return `${resource}:${evidence}`;
+  return String(
+    finding?.resource ?? finding?.synthetic_claim_ref ?? finding?.task_id ?? 'unknown',
+  );
 }
 
 /**

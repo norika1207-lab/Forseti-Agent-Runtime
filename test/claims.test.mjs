@@ -87,6 +87,26 @@ t('多份部分覆蓋不會自動加成全覆蓋,取最好的那一份', () => {
   assert.equal(r.esi, 0.5, '兩份各覆蓋一半,不等於全部覆蓋');
 });
 
+t('用語表的實測結果寫在定義處,不可被靜默刪除', () => {
+  // 兩份獨立校準資料都指向同一個結論:這張表不能當判定用。
+  // 刪掉這段註解,下一個人就會把它接成 finding。
+  const src = readFileSync(new URL('../src/claims.js', import.meta.url), 'utf8');
+  assert.match(src, /每千則 242 次/);
+  assert.match(src, /40 個 session 全部命中/);
+  assert.match(src, /ESI 的判定值來自 scope 覆蓋率的算術/);
+});
+
+t('ESI 的判定值不受用語表影響 —— 有沒有那些詞都算出同一個數字', () => {
+  const scope = createScope({ environment: 'ios_app', stage: 'e2e' });
+  const evidence = [createScope({ environment: 'headless', stage: 'e2e' })];
+  const withWords = detectScopeInflation({ text: '端到端全部已驗證', scope }, evidence);
+  const without = detectScopeInflation({ text: '改好了', scope }, evidence);
+  assert.equal(withWords.esi, without.esi, '判定值只看 scope 覆蓋率');
+  assert.equal(withWords.verdict, without.verdict);
+  assert.equal(withWords.experimental, true, '有用語時才標實驗性');
+  assert.equal(without.experimental, false);
+});
+
 t('scope-expanding 用語表裡有 FS-DET-ESI-001 點名的那幾個', () => {
   for (const term of ['端到端', '全部', '已解決', '已驗證']) {
     assert.ok(SCOPE_EXPANDING_TERMS.includes(term), term);

@@ -71,13 +71,35 @@ t('同根因的 A 級與 C 級是一件事,severity 取最嚴重的,不是拆成
   assert.deepEqual([...r.root_incidents[0].primitives], ['FP-02', 'FP-06']);
 });
 
-t('severity 不進 root key,那個錯誤的理由寫在原始碼裡', () => {
-  const src = readFileSync(new URL('../src/incident.js', import.meta.url), 'utf8');
-  assert.match(src, /嚴重度是 finding 的\n \* 屬性,不是根因的身分/);
+t('severity 不進 root key', () =>
   assert.equal(
     rootIncidentKey({ resource: 'x', severity_family: 'A', evidence_refs: ['e'] }),
     rootIncidentKey({ resource: 'x', severity_family: 'C', evidence_refs: ['e'] }),
+  ));
+
+t('evidence_refs 也不進 root key —— 真實資料上每筆證據的時間戳都不同', () => {
+  // 這條是掃 40 個真實 session 才暴露的:當時 63 個 detector hit 變成
+  // 63 個 root incident,壓縮率 0,聚合層等於不存在。
+  // CT-034 用人造資料測不到,因為那批 findings 共用同一組 evidence_refs。
+  assert.equal(
+    rootIncidentKey({ resource: 'x', evidence_refs: ['t1700000000001'] }),
+    rootIncidentKey({ resource: 'x', evidence_refs: ['t1700000000999'] }),
   );
+  const hits = Array.from({ length: 63 }, (_, i) => ({
+    primitive_id: 'FP-01', resource: 'assistant_text', severity_family: 'A',
+    evidence_refs: [`t${1_700_000_000_000 + i * 1000}`],
+  }));
+  const agg = aggregate(hits);
+  assert.equal(agg.detector_hits, 63);
+  assert.equal(agg.root_incidents.length, 1, '同一個資源上的問題就是同一件事');
+  assert.equal(agg.root_incidents[0].detector_hit_count, 63);
+  assert.ok(agg.compression < 0.02, '壓縮率要真的壓縮');
+});
+
+t('兩次踩同一個毛病的紀錄留在原始碼裡', () => {
+  const src = readFileSync(new URL('../src/incident.js', import.meta.url), 'utf8');
+  assert.match(src, /把不屬於身分的東西放進身分/);
+  assert.match(src, /壓縮率是 0,聚合層等於不存在/);
 });
 
 t('low-evidence:沒有 findings 時 compression 是 null 不是 0', () =>

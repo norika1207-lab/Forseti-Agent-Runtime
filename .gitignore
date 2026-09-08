@@ -12,3 +12,12 @@ node_modules/
 # 端到端測試的沙箱,建在 repo 底下是因為 hook 的邊界只在 repo 內作用
 .tmp-e2e-*
 .tmp-*.js
+
+# 校準的中間產物。它們含有 transcript 的完整路徑,而路徑本身
+# 就是使用者的專案清單與工作紀錄 —— 這個 repo 是公開的。
+#
+# 統計數字可以公開(見 docs/calibration/),路徑不行。
+# 要重跑的人自己在本機產生,指令寫在校準文件最後。
+*profiles.json
+negatives.json
+corpus-*.json
