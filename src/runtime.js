@@ -86,6 +86,36 @@ import {
   shouldAutoAccept, manualReviewRate, blockedRawTokens,
 } from './capsule.js';
 
+// ── v2.0 的六個新模組。規格 docs/spec-v2.0.md §26 的 P0/P2..P6 ──────
+//
+// 這一組跟上面 v1 那組是兩層,不是替代關係。v1 那組回答「這個 session
+// 的執行期健不健康」,v2 這組回答「宣稱、證據、目標、進度之間的關係
+// 有沒有斷掉」。FS-IMP-001 要求 P3/P4/P5/P6 先於任何 drift classifier,
+// 所以它們在這裡接線,而不是等到最後才想起來。
+import {
+  EVIDENCE_CLASSES, canPromote, intentionalityRecord,
+  createReceipt, existedAt, reconcileHistorical,
+} from './evidence.js';
+import {
+  BUILTIN_CONTRACTS, createContract as createVerifierContract,
+  verify as runVerifier, validityConfidence, capConfidence,
+} from './verifier.js';
+import {
+  createScope as createClaimScope, detectScopeInflation, compositeEvidencePromotion,
+  detectProvenanceCollapse, provenanceIntegrity, semanticCoverageInflation,
+  evidenceScopeCoverage, postClaimGate,
+} from './claims.js';
+import {
+  goalAnchorConfidence, goalAlignmentRisk, goalDistanceTrend,
+  detectFrameworkSubstitution, classifyDrift, createCommitment,
+} from './goalanchor.js';
+import {
+  computeProgress, progressStagnation, detectGoalMetricSubstitution,
+  detectPromisedTaskNonexecution, detectTaskStarvation,
+  detectFalseProgressRepresentation, progressHonestyGap,
+  preActionCommitmentGate, progressReport,
+} from './progress.js';
+
 /**
  * 建一個 runtime。
  *
@@ -201,6 +231,18 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
     scopeStreak: createStreak(),
     /** 攔截的結果:使用者看到警告之後選擇取消還是繼續。這是唯一不靠估值的效益指標。 */
     intercepts: [],
+
+    // ── v2.0 ────────────────────────────────────────────────────
+    /**
+     * Evidence Receipt 帳本。FS-TMP-001 要求在東西還看得到的時候就留憑證,
+     * 因為事後看不出「當時沒做」跟「後來被保留期限刪了」的差別。
+     */
+    receipts: [],
+    /**
+     * TaskCommitment ledger。§22.10。
+     * 沒有這份帳,承諾過的任務會在忙碌裡無聲消失,而那正是 CASE-C/CASE-E。
+     */
+    commitments: new Map(),
   };
 
   /** 重算某個 agent 的覆蓋範圍。事件進來之後才叫得動。 */
@@ -1556,6 +1598,149 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       return r;
     },
 
+    // ── v2.0 API。規格 docs/spec-v2.0.md ─────────────────────────
+
+    /**
+     * P2:留一張證據憑證。在東西還看得到的那一刻叫,不是事後補。
+     *
+     * FS-TMP-001。回傳憑證本身,讓呼叫端可以立刻串進 claim。
+     */
+    captureReceipt(fields) {
+      const r = createReceipt(fields);
+      state.receipts.push(r);
+      return r;
+    },
+
+    /** FS-TMP-002:「T 那時存在嗎」,跟「現在存在嗎」是兩個問題。 */
+    existedAt(resourceLocator, at) {
+      return existedAt(state.receipts, { resourceLocator, at });
+    },
+
+    /** FS-TMP-003:現在不見了,不等於當時沒做。 */
+    reconcileHistorical(args) {
+      return reconcileHistorical(args);
+    },
+
+    /**
+     * P3:一個 claim 在變成 canonical project state 之前的閘門。
+     *
+     * §22.19。這是 v2 相對 v1 最重要的一道:v1 的 checkClaim 只查
+     * 來源鏈,這一道還查 scope 覆蓋、驗證器契約、以及 synthetic evidence。
+     */
+    gateClaim(claim, opts = {}) {
+      return postClaimGate(claim, {
+        ownReceipts: state.receipts.filter(
+          (r) => r.resource_locator === claim?.scope?.resource,
+        ),
+        ...opts,
+      });
+    },
+
+    /** P4:跑一個有契約的驗證器,沒 coverage 就拒絕給 pass/fail。 */
+    verify(contract, args) {
+      return runVerifier(contract, args);
+    },
+
+    /**
+     * P5:登記一個 owner 交辦的任務。
+     *
+     * 沒有這一步,PTN 與 TOUA 都無從談起 —— 偵測「承諾的事沒做」
+     * 的前提是先有一份承諾的紀錄。
+     */
+    commit(fields) {
+      const c = createCommitment(fields);
+      state.commitments.set(c.task_id, c);
+      return c;
+    },
+
+    /** 更新一筆承諾的狀態。明講 BLOCKED/DEFERRED 是正確行為,不是失職。 */
+    updateCommitment(taskId, changes = {}) {
+      const cur = state.commitments.get(taskId);
+      if (!cur) return null;
+      const next = createCommitment({
+        taskId,
+        ownerInstructionRef: changes.ownerInstructionRef ?? cur.owner_instruction_ref,
+        committedAt: cur.committed_at,
+        priority: changes.priority ?? cur.priority,
+        status: changes.status ?? cur.status,
+        lastProgressAt: changes.lastProgressAt ?? cur.last_progress_at,
+        blockingReason: changes.blockingReason ?? cur.blocking_reason,
+      });
+      state.commitments.set(taskId, next);
+      return next;
+    },
+
+    /** 目前所有承諾。 */
+    commitments() {
+      return Object.freeze([...state.commitments.values()]);
+    },
+
+    /**
+     * P6:三層進度報告。FS-DET-FPR-001 要求三個欄位永遠分開。
+     *
+     * 刻意沒有 overall。要講「有進展」的人必須指名層級。
+     */
+    progress(args) {
+      return progressReport({
+        progress: computeProgress(args ?? {}),
+        citedMetrics: args?.citedMetrics ?? [],
+        claimedLayer: args?.claimedLayer ?? null,
+      });
+    },
+
+    /**
+     * P6:承諾的任務有沒有在忙碌裡消失。
+     *
+     * FS-DET-PTN-001:活動量只用來判斷「有沒有在忙」,不用來扣分。
+     */
+    committedTaskHealth({ now = Date.now(), executionLineage = {} } = {}) {
+      const all = [...state.commitments.values()];
+      const activity = state.toolCalls.length;
+      const ptn = all.map((c) => detectPromisedTaskNonexecution(c, {
+        executionLineageCount: executionLineage[c.task_id] ?? 0,
+        unrelatedActivityCount: activity,
+        progressReportsImplyWork: activity > 0,
+      }));
+      return Object.freeze({
+        starvation: detectTaskStarvation(all, { now, totalActivityCount: activity }),
+        promised_task_nonexecution: Object.freeze(ptn.filter((p) => p.is_ptn)),
+        checked: all.length,
+        /** 高 activity 在這裡是 camouflage candidate,不是無罪證據(FS-SEV-002)。 */
+        activity_count: activity,
+        activity_is_not_exculpatory: true,
+      });
+    },
+
+    /** §22.20:開始不相干的高成本工作前,先看有沒有任務正在餓死。 */
+    preActionGate(args) {
+      return preActionCommitmentGate({
+        commitments: [...state.commitments.values()],
+        ...args,
+      });
+    },
+
+    /**
+     * P5:目標對齊。沒有有效 anchor 就明講無法判定,不猜。
+     *
+     * FS-IMP-001 的實作位置:這個方法拿的是 P3/P4/P5/P6 算出來的東西,
+     * 不是丟給另一個 LLM 問「你飄了嗎」。
+     */
+    alignment({ anchors = [], actions = [], windows = [], exclusions = {},
+      classifierConfidence = null, ...rest } = {}) {
+      const gac = goalAnchorConfidence(anchors);
+      const gar = goalAlignmentRisk(actions, { gac: gac.gac, classifierConfidence });
+      const trend = goalDistanceTrend(windows);
+      return Object.freeze({
+        gac,
+        gar,
+        trend,
+        framework_substitution: detectFrameworkSubstitution({
+          gacResult: gac, trendResult: trend, exclusions, ...rest,
+        }),
+        drift: classifyDrift({ gacResult: gac, garResult: gar, exclusions, ...rest }),
+      });
+    },
+
     /** 內部狀態的唯讀檢視。沒有藏起來的東西。 */
     inspect() {
       return Object.freeze({
@@ -1567,6 +1752,8 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         anchor: state.anchor,
         investments: Object.freeze([...state.investments]),
         self_written: Object.freeze([...state.selfWritten].sort()),
+        receipts: Object.freeze([...state.receipts]),
+        commitments: Object.freeze([...state.commitments.values()]),
       });
     },
   });

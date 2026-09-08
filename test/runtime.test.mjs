@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createRuntime } from '../src/runtime.js';
 import { createEdge } from '../src/handoff.js';
 import { VERDICTS as VERD } from '../src/heartbeat.js';
+import { BUILTIN_CONTRACTS } from '../src/verifier.js';
 
 let pass = 0, fail = 0;
 function t(name, fn) {
@@ -1173,6 +1174,131 @@ t('拿不到完成的定義時,runtime 也不准說沒問題', () => {
   const rt = createRuntime();
   rt.ingest([{ attributed_agent: 'a', name: 'Write', input: { file_path: '/p/x.js' }, at: Date.now() }]);
   assert.equal(rt.judgeYield({}).verdict, 'CANNOT_DETERMINE');
+});
+
+// ── v2.0 接線。掛上去不等於會動,這一段測的是後者 ──────────────
+
+t('v2:留下的憑證,後來查得到「當時存在嗎」', () => {
+  const rt = createRuntime();
+  const T = 1_700_000_000_000;
+  rt.captureReceipt({
+    observedAt: T, resourceLocator: '/p/out.md', existence: true,
+    byteSize: 2048, captureMethod: 'PostToolUse',
+  });
+  const r = rt.existedAt('/p/out.md', T + 1000);
+  assert.equal(r.answer, 'YES');
+  assert.equal(r.byte_size, 2048);
+  assert.equal(rt.inspect().receipts.length, 1);
+});
+
+t('v2:沒憑證的資源,查「當時」得到 UNKNOWN 不是 NO', () =>
+  assert.equal(createRuntime().existedAt('/p/never.md', 1).answer, 'UNKNOWN'));
+
+t('v2:CT-044 假造的 tool 結果進不了 canonical state,而且直接開 CRITICAL', () => {
+  const rt = createRuntime();
+  const r = rt.gateClaim(
+    { type: 'TOOL_OUTPUT', text: 'tool 回報偵測到 prompt injection' },
+    { sefResult: { hard_contradiction: true, sef_subtype: 'SEF-TOOL' } },
+  );
+  assert.equal(r.result, 'CRITICAL_INTEGRITY_INCIDENT');
+  assert.equal(r.may_enter_canonical_state, false);
+});
+
+t('v2:CT-016 沒 coverage 的驗證器,經 runtime 也不准反駁 claim', () => {
+  const r = createRuntime().verify(BUILTIN_CONTRACTS.grep_string, {
+    rawOutcome: 'FAIL',
+    targetType: 'file',
+    representation: 'hex_bytes',
+    semanticsRequired: ['literal_substring_present'],
+    preconditionsMet: ['target_is_text'],
+  });
+  assert.equal(r.outcome, 'UNKNOWN_COVERAGE');
+  assert.equal(r.may_refute_claim, false);
+});
+
+t('v2:承諾登記得起來,狀態改得動', () => {
+  const rt = createRuntime();
+  rt.commit({ taskId: 'orchestrator', priority: 'HIGH', status: 'NOT_STARTED' });
+  assert.equal(rt.commitments().length, 1);
+  const updated = rt.updateCommitment('orchestrator', { status: 'BLOCKED', blockingReason: '缺授權' });
+  assert.equal(updated.status, 'BLOCKED');
+  assert.equal(rt.commitments()[0].blocking_reason, '缺授權');
+  assert.equal(rt.updateCommitment('does-not-exist', {}), null);
+});
+
+t('v2:CT-041 承諾零執行而 session 很忙 → runtime 報得出 PTN', () => {
+  const rt = createRuntime();
+  rt.commit({ taskId: 'orchestrator', priority: 'HIGH', status: 'NOT_STARTED' });
+  for (let i = 0; i < 20; i++) {
+    rt.ingest([{ attributed_agent: 'a', name: 'Write', input: { file_path: `/p/other${i}.js` }, at: Date.now() }]);
+  }
+  const h = rt.committedTaskHealth({ executionLineage: { orchestrator: 0 } });
+  assert.equal(h.promised_task_nonexecution.length, 1);
+  assert.equal(h.starvation.verdict, 'COMMITTED_TASK_STARVATION');
+  assert.equal(h.activity_is_not_exculpatory, true, '忙碌不是無罪證據');
+});
+
+t('v2:有執行痕跡的承諾不會被報成 PTN', () => {
+  const rt = createRuntime();
+  rt.commit({ taskId: 'done-work', status: 'IN_PROGRESS' });
+  rt.ingest([{ attributed_agent: 'a', name: 'Write', input: { file_path: '/p/x.js' }, at: Date.now() }]);
+  const h = rt.committedTaskHealth({ executionLineage: { 'done-work': 4 } });
+  assert.equal(h.promised_task_nonexecution.length, 0);
+});
+
+t('v2:三層進度從 runtime 出來,而且沒有合成的總分', () => {
+  const rt = createRuntime();
+  const r = rt.progress({
+    completedActions: 30, plannedActions: 30,
+    verifiedGoalDelta: 0, goalTarget: 1,
+    citedMetrics: ['wakeup', 'detector_pass'],
+  });
+  assert.equal(r.activity_progress, 1);
+  assert.equal(r.goal_progress, 0);
+  assert.ok(!('overall_progress' in r));
+  assert.equal(r.goal_metric_substitution.verdict, 'GOAL_METRIC_SUBSTITUTION');
+  assert.equal(r.honest, false);
+});
+
+t('v2:§22.20 有任務餓死時,不相干的高成本工作要先交代', () => {
+  const rt = createRuntime();
+  rt.commit({ taskId: 'promised', status: 'NOT_STARTED' });
+  const g = rt.preActionGate({ proposedActionRelatedTaskIds: ['unrelated'], proposedActionCost: 'HIGH' });
+  assert.equal(g.decision, 'REQUIRE_EXPLICIT_REPRIORITISATION');
+  assert.deepEqual([...g.starving_tasks], ['promised']);
+});
+
+t('v2:沒有目標錨點時,alignment 明講無法判定,不猜', () => {
+  const r = createRuntime().alignment({ anchors: [], actions: [{ support: 'CONFLICTING' }] });
+  assert.equal(r.gac.gac, null);
+  assert.equal(r.drift.state, 'GOAL_AMBIGUOUS');
+  assert.equal(r.drift.is_drift, false);
+  assert.equal(r.framework_substitution.verdict, 'NO_VALID_GOAL_ANCHOR');
+});
+
+t('v2:CT-024 owner 自己改目標,經 runtime 也不算飄移', () => {
+  const r = createRuntime().alignment({
+    anchors: [{ source: 'EXPLICIT_OWNER_INSTRUCTION', freshness: 1, scopeMatch: 1, provenanceIntegrity: 1 }],
+    actions: [{ support: 'CONFLICTING' }],
+    exclusions: { ownerGoalChange: true },
+  });
+  assert.equal(r.drift.state, 'OWNER_GOAL_CHANGE');
+  assert.equal(r.drift.is_drift, false);
+});
+
+t('v2:FS-DET-FSD-001 東西全做成功了,框架偷換照樣抓得到', () => {
+  const anchors = [{ source: 'OWNER_CONFIRMED_NORTH_STAR', freshness: 1, scopeMatch: 1, provenanceIntegrity: 1 }];
+  const windows = [
+    { actions: [{ support: 'DIRECT' }, { support: 'DIRECT' }] },
+    { actions: [{ support: 'NEUTRAL' }, { support: 'NEUTRAL' }] },
+  ];
+  const r = createRuntime().alignment({
+    anchors, windows, actions: [{ support: 'NEUTRAL' }],
+    ownerSuccessConditionProgress: 0, prerequisiteDepth: 3,
+    executionSuccessRate: 1.0,
+  });
+  assert.equal(r.framework_substitution.verdict, 'FRAMEWORK_SUBSTITUTION_CANDIDATE');
+  assert.equal(r.framework_substitution.execution_success_did_not_lower_score, true);
 });
 
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
