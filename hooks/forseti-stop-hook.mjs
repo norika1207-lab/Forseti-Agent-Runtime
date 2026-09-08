@@ -22,11 +22,35 @@
  *   卡住使用者的守衛會被拔掉,而被拔掉的守衛保護不了任何人。
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve as resolvePath, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OK = () => process.exit(0);
+
+/**
+ * 硬邊界:這個 hook 只准在它自己所屬的 repo 底下作用。
+ *
+ * 2026-09-08:這三個 hook 曾經被裝進全域設定,對擁有者機器上每一個目錄
+ * 生效,擋掉她整晚的工作。那次的錯誤不在門檻,在範圍 —— 我以為我知道
+ * 設定的作用範圍,而我理解錯了。
+ *
+ * 所以範圍不能只靠設定檔的位置來保證。這裡再加一道程式碼層的邊界:
+ * repo 根目錄是從這個檔案自己的位置算出來的(hooks/ 的上一層),
+ * 所以 repo 搬到哪它就跟到哪,不必維護一份會過期的路徑清單。
+ * cwd 不在底下就立刻 exit 0,連狀態檔都不建。
+ *
+ * 這道邊界不看設定、不看環境變數、不可設定關閉。要放寬範圍必須改這段
+ * 程式碼並且說明理由,不能靠改一行 JSON 就悄悄擴張。
+ */
+const REPO_ROOT = resolvePath(HERE, '..');
+
+function insideRepo(cwd) {
+  if (!cwd) return false;
+  const c = resolvePath(cwd);
+  return c === REPO_ROOT || c.startsWith(REPO_ROOT + sep);
+}
+
 process.on('uncaughtException', OK);
 process.on('unhandledRejection', OK);
 
@@ -49,6 +73,9 @@ async function main() {
   let input;
   try { input = JSON.parse(readFileSync(0, 'utf8')); } catch { OK(); }
   if (!input || input.hook_event_name !== 'Stop') OK();
+
+  // 邊界最先檢查,在讀任何狀態、建任何目錄之前。
+  if (!insideRepo(process.env.CLAUDE_PROJECT_DIR || input.cwd)) OK();
 
   const cwd = input.cwd;
   const led = load(cwd);

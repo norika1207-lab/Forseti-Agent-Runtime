@@ -13,7 +13,7 @@
  * 一個誤攔的 hook 會被拔掉,而被拔掉的守衛保護不了任何人。
  */
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, readFileSync, readdirSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,8 +45,19 @@ function runHook(script, payload, env = {}) {
   return { code: r.status, stderr: r.stderr ?? '', stdout: r.stdout ?? '' };
 }
 
+const REPO = dirname(HERE);
+
+/**
+ * 沙箱建在 repo 底下,不是 /tmp。
+ *
+ * hook 有一道硬邊界:只在它自己所屬的 repo 底下作用,外面什麼都不做。
+ * 那道邊界是 2026-09-08 擋掉擁有者整晚工作之後加的,不可以為了讓測試
+ * 好寫就繞過它。所以要測偵測邏輯,就得在邊界之內測。
+ *
+ * repo 外的沙箱留給邊界測試本身(AT-HOOK-B1/B2)。
+ */
 function sandbox(goal) {
-  const dir = mkdtempSync(join(tmpdir(), 'forseti-e2e-'));
+  const dir = mkdtempSync(join(REPO, '.tmp-e2e-'));
   mkdirSync(join(dir, '.forseti'), { recursive: true });
   if (goal) writeFileSync(join(dir, '.forseti', 'goal.json'), JSON.stringify(goal));
   return dir;
@@ -65,8 +76,8 @@ const about = (cwd, session, file) => ({
 
 t('AT-HOOK-01 另一個 session 剛寫過同一個檔,會講但不擋', () => {
   const dir = sandbox();
-  runHook(PRE, write(dir, 'session-aaaaaaaa', '/p/shared.js'));
-  const r = runHook(PRE, about(dir, 'session-bbbbbbbb', '/p/shared.js'));
+  runHook(PRE, write(dir, 'session-aaaaaaaa', join(REPO, '.tmp-shared.js')));
+  const r = runHook(PRE, about(dir, 'session-bbbbbbbb', join(REPO, '.tmp-shared.js')));
   assert.equal(r.code, 0, '撞車是機率不是硬前提,閘門不放行擋人');
   assert.match(r.stderr, /another session wrote/, '不擋不等於不說');
   assert.match(r.stderr, /session-/, '訊息要指出是誰');
@@ -75,15 +86,15 @@ t('AT-HOOK-01 另一個 session 剛寫過同一個檔,會講但不擋', () => {
 
 t('AT-HOOK-02 是自己剛寫的,不擋', () => {
   const dir = sandbox();
-  runHook(PRE, write(dir, 'same-session', '/p/mine.js'));
-  const r = runHook(PRE, about(dir, 'same-session', '/p/mine.js'));
+  runHook(PRE, write(dir, 'same-session', join(REPO, '.tmp-mine.js')));
+  const r = runHook(PRE, about(dir, 'same-session', join(REPO, '.tmp-mine.js')));
   assert.equal(r.code, 0, '自己寫自己的檔不該被擋');
   rmSync(dir, { recursive: true, force: true });
 });
 
 t('AT-HOOK-03 沒人碰過的檔,不擋', () => {
   const dir = sandbox();
-  const r = runHook(PRE, about(dir, 'session-x', '/p/fresh.js'));
+  const r = runHook(PRE, about(dir, 'session-x', join(REPO, '.tmp-fresh.js')));
   assert.equal(r.code, 0);
   assert.equal(r.stderr, '');
   rmSync(dir, { recursive: true, force: true });
@@ -202,6 +213,56 @@ t('AT-HOOK-11 沒有任何未結宣告時保持安靜', () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// ── 硬邊界:只准在自己的 repo 底下作用 ─────────────────────
+
+t('AT-HOOK-B1 repo 外面完全不動作,連狀態檔都不建', () => {
+  // 上次出事的根因不是門檻,是範圍。所以範圍不只靠設定檔的位置保證,
+  // 程式碼自己也要守。這條測的是程式碼那一道。
+  const outside = mkdtempSync(join(tmpdir(), 'forseti-outside-'));
+  const home = sandbox(GOAL);   // 家目錄有北極星,正是上次讓它在外面生效的東西
+  for (const payload of [
+    write(outside, 'x', join(outside, 'a.js')),
+    about(outside, 'x', join(outside, 'a.js')),
+  ]) {
+    assert.equal(runHook(PRE, payload, { HOME: home }).code, 0);
+  }
+  assert.equal(runHook(STOP, { hook_event_name: 'Stop', cwd: outside }, { HOME: home }).code, 0);
+  assert.equal(readdirSync(outside).length, 0, 'repo 外面連一個檔案都不准建');
+  rmSync(outside, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+t('AT-HOOK-B2 CLAUDE_PROJECT_DIR 指到外面也擋得住', () => {
+  const outside = mkdtempSync(join(tmpdir(), 'forseti-outside2-'));
+  const r = runHook(PRE, write(outside, 'x', join(outside, 'a.js')),
+    { CLAUDE_PROJECT_DIR: outside });
+  assert.equal(r.code, 0);
+  assert.equal(readdirSync(outside).length, 0);
+  rmSync(outside, { recursive: true, force: true });
+});
+
+t('AT-HOOK-B3 repo 裡面照常運作,邊界不是把功能關掉', () => {
+  const repo = dirname(HERE);
+  const r = runHook(PRE, {
+    hook_event_name: 'PostToolUse', session_id: 'insider', cwd: repo,
+    tool_name: 'Write', tool_input: { file_path: join(repo, 'src', 'drift.js') },
+  });
+  assert.equal(r.code, 0);
+  const state = join(repo, '.forseti', 'state.json');
+  assert.ok(existsSync(state), '在自己家裡要照常記錄');
+  rmSync(state, { force: true });
+  rmSync(join(repo, '.forseti', 'streak.json'), { force: true });
+});
+
+t('AT-HOOK-B4 邊界不可以靠設定關掉', () => {
+  for (const f of ['forseti-hook.mjs', 'forseti-stop-hook.mjs']) {
+    const text = readFileSync(join(HERE, '..', 'hooks', f), 'utf8');
+    assert.match(text, /insideRepo\(/, `${f} 要呼叫邊界檢查`);
+    assert.ok(!/insideRepo[\s\S]{0,200}?config\.|allowOutside|SKIP_BOUNDARY/.test(text),
+      `${f} 的邊界不准有繞過開關`);
+  }
+});
+
 // ── 2026-09-08 的迴歸:整晚被擋 ─────────────────────────────
 
 t('AT-HOOK-R1 重現整晚被擋的那個場景,一次都不准 deny', () => {
@@ -211,14 +272,13 @@ t('AT-HOOK-R1 重現整晚被擋的那個場景,一次都不准 deny', () => {
   // 九個小時。留下的證據是 streak.json 的 total_checked:12, total_off:8。
   //
   // 這條測試守的是:不管離題多少次,都不准回非零。
-  const home = sandbox({ north_star: '只做專案 A', scope: ['/proj/a'] });
-  const work = sandbox();
+  // 在邊界之內測,不然通過的是邊界不是閘門,而閘門才是這條要守的東西。
+  const work = sandbox({ north_star: '只做專案 A', scope: [join(REPO, 'nowhere-near-here')] });
   const codes = [];
   for (let i = 0; i < 30; i += 1) {
-    codes.push(runHook(PRE, about(work, 'night-shift', `/proj/b/file${i}.js`), { HOME: home }).code);
+    codes.push(runHook(PRE, about(work, 'night-shift', join(work, `file${i}.js`)), {}).code);
   }
   assert.deepEqual(codes, Array(30).fill(0), `30 次全部要放行,實際:${[...new Set(codes)].join(',')}`);
-  rmSync(home, { recursive: true, force: true });
   rmSync(work, { recursive: true, force: true });
 });
 
@@ -229,9 +289,9 @@ t('AT-HOOK-R2 撞車也不准 deny,除非閘門真的放行', async () => {
   const g = canIntervene('BLOCK_HIGH_RISK', { collision: true, other_sessions: 3 });
   assert.equal(g.allowed, false, '撞車不該拿得到硬擋的許可');
   const dir = sandbox();
-  runHook(PRE, write(dir, 'a', '/p/hot.js'));
+  runHook(PRE, write(dir, 'a', join(REPO, '.tmp-hot.js')));
   for (let i = 0; i < 5; i += 1) {
-    assert.equal(runHook(PRE, about(dir, 'b', '/p/hot.js')).code, 0, '連續撞車也不准擋');
+    assert.equal(runHook(PRE, about(dir, 'b', join(REPO, '.tmp-hot.js'))).code, 0, '連續撞車也不准擋');
   }
   rmSync(dir, { recursive: true, force: true });
 });

@@ -8,3 +8,7 @@ node_modules/
 !.forseti/goal.json
 ._*
 .DS_Store
+
+# 端到端測試的沙箱,建在 repo 底下是因為 hook 的邊界只在 repo 內作用
+.tmp-e2e-*
+.tmp-*.js
