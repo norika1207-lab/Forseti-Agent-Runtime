@@ -333,10 +333,12 @@ t('全部開過就放行', () => {
   assert.equal(r.checkClaim({ files: ['src/a.js'] }).clean, true);
 });
 
-t('過了三個形狀不等於乾淨,四個沒驗的要一起講', () => {
+t('過了三個形狀不等於乾淨,別處驗的跟真的沒驗的要分開講', () => {
   const out = rt().checkClaim({ files: [] });
-  assert.match(out.note, /four others were not examined/);
-  assert.equal(out.unchecked_shapes.length, 4);
+  assert.match(out.note, /rhetoric\.js/);
+  assert.match(out.note, /not examined anywhere/);
+  assert.equal(out.handled_elsewhere.length, 2);
+  assert.equal(out.unchecked_shapes.length, 2);
 });
 
 t('宣稱數量對不上實際次數就標出來', () => {

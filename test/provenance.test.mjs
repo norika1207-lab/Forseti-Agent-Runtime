@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
-  SHAPES, OUT_OF_SCOPE, ORIGINS, DEFAULT_CONFIG,
+  SHAPES, OUT_OF_SCOPE, HANDLED_ELSEWHERE, ORIGINS, DEFAULT_CONFIG,
   originOf, originMix, checkSourceErasure, checkScopeInflation, checkBarrenInvestment, audit,
 } from '../src/provenance.js';
 
@@ -26,9 +26,14 @@ t('三加四等於七的那個假完整性,留在原始碼裡當紀錄', () => {
   assert.ok(/用加總掩蓋缺項的清單/.test(src));
 });
 
-t('四個驗不了的形狀要列出來,不是留白', () =>
-  assert.deepEqual([...OUT_OF_SCOPE],
-    ['CONFIDENCE_PREFIX', 'FALSE_CONFESSION', 'SEMANTIC_SWAP', 'FLOOR_AS_CEILING']));
+t('兩個真的驗不了的形狀要列出來,不是留白', () =>
+  assert.deepEqual([...OUT_OF_SCOPE], ['SEMANTIC_SWAP', 'FLOOR_AS_CEILING']));
+
+t('信心詞前置與假坦白不在這裡驗,但要標明在哪裡驗,不是直接消失', () => {
+  const shapes = HANDLED_ELSEWHERE.map((h) => h.shape);
+  assert.deepEqual(shapes, ['CONFIDENCE_PREFIX', 'FALSE_CONFESSION']);
+  for (const h of HANDLED_ELSEWHERE) assert.equal(h.module, 'rhetoric.js');
+});
 
 t('來源四級,順序有意義', () =>
   assert.deepEqual([...ORIGINS], ['FIRST_HAND', 'DELEGATED', 'SELF_WRITTEN', 'UNSOURCED']));
@@ -146,9 +151,10 @@ t('拿不到 token 數就是 null,不估算', () =>
   assert.equal(checkBarrenInvestment([{ id: 'w', at: T, agents: 5, produced_files: [] }])[0].tokens, null));
 
 // ---- 報告 ----
-t('報告一定同時列出「驗了什麼」跟「沒驗什麼」', () => {
+t('報告一定同時列出「驗了什麼」「別處驗了什麼」「都沒驗什麼」', () => {
   const r = audit({});
   assert.deepEqual([...r.checked_shapes], [...SHAPES]);
+  assert.deepEqual(r.handled_elsewhere.map((h) => h.shape), HANDLED_ELSEWHERE.map((h) => h.shape));
   assert.deepEqual([...r.unchecked_shapes], [...OUT_OF_SCOPE]);
 });
 
@@ -157,10 +163,11 @@ t('零 findings 不等於乾淨,這句話必須跟結果綁在一起', () => {
   assert.match(r.note, /not a clean bill of health/);
 });
 
-t('有 findings 時也要講還有四個形狀沒驗', () => {
+t('有 findings 時也要講清楚哪些形狀在別處驗、哪些完全沒驗', () => {
   const r = audit({ claims: [{ at: T, files: ['a.c'] }], events: [] });
   assert.ok(r.findings.length > 0);
-    assert.match(r.note, /four other shapes were not examined/);
+  assert.match(r.note, /rhetoric\.js/);
+  assert.match(r.note, /not examined anywhere/);
 });
 
 t('刻意不給總分,因為給一個看起來完整的分數本身就是大動詞小內容', () => {
@@ -193,7 +200,7 @@ t('那條界線的原話寫在原始碼裡,不可被靜默刪除', () => {
   assert.ok(/撿起自己的捏造當證據再用/.test(src));
 });
 
-t('驗不了的四個形狀為什麼不做,寫在原始碼裡', () => {
+t('驗不了的兩個形狀為什麼不做,寫在原始碼裡', () => {
   const src = readFileSync(new URL('../src/provenance.js', import.meta.url), 'utf8');
   assert.ok(/不是留待日後補上的 TODO/.test(src));
   assert.ok(/誤判率高又講得篤定/.test(src));

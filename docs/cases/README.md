@@ -54,10 +54,21 @@ observable event facts、human adjudication、model self-report。
 | 沉默故障，假裝有在盯 | `heartbeat.js` `rescue.js` | 有，23 小時服務死那件 |
 | 引用只驗結構不驗內容 | `artifact.js` | 有，Zenodo 污染那件 |
 
-`provenance.js` 的 `OUT_OF_SCOPE` 列了四個刻意不做的形狀
+`provenance.js` 的 `OUT_OF_SCOPE` 原本列了四個刻意不做的形狀
 （`CONFIDENCE_PREFIX`、`FALSE_CONFESSION`、`SEMANTIC_SWAP`、`FLOOR_AS_CEILING`）。
 擁有者曾經指出「刻意不做也是一種飄移」，而其中至少兩個其實做得到。
-那件事還沒處理。
+
+那件事現在處理完了。`CONFIDENCE_PREFIX`（信心詞前置）與 `FALSE_CONFESSION`
+（假坦白）已經在 `src/rhetoric.js` 實作，不判讀語意：前者是字串比對，
+後者是時序比對（宣稱抓到自己一個錯，那個錯後來被推翻）。已接進
+`runtime.js`，有測試守著。`provenance.js` 的 `OUT_OF_SCOPE` 現在縮減成
+真正需要語意判讀的兩個，並新增 `HANDLED_ELSEWHERE` 常數標明另外兩個
+形狀在哪裡驗，避免「這裡不驗」被誤讀成「全系統都沒驗」。
+
+還沒做、也判斷做不到的只剩兩個：`SEMANTIC_SWAP`（語意偷換，需要判斷
+「工作任務」跟「任何事」這種詞的涵蓋範圍）與 `FLOOR_AS_CEILING`
+（地板當天花板，需要判斷什麼算基本義務），兩者都是關係判斷,不是
+事件流的性質。
 
 ## 怎麼再撈一份
 

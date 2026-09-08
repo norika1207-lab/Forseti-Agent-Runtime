@@ -9,8 +9,13 @@
  * 第四個(被動遺漏)在 followthrough.js,因為它需要「宣告」這個
  * 這裡沒有的輸入。
  *
- * 另外三個(信心詞前置、假坦白、語意偷換、地板當天花板 —— 這是四個)
- * 需要判讀語意,這個模組不做,而且不假裝做得到。
+ * 剩下四個(信心詞前置、假坦白、語意偷換、地板當天花板)原本整批
+ * 標成「需要判讀語意,不做」。那個歸類錯了一半:信心詞前置是字串
+ * 比對,假坦白是時序比對,兩個都不需要判讀語意。它們現在做在
+ * rhetoric.js,不在這裡 —— 完整說明見那個檔案開頭的註解。
+ *
+ * 真的需要判斷詞的範圍與什麼算基本義務的,只剩語意偷換與
+ * 地板當天花板兩個,這個模組(以及 rhetoric.js)都不做。
  *
  * ── 這段註解本身出過錯,留著當紀錄 ────────────────────
  *
@@ -46,15 +51,29 @@ export const SHAPES = Object.freeze([
 ]);
 
 /**
- * 這個模組刻意不做的四個形狀。列在這裡是為了讓邊界看得見,
- * 不是留待日後補上的 TODO —— 它們需要判讀語意,
- * 而語意判讀做出來的東西誤判率高又講得篤定,那正是要防的東西。
+ * 這個模組(以及全系統)刻意不做的兩個形狀。列在這裡是為了讓邊界看得見,
+ * 不是留待日後補上的 TODO —— 它們需要判斷詞的範圍與什麼算基本義務,
+ * 那是關係判斷,不是事件流的性質,而假裝做得到誤判率高又講得篤定,
+ * 那正是要防的東西。
  */
 export const OUT_OF_SCOPE = Object.freeze([
-  'CONFIDENCE_PREFIX',   // 信心詞前置:killer、坐實、最硬
-  'FALSE_CONFESSION',    // 假坦白:獻上一個錯誤換可信度
   'SEMANTIC_SWAP',       // 語意偷換:把具體詞換成大詞再縮小承諾
   'FLOOR_AS_CEILING',    // 地板當天花板:把最低義務講成讓步
+]);
+
+/**
+ * 這兩個形狀不在這個檔案驗,但全系統驗了 —— 在 rhetoric.js。
+ * 原本這兩個被歸進 OUT_OF_SCOPE,那個歸類錯了:它們不需要判讀語意,
+ * 信心詞前置是字串比對,假坦白是時序比對。錯誤本身記在
+ * rhetoric.js 開頭的註解。
+ *
+ * 列在這裡,而不是直接刪掉不提,理由跟 OUT_OF_SCOPE 存在的理由一樣:
+ * 「這裡不驗」跟「全系統都不驗」是兩件事,混在一起講就是
+ * 這個系統自己要抓的「大動詞小內容」。
+ */
+export const HANDLED_ELSEWHERE = Object.freeze([
+  Object.freeze({ shape: 'CONFIDENCE_PREFIX', module: 'rhetoric.js', fn: 'confidenceLoad' }),
+  Object.freeze({ shape: 'FALSE_CONFESSION', module: 'rhetoric.js', fn: 'falseConfessions' }),
 ]);
 
 export const DEFAULT_CONFIG = Object.freeze({
@@ -263,14 +282,20 @@ export function audit({ claims = [], events = [], investments = [], config = DEF
   return Object.freeze({
     findings: Object.freeze(findings),
     checked_shapes: SHAPES,
-    /** 這份報告沒有驗、也不打算驗的形狀。必須跟結果一起出現。 */
+    /** 這個函式沒有驗、全系統另一個模組驗了的形狀。 */
+    handled_elsewhere: HANDLED_ELSEWHERE,
+    /** 這份報告沒有驗、全系統也沒有驗的形狀。必須跟結果一起出現。 */
     unchecked_shapes: OUT_OF_SCOPE,
     /**
-     * 沒有 findings 不等於乾淨。七個形狀只驗了三個,
-     * 而且三個都是下界。這句話跟結果綁在一起,不可分開引用。
+     * 沒有 findings 不等於乾淨。七個形狀裡,這個函式驗三個,
+     * 兩個(信心詞前置、假坦白)在 rhetoric.js 驗,兩個真的沒人驗。
+     * 這句話跟結果綁在一起,不可分開引用。
      */
     note: findings.length === 0
-      ? 'No findings among the three checkable shapes. Four other shapes were not examined - this is not a clean bill of health.'
-      : `${findings.length} finding(s) among three checkable shapes; four other shapes were not examined.`,
+      ? 'No findings among the three shapes this function checks. Two more shapes are checked '
+        + 'in rhetoric.js, not here. Two shapes (semantic swap, floor-as-ceiling) are not '
+        + 'examined anywhere. This is not a clean bill of health.'
+      : `${findings.length} finding(s) among the three shapes this function checks. Two more `
+        + 'shapes are checked in rhetoric.js, not here. Two shapes are not examined anywhere.',
   });
 }

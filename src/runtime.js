@@ -48,7 +48,7 @@ import {
 } from './drift.js';
 import {
   originMix, checkSourceErasure, checkScopeInflation, checkBarrenInvestment, audit,
-  SHAPES, OUT_OF_SCOPE,
+  SHAPES, OUT_OF_SCOPE, HANDLED_ELSEWHERE,
 } from './provenance.js';
 import {
   createBeatState, planBeat, judgeBeat, applyBeat, nextInterval, dispatchPlan,
@@ -557,11 +557,17 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         findings: Object.freeze(findings),
         clean: findings.length === 0,
         checked_shapes: SHAPES,
+        handled_elsewhere: HANDLED_ELSEWHERE,
         unchecked_shapes: OUT_OF_SCOPE,
-        /** 三個形狀過了不等於乾淨。四個沒驗的必須跟結果一起講。 */
+        /**
+         * 三個形狀過了不等於乾淨。信心詞前置與假坦白在 rhetoric.js 驗,
+         * 不是這裡;語意偷換與地板當天花板真的沒人驗。三句話都要講。
+         */
         note: findings.length === 0
-          ? 'Clear on the three checkable shapes; four others were not examined.'
-          : `${findings.length} finding(s) on three checkable shapes; four others were not examined.`,
+          ? 'Clear on the three shapes checked here. Two more are checked in rhetoric.js. '
+            + 'Two shapes are not examined anywhere.'
+          : `${findings.length} finding(s) on the three shapes checked here. Two more are `
+            + 'checked in rhetoric.js. Two shapes are not examined anywhere.',
       });
     },
 
