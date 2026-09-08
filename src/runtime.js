@@ -74,6 +74,7 @@ import {
 } from './intervention.js';
 import { detectorResult, conformanceSummary, cannotDetermine } from './conformance.js';
 import { declare, declareStrict, resolve as resolveDeclaration, followThroughRate } from './followthrough.js';
+import { judgeYield, prematureRate } from './yield.js';
 import { confidenceLoad, falseConfessions } from './rhetoric.js';
 import { createScope, check as checkScope, createStreak, offScopeRate } from './scope.js';
 import { fit as fitBaseline, deviation, fitPerKey } from './baseline.js';
@@ -750,6 +751,34 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         ...followThroughRate(resolutions),
         omitted_items: Object.freeze(resolutions.filter((r) => r.state === 'OMITTED')),
       });
+    },
+
+    /**
+     * 這次交還發言權是不是過早。
+     *
+     * followThrough() 抓的是「說了要做,然後沒做」。這一支抓的是另一件事:
+     * 每一筆宣告都兌現了,這一輪也真的有產出,然後停下來 —— 而工作還沒完。
+     * 掃寫出 Forseti 的那個 session,followThrough 的兌現率是 91%,
+     * 而同一段對話裡擁有者至少十次叫我繼續。兩個數字都對,它們量的
+     * 不是同一件事。
+     *
+     * `unmet` 與 `awaiting` 由宿主判斷,這裡不猜。判斷「哪幾條完成條件
+     * 還沒達成」需要真的去驗,而驗證是宿主的事,不是這個模組的事。
+     * 拿不到就回 CANNOT_DETERMINE,不回 LEGITIMATE。
+     */
+    judgeYield({ doneWhen = null, unmet = [], awaiting = false } = {}) {
+      return judgeYield({
+        doneWhen,
+        unmet,
+        awaiting,
+        // 這一輪有沒有產出,事件流自己知道,不必宿主告訴我們。
+        producedThisTurn: state.events.filter((e) => e.at >= (state.turnStartedAt ?? 0)).length,
+      });
+    },
+
+    /** 一段對話裡有多少次是過早交還。分母排除在等與卡住的回合。 */
+    prematureYieldRate(judgements) {
+      return prematureRate(judgements);
     },
 
     // ── 語氣與自我糾錯 ────────────────────────────────

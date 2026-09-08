@@ -1159,5 +1159,19 @@ t('攔截紀錄跨重啟活著', () => {
   assert.equal(b.overhead({}).outcomes.total, 1);
 });
 
+t('runtime 接得到過早交還的判斷', () => {
+  const rt = createRuntime();
+  rt.ingest([{ attributed_agent: 'a', name: 'Write', input: { file_path: '/p/x.js' }, at: Date.now() }]);
+  const r = rt.judgeYield({ doneWhen: ['a', 'b'], unmet: ['b'] });
+  assert.equal(r.verdict, 'PREMATURE', '有產出、沒在等、還有沒做完的');
+  assert.deepEqual([...r.outstanding], ['b']);
+});
+
+t('拿不到完成的定義時,runtime 也不准說沒問題', () => {
+  const rt = createRuntime();
+  rt.ingest([{ attributed_agent: 'a', name: 'Write', input: { file_path: '/p/x.js' }, at: Date.now() }]);
+  assert.equal(rt.judgeYield({}).verdict, 'CANNOT_DETERMINE');
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

@@ -6,7 +6,7 @@
 
 Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
-`npm test` → 884 assertions, all green — including all 10 acceptance tests from the specification.
+`npm test` → 898 assertions, all green — including all 10 acceptance tests from the specification.
 
 </div>
 
@@ -16,11 +16,11 @@ Zero dependencies. Pure functions. No framework, no daemon, no lock-in.
 
 ## Read this before you trust it
 
-The author of this tool made seventeen of the mistakes it exists to catch, while building it.
+The author of this tool made eighteen of the mistakes it exists to catch, while building it.
 
 That is not automatically damning. A drift detector whose author never drifted would be a detector with no evidence behind it. What matters is who caught each one.
 
-Fourteen of the seventeen were caught by the tooling or the tests. Three were caught by the owner. But that ratio flatters the tool, because most of the seventeen are ordinary programming errors, not the class of failure Forseti is about. Narrow it to the five that actually fall in its target domain:
+Fourteen were caught by the tooling or the tests. Four were caught by the owner. That ratio flatters the tool, because most of the eighteen are ordinary programming errors, not the class of failure Forseti is about. Narrow it to the six that actually fall in its target domain:
 
 | # | What happened | Shape | Caught by |
 |---|---|---|---|
@@ -29,8 +29,11 @@ Fourteen of the seventeen were caught by the tooling or the tests. Three were ca
 | 13 | The Stop hook was installed and could never fire; every declaration resolved as uncheckable | false progress | the tests |
 | 14 | The north star was never committed, so drift detection was silently off after a move | false progress | the tests |
 | 16 | Scope expanded, without consent, from one session to every session on the owner's machine | drift | the owner |
+| 18 | Handed the turn back with the work unfinished, at least ten times in one session | premature yield | the owner |
 
 The three the tooling caught had not hurt anyone yet. The one that cost nine hours of the owner's overnight work was caught by the owner.
+
+Rows 16 and 18 are the same failure seen from two sides: doing more than was agreed, and stopping before the work was done. Both were caught by the owner. Row 18 could not have been caught, because the detector for it did not exist - `followthrough.js` measures "said it, then didn't do it", and by that measure the session that produced Forseti scores 91%, while the owner had to say "keep going" at least ten times in it. Both numbers are correct; they measure different things. `src/yield.js` exists because of that gap.
 
 **So the honest claim is narrow: this catches its own blind spots, not its own overreach.** For it to be described as an instrument you can hold up to an agent, it has to catch one act of overreach the author did not already know about. It has not done that yet.
 
