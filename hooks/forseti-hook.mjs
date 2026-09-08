@@ -343,7 +343,32 @@ async function main() {
   if (input.hook_event_name === 'PostToolUse') {
     const file = input.tool_input?.file_path;
     if (file && WRITE_TOOLS.test(String(input.tool_name))) {
-      Object.assign(event, evidenceFor(file));
+      const ev = evidenceFor(file);
+      Object.assign(event, ev);
+
+      /**
+       * v2 FS-TMP-001:在證據還看得到的這一刻留下憑證。
+       *
+       * 這一段只能在這裡做。檔案被改過、覆蓋、刪掉之後,當時的大小與
+       * 指紋就永遠沒有了,而那正是判斷一個宣稱有沒有兌現的憑據。
+       * 事後分析看到的是「AI 說做了」加上一個不存在的檔案,而那時候
+       * 分不出是當時沒做,還是後來被保留期限清掉了(FS-TMP-003)。
+       *
+       * existence 三態:量得到就是 true/false,量不到是 'unknown',
+       * 不是 false。這個區別是 evidence.js 拒絕接受其他值的原因。
+       */
+      try {
+        rt.captureReceipt({
+          observedAt: event.at,
+          resourceLocator: file,
+          existence: ev.bytes === null ? 'unknown' : true,
+          byteSize: ev.bytes,
+          contentHash: ev.hash,
+          captureMethod: `PostToolUse:${input.tool_name}`,
+          exitCode: typeof input.tool_response?.exit_code === 'number'
+            ? input.tool_response.exit_code : null,
+        });
+      } catch { /* 留不成憑證也不能擋住使用者的工作 */ }
     }
     if (typeof input.tool_response?.exit_code === 'number') {
       event.exit_code = input.tool_response.exit_code;

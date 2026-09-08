@@ -272,6 +272,50 @@ t('AT-HOOK-B4 insideRepo() 本身不可以被設定影響,也不准有無條件�
   }
 });
 
+t('AT-HOOK-E1 PostToolUse 真的留下 Evidence Receipt,而且跨程序讀得回來', () => {
+  // FS-TMP-001 只能在事件當下滿足:檔案被改過之後,當時的大小與指紋
+  // 就永遠沒有了。這條開真的程序、寫真的檔、再開第二個程序讀回來 ——
+  // 同一個 process 裡的測試抓不到這件事,而 hook 每次都是新程序。
+  const work = sandbox();
+  const target = join(work, 'out.md');
+  writeFileSync(target, 'hello receipt');
+
+  const r = runHook(PRE, {
+    hook_event_name: 'PostToolUse', session_id: 'e1', cwd: work,
+    tool_name: 'Write', tool_input: { file_path: target },
+    tool_response: { exit_code: 0 },
+  });
+  assert.equal(r.code, 0);
+
+  const statePath = join(work, '.forseti', 'state.json');
+  assert.ok(existsSync(statePath), 'PostToolUse 要寫下狀態');
+  const body = JSON.parse(JSON.parse(readFileSync(statePath, 'utf8')).body);
+  assert.ok(Array.isArray(body.receipts), '存檔裡要有 receipts 區塊');
+  assert.equal(body.receipts.length, 1);
+  const receipt = body.receipts[0];
+  assert.equal(receipt.resource_locator, target);
+  assert.equal(receipt.existence, true);
+  assert.equal(receipt.byte_size, 'hello receipt'.length);
+  assert.ok(receipt.content_hash, '指紋要在事件當下留下來');
+  assert.match(receipt.capture_method, /^PostToolUse:/);
+
+  rmSync(work, { recursive: true, force: true });
+});
+
+t('AT-HOOK-E2 檔案量不到時,憑證的 existence 是 unknown 不是 false', () => {
+  const work = sandbox();
+  const missing = join(work, 'never-written.md');
+  const r = runHook(PRE, {
+    hook_event_name: 'PostToolUse', session_id: 'e2', cwd: work,
+    tool_name: 'Write', tool_input: { file_path: missing },
+  });
+  assert.equal(r.code, 0);
+  const body = JSON.parse(JSON.parse(readFileSync(join(work, '.forseti', 'state.json'), 'utf8')).body);
+  assert.equal(body.receipts[0].existence, 'unknown', '量不到不等於不存在');
+  assert.equal(body.receipts[0].byte_size, null, '拿不到的值是 null,不是 0');
+  rmSync(work, { recursive: true, force: true });
+});
+
 t('AT-HOOK-B5 跨專案開關預設關閉:沒有設定檔的外部目錄完全不動作', () => {
   const outside = mkdtempSync(join(tmpdir(), 'forseti-outside-noconf-'));
   const r = runHook(PRE, write(outside, 'x', join(outside, 'a.js')));

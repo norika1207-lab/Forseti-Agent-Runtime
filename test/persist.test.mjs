@@ -128,7 +128,27 @@ t('打包一定要有時間，沒有就拋錯不補假的', () =>
 
 t('區塊清單一字不改', () =>
   assert.deepEqual([...SECTIONS],
-    ['capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges', 'goal', 'signals', 'events']));
+    ['capsules', 'budget', 'scopes', 'locks', 'coverages', 'stats', 'edges', 'goal', 'signals',
+      'events', 'receipts', 'commitments']));
+
+t('每個區塊都要走完一趟來回,少接一處就會靜靜地壞掉', () => {
+  // 這條是 v2 加 receipts/commitments 時學到的:欄位清單寫死在三個地方 ——
+  // SECTIONS、createSnapshot 的參數解構、restore 的 state 組裝。
+  // 只改前兩個的話,序列化出來的 body 裡真的有那個欄位(看起來完全正常),
+  // 讀回來卻是 undefined,而且不會有任何錯誤。
+  // 那次是靠一條跨程序的 runtime 測試才抓到,單看 save() 的輸出看不出來。
+  const snap = createSnapshot({
+    at: T0,
+    receipts: [{ observed_at: T0, resource_locator: 'x', existence: true }],
+    commitments: [{ task_id: 't', status: 'NOT_STARTED' }],
+  });
+  const back = load(serialize(snap), { now: T0 });
+  for (const s of SECTIONS) {
+    assert.ok(s in back.state, `${s} 在 SECTIONS 裡,但 restore 沒有把它組回 state`);
+  }
+  assert.equal(back.state.receipts.length, 1);
+  assert.equal(back.state.commitments[0].task_id, 't');
+});
 
 t('北極星與訊號跨重啟活著,忘了目標就永遠量不出飄移', () => {
   const snap = createSnapshot({

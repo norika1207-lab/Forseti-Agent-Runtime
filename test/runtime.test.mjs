@@ -1360,5 +1360,61 @@ t('v2:CT-043 沒走完的驗證流程,經 runtime 也不准提高信心', () => 
   assert.equal(r.may_increase_confidence, false);
 });
 
+// ── v2 狀態跨重啟。這一段是補的,理由寫在下面第一條裡 ─────────────
+
+t('v2:Evidence Receipt 跨重啟活著', () => {
+  // 這條測試存在的理由:第一版把 receipts 放進 state 卻沒放進 save(),
+  // 而 v2 全部 400 多條測試都在同一個 process 裡跑,沒有一條會抓到。
+  // hook 每一次呼叫都是新程序,所以那個機制當時是完全死的。
+  const a = createRuntime();
+  const T = 1_700_000_000_000;
+  a.captureReceipt({
+    observedAt: T, resourceLocator: '/p/out.md', existence: true,
+    byteSize: 2048, contentHash: 'abc123', captureMethod: 'PostToolUse',
+  });
+  const b = createRuntime();
+  b.restore(a.save());
+  const r = b.existedAt('/p/out.md', T + 1000);
+  assert.equal(r.answer, 'YES', '重啟後查不到憑證,等於當初沒採集');
+  assert.equal(r.byte_size, 2048);
+  assert.equal(b.inspect().receipts.length, 1);
+});
+
+t('v2:TaskCommitment 跨重啟活著,PTN 才有前提', () => {
+  const a = createRuntime();
+  a.commit({ taskId: 'orchestrator', priority: 'HIGH', status: 'NOT_STARTED' });
+  a.updateCommitment('orchestrator', { status: 'STALLED' });
+  const b = createRuntime();
+  b.restore(a.save());
+  assert.equal(b.commitments().length, 1);
+  assert.equal(b.commitments()[0].status, 'STALLED');
+  assert.equal(b.commitments()[0].priority, 'HIGH');
+});
+
+t('v2:重啟之後 PTN 還抓得到,不是只在同一個 process 裡有效', () => {
+  const a = createRuntime();
+  a.commit({ taskId: 'orch', status: 'NOT_STARTED', priority: 'HIGH' });
+  for (let i = 0; i < 5; i++) {
+    a.ingest([{ attributed_agent: 'x', name: 'Write', input: { file_path: `/p/o${i}.js` }, at: Date.now() }]);
+  }
+  const b = createRuntime();
+  b.restore(a.save());
+  const h = b.committedTaskHealth({ executionLineage: { orch: 0 } });
+  assert.equal(h.promised_task_nonexecution.length, 1);
+  assert.equal(h.starvation.verdict, 'COMMITTED_TASK_STARVATION');
+});
+
+t('v2:舊的快照沒有這兩個欄位,讀回來是空陣列而不是炸掉', () => {
+  const a = createRuntime();
+  a.ingest([{ attributed_agent: 'x', name: 'Write', input: { file_path: '/p/a.js' }, at: Date.now() }]);
+  const snapshot = JSON.parse(a.save());
+  delete snapshot.receipts;
+  delete snapshot.commitments;
+  const b = createRuntime();
+  b.restore(JSON.stringify(snapshot));
+  assert.deepEqual([...b.inspect().receipts], []);
+  assert.deepEqual([...b.commitments()], []);
+});
+
 console.log(`\n結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);

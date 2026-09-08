@@ -39,6 +39,14 @@ export const SECTIONS = Object.freeze([
   // 每一次都是新的,而「最近誰寫過這個檔」全部在事件流裡。
   // 沒有它,跨程序的撞車偵測永遠查不到東西。
   'events',
+  // v2 的兩份帳本,加入的理由跟 events 一模一樣,而且更嚴格:
+  // Evidence Receipt 只有在事件當下拿得到(FS-TMP-001),存不下來就等於
+  // 從來沒採集過;TaskCommitment 是 PTN/TOUA 的前提,而承諾是跨回合的。
+  //
+  // 這兩個是後補的。第一版把它們放進 runtime 的 state 卻沒放進這裡,
+  // 而 v2 全部測試都在同一個 process 裡跑,一條都沒抓到 ——
+  // 跟 §6.1 第 13 條(Stop hook 裝上去是死的)完全同一個形狀。
+  'receipts', 'commitments',
 ]);
 
 // ---------------------------------------------------------------------------
@@ -99,7 +107,7 @@ function decodeValue(v) {
 export function createSnapshot({
   capsules = [], budget = null, scopes = [], locks = [],
   coverages = [], stats = null, edges = [], goal = null, signals = null,
-  events = [], at = null,
+  events = [], receipts = [], commitments = [], at = null,
 } = {}) {
   if (typeof at !== 'number' || !Number.isFinite(at)) {
     throw new TypeError('at is required and must be a millisecond timestamp. Without a pack time, lock expiry cannot be judged.');
@@ -108,6 +116,7 @@ export function createSnapshot({
     schema_version: SCHEMA_VERSION,
     at,
     capsules, budget, scopes, locks, coverages, stats, edges, goal, signals, events,
+    receipts, commitments,
   });
 }
 
@@ -274,6 +283,16 @@ export function restore(snapshot, { now } = {}) {
       goal: snapshot?.goal ?? null,
       signals: snapshot?.signals ?? null,
       events: snapshot?.events ?? [],
+      /**
+       * v2 的兩份帳本。舊快照沒有這兩個欄位,讀回來是空陣列,不是錯誤。
+       *
+       * 這裡跟 SECTIONS、createSnapshot 三個地方都要各改一次,而三個地方
+       * 的欄位清單都是寫死的 —— 只改其中一個,序列化那端會看起來完全正常
+       * (body 裡真的有那個欄位),讀回來卻是 undefined。第一次改就只改了
+       * 兩個地方,而 save() 的輸出檢查不出來,因為問題在 load()。
+       */
+      receipts: snapshot?.receipts ?? [],
+      commitments: snapshot?.commitments ?? [],
     }),
     stale_scopes: Object.freeze(stale),
     expired_locks: Object.freeze(expired),

@@ -1545,6 +1545,23 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
         // 只留最近的事件。撞車偵測只看得到最近幾十秒,而狀態檔不該無限長大。
         // 保留期比任何一個時間窗都寬,但不是全部歷史 —— 那是 transcript 的工作。
         events: state.events.filter((e) => e.at >= now() - EVENT_RETENTION_MS).slice(-MAX_KEPT_EVENTS),
+        /**
+         * v2 的兩份帳本必須跨重啟活著,理由跟北極星一樣,但更嚴格。
+         *
+         * Evidence Receipt 是事件當下才拿得到的東西(FS-TMP-001):檔案被改過、
+         * 覆蓋、刪掉之後,當時的大小與指紋就永遠沒有了。存不下來的話,
+         * existedAt() 在每一個新程序裡都會回 UNKNOWN,而 hook 每一次呼叫
+         * 都是新程序 —— 那個機制會安靜地完全不存在。
+         *
+         * TaskCommitment 同理:PTN 與 TOUA 的前提是先有一份承諾的紀錄,
+         * 而承諾是跨回合的。
+         *
+         * 這一段是補上去的。第一版把兩份帳本放進 state 卻沒放進 save(),
+         * 而所有 v2 測試都在同一個 process 裡跑,一條都沒抓到 ——
+         * 跟 §6.1 第 13 條(Stop hook 裝上去是死的)完全同一個形狀。
+         */
+        receipts: state.receipts.slice(-MAX_KEPT_EVENTS),
+        commitments: [...state.commitments.values()],
         at: now(),
         // 北極星必須跨重啟活著。忘了目標之後,飄移就再也量不出來了。
         goal: state.anchor ? { topics: [...state.anchor.topics], inferred: state.anchor.inferred } : null,
@@ -1622,6 +1639,10 @@ export function createRuntime({ now = () => Date.now(), config = {} } = {}) {
       state.intercepts = [...(sig.intercepts ?? [])];
       state.budget = r.state.budget ?? null;
       state.contracts = new Map((sig.contracts ?? []).map((c) => [c.contract_id, c]));
+      // v2 的兩份帳本。存進去了就要讀得回來 —— 只做一半的持久化,
+      // 效果跟完全沒做一樣,而且更難發現。
+      state.receipts = [...(r.state.receipts ?? [])];
+      state.commitments = new Map((r.state.commitments ?? []).map((c) => [c.task_id, c]));
       return r;
     },
 
