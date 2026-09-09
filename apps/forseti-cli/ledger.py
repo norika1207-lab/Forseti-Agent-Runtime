@@ -248,6 +248,16 @@ def _worker_mod():
         return importlib.import_module("worker")
 
 
+def _starvation_mod():
+    import importlib
+    import sys as _sys
+    try:
+        return importlib.import_module("starvation")
+    except ImportError:
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        return importlib.import_module("starvation")
+
+
 def _continuity_mod():
     import importlib
     import sys as _sys
@@ -859,6 +869,76 @@ class Ledger:
             "burden_verdict": c.burden_verdict(burden),
             "violations": violations,
         }
+
+    # -- 結果保全（F07-OUT-001）-------------------------------------------
+
+    def receipt(self, step_id: str, tool: str, outcome: str, *,
+                artifacts: list[str] | None = None,
+                raw_refs: list[str] | None = None):
+        """落一份 ResultReceipt。必須在自然語言合成之前呼叫。
+
+        F07 §5。這份東西的價值全在時序上:晚一步落地就等於沒有,
+        因為吐白正是發生在合成那一刻。
+        """
+        st = _starvation_mod()
+        r = st.ResultReceipt(step_id=step_id, tool=tool, outcome=outcome,
+                             artifacts=artifacts or [], raw_refs=raw_refs or [])
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        self._event("RESULT_RECEIPT", f"{tool}：{outcome}", actor="worker",
+                    task_id=row[0] if row else "", step_id=step_id,
+                    payload=r.to_dict(), idem_key=f"receipt:{step_id}:{r.digest}")
+        return r
+
+    def receipts_of(self, step_id: str) -> list[dict]:
+        rows = self.con.execute(
+            "SELECT payload FROM events WHERE step_id=? AND kind='RESULT_RECEIPT'"
+            " ORDER BY event_id", (step_id,)).fetchall()
+        out = []
+        for (p,) in rows:
+            try:
+                out.append(json.loads(p))
+            except (ValueError, TypeError):
+                continue
+        return out
+
+    def mark_synthesized(self, step_id: str, digest: str) -> None:
+        """標記某份收據已經被轉成給人看的文字。"""
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        self._event("SYNTHESIZED", digest, actor="main",
+                    task_id=row[0] if row else "", step_id=step_id)
+
+    def diagnose_output(self, step_id: str, *, blank_run: int = 0,
+                        foreground_running: bool = False,
+                        progress_healthy: bool = False):
+        """診斷這一步的輸出狀況。只吃看得到的事實。
+
+        不接受任何「模型說它怎麼了」的輸入(§3)。回傳的 Diagnosis 帶
+        basis 欄位,標明是 OBSERVED 還是 INFERRED。
+        """
+        st = _starvation_mod()
+        receipts = self.receipts_of(step_id)
+        synthesized = self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='SYNTHESIZED'",
+            (step_id,)).fetchone()[0]
+        tool_calls = self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE step_id=? AND kind IN"
+            " ('RESULT_RECEIPT','WORKER_PROGRESS','ARTIFACT_CHANGED')",
+            (step_id,)).fetchone()[0]
+        d = st.diagnose(has_receipts=bool(receipts),
+                        has_final_output=bool(synthesized),
+                        tool_calls=tool_calls,
+                        progress_healthy=progress_healthy,
+                        blank_run=blank_run,
+                        foreground_running=foreground_running)
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        self._event("OUTPUT_DIAGNOSIS", f"{d.failure_class}（{d.basis}）：{d.detail}",
+                    actor="watchdog", task_id=row[0] if row else "", step_id=step_id,
+                    payload={"class": d.failure_class, "basis": d.basis,
+                             "plan": st.recovery_plan(d)})
+        return d
 
     # -- 義務帳本（F02 §6）-----------------------------------------------
 
