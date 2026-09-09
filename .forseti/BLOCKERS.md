@@ -45,41 +45,76 @@
 
 ---
 
-## B-02　hook 是否真的在 Claude Code 啟動時載入（2026-09-09 部分解除）
+## B-02　hook 的載入條件與寫入位置（2026-09-09 查清，剩一條需 owner）
 
-**擋住：** 原本擋住所有即時採集的前提。**現在部分解除。**
+**擋住：** 只剩一件事 —— 「從 repo 目錄啟動的 session，hook 是否真的被
+載入並觸發」。其餘都查清楚了。
 
-**新證據，2026-09-09：** `~/.forseti/` 底下有 hook 自己寫的三個檔：
+### 載入條件
 
+hook 只註冊在 **repo 的** `.claude/settings.json`（3 處，
+Pre/PostToolUse matcher 是 `Write|Edit|MultiEdit|NotebookEdit` 與 `Stop`）。
+全域 `~/.claude/settings.json` 是 0 處。
+
+第二道是硬邊界，寫在 `hooks/forseti-hook.mjs:273-275`，在讀任何狀態、
+建任何目錄之前就檢查：
+
+```js
+const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
 ```
-goal.json    2026-09-08 09:56
-state.json   2026-09-08 10:02
-streak.json  2026-09-08 10:02   {"off":0,"total_off":8,"total_checked":12}
-```
 
-`streak.json` 說檢查了 12 次、8 次判離題。`state.json` 的 coverages 指向
-session `17cce3cf`，追蹤的檔案是 ISEEU 那條線的。
+`insideRepo`（`:77-81`）比對的是 `REPO_ROOT = resolvePath(HERE, '..')`，
+也就是 hook 檔案自己的位置往上一層。**不看設定、不看環境變數**，
+所以這條邊界改不掉，只能改程式碼。
 
-所以 hook 確實被載入過、確實跑過、確實寫了東西。
+### 寫入位置
 
-**剩下沒驗的部分：**
+`:164-173`。一律寫 `projectRoot(cwd)/.forseti/{state,streak,goal}.json`，
+而 `projectRoot = CLAUDE_PROJECT_DIR || cwd || process.cwd()`。
+寫到哪由觸發當下的環境決定，不是固定寫 repo。
+另有全域 `$HOME/.forseti/goal.json`，hook 只讀不寫。
 
-hook 寫的是 `~/.forseti/`（全域）不是 repo 內的 `.forseti/`（專案）。
-兩份 `goal.json` 的 north_star 是同一句，但 scope 不同：全域那份多了
-ISEEU 與一個 `/private/tmp` 路徑。**兩份的關係還沒釐清**，也不知道
-hook 現在在這個 repo 底下會寫哪一份。
+### `~/.forseti/` 那批資料是什麼（我昨天解讀錯了）
 
-那 12 次檢查是 2026-09-08 早上的事，不是現在。今天這一整場的工作
-沒有產生任何新的 streak 紀錄，代表 hook 在這個 session 裡沒有在跑。
+**它不是「hook 正常運作的證據」，是 2026-09-08 那場事故的殘骸。**
 
-**怎麼再往下驗：** 在 repo 底下開新 session，隨便寫個檔，看
-`~/.forseti/streak.json` 的 `total_checked` 有沒有加一。
+`forseti-hook.mjs:18-35` 自己寫了經過：這個檔案原本有三個
+`process.exit(2)`，一個都沒問過 `intervention.js` 的 `canIntervene`。
+裝上去之後，一個只寫著某專案路徑的 scope 對整台機器每一個目錄生效，
+擁有者其他所有工作連續寫五個檔就被 deny 一次，整整九個小時。
 
-**這條掛了兩天說「從未驗證」，而證據一直躺在那個目錄裡。**
-2026-09-09 我還把 `ledger.db` 放進同一個目錄，沒有看裡面有什麼。
-發現它的是被我派出去又忘記的那個 session。
+原文最後一句：「留下的證據是 streak.json 的 total_checked: 12,
+total_off: 8」。
 
----
+所以那個 8 不是「8 次判離題」，是 8 次擋掉她的正常工作。
+事故後撤出全域設定、只留 repo settings、加上 `insideRepo` 硬邊界，
+所以現行程式碼跑不出那批資料 —— cwd 在 home 一帶的 session 會在 `:275`
+就 exit 0，連目錄都不會建。
+
+**2026-09-09 我把事故的殘骸當成了機制運作的證明。方向沒錯，性質反了。**
+
+### 剩下三條沒驗的（由 norikaoda-84 查出並誠實標記）
+
+一，Claude Code 決定載入哪份 project settings 的規則讀不到（harness 內部）。
+只能反推「本 session 的 project 是 home、沒載 repo settings」，
+**無法直接證明「從 repo 目錄啟動就一定會載入並觸發」。這一條仍然只有
+owner 從 repo 目錄開 session 驗得到。**
+
+二，「09-08 當時全域 settings.json 確實註冊過這三個 hook」沒有直接檔案
+證據，現在全域已經沒有它們。時序判定是靠 hook 自述、`~/.forseti/` 遺留、
+streak 三者一致反推。要坐實需要 settings.json 的版控或備份歷史。
+
+三，全域 `~/.forseti/goal.json` 多出的 ISEEU 與 `/private/tmp` scope
+是誰寫的，沒找到寫入者。`forseti-declare.mjs:27` 寫的是
+`declarations.json` 不是 `goal.json`，hook 只讀不寫。寫者應該是
+某個 CLI 或安裝腳本，還沒讀到那段，不猜。
+
+### 出處
+
+行號由 `norikaoda-84` 提供，**本 session 親自抽驗過 `:73-84`、`:270-280`、
+`:162-175`、`:16-36` 四段，全部對上。** 它也清掉了自己製造的測試污染。
+
 
 ## B-03　Python 版本是 3.11.5，工程書要求 3.12
 
