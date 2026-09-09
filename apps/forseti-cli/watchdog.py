@@ -182,7 +182,7 @@ def assess(*, age_sec: float, progress_changed: bool, events_since: int,
 # ---------------------------------------------------------------------------
 
 def next_rung(current: str | None, *, unresponsive_count: int = 0,
-              config: dict | None = None) -> str:
+              can_report: str = "full", config: dict | None = None) -> str:
     """下一階該做什麼。
 
     §5 的階梯是 SUSPECT → soft ping → inspect state → structured status
@@ -190,17 +190,34 @@ def next_rung(current: str | None, *, unresponsive_count: int = 0,
     最後，只在權限或歧義需要時才叫。
 
     這個順序本身就是設計主張：叫人是最貴的一步，不是最方便的一步。
+
+    can_report 是 B-10 加的。前三階（SOFT_PING、INSPECT_STATE、
+    STRUCTURED_STATUS）全部是「問它」，而問一個回不了話的 worker
+    等於白等三輪，然後才做真正有用的事。一個只有 Write 權限的 worker
+    不會因為被問三次就變得能回答。
+
+    所以 write_only 的 worker 直接跳過問話那三階，從 CHECKPOINT 開始 ——
+    去看它留下了什麼，那是它唯一能留下的東西。這不是對它比較嚴格，
+    是不要浪費時間問一個問不到的問題。
     """
     c = {**DEFAULTS, **(config or {})}
     if unresponsive_count >= c["unresponsive_limit"]:
         return "RESTART_OR_REASSIGN"
+
+    ladder = LADDER
+    if can_report == "write_only":
+        ladder = tuple(r for r in LADDER
+                       if r not in ("SOFT_PING", "INSPECT_STATE",
+                                    "STRUCTURED_STATUS"))
     if current is None:
-        return LADDER[0]
+        return ladder[0]
     try:
-        i = LADDER.index(current)
+        i = ladder.index(current)
     except ValueError:
-        return LADDER[0]
-    return LADDER[min(i + 1, len(LADDER) - 1)]
+        # 目前這一階不在這個 worker 的階梯上（例如它剛從 full 改判成
+        # write_only）。從頭開始，不要猜一個位置。
+        return ladder[0]
+    return ladder[min(i + 1, len(ladder) - 1)]
 
 
 # ---------------------------------------------------------------------------

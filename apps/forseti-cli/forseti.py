@@ -35,6 +35,7 @@
 跨 session 派工（B-09）：
     python3 apps/forseti-cli/forseti.py handoff <task> <local_id> <worker>
     python3 apps/forseti-cli/forseti.py handoff --new <worker> "目標" [verifier]
+    python3 apps/forseti-cli/forseti.py handoff --no-shell ...   worker 只能寫檔案
     python3 apps/forseti-cli/forseti.py watch
 
 handoff 先把步驟登記進帳本再產出要送的訊息，watch 一次掃完所有
@@ -811,8 +812,10 @@ def cmd_watch(args: list[str]) -> int:
             a = led.check_liveness(s["step_id"])
             mark = "！" if a.suspect else "　"
             who = s["worker"] or "沒有負責人"
+            cap = {"full": "", "write_only": "　只能寫檔",
+                   "unknown": "　回報能力未宣告"}[s["can_report"]]
             print(f"  {mark} {s['local_id']:<10}{s['state']:<12}"
-                  f"{_fmt_age(s['idle_sec']):>8} 沒動靜　{who}")
+                  f"{_fmt_age(s['idle_sec']):>8} 沒動靜　{who}{cap}")
             print(f"      {s['objective'][:56]}")
             if a.suspect:
                 suspect.append((s, a))
@@ -840,6 +843,87 @@ def cmd_watch(args: list[str]) -> int:
         led.close()
 
 
+INBOX_README = """# 這是一個收件匣
+
+你在這個目錄底下建一個 `.txt`，就等於在任務帳本裡發了一則回報。
+
+    第一行   事件種類
+    第二行起 說明
+
+檔名隨便取。一個檔案一筆，不用去改舊的檔案。
+控制端巡檢的時候會來撿，撿走的會移到 `.done/`。
+
+合法的事件種類只有這八種：
+
+    WORKER_ACCEPTED     我接下了
+    WORKER_PROGRESS     做到哪裡了
+    WORKER_COMPLETION   我認為做完了（這不等於驗證通過）
+    WORKER_BLOCKED      被什麼擋住
+    WORKER_FAILED       失敗了
+    WORKER_CANCELLED    取消
+    EVIDENCE_AVAILABLE  證據可以看了
+    ARTIFACT_CHANGED    產物變了
+
+寫別的種類不會被丟掉，會被記成「不認得的種類」，
+因為讓你的話無聲消失比記錯更糟。
+
+一件要講清楚的事：在這裡寫 `WORKER_COMPLETION` 不會讓任何東西
+變成已驗證。驗證是控制端真的去跑 verifier、真的去看磁碟。
+這個收件匣降低的是回報的門檻，不是驗證的門檻。
+"""
+
+
+def _ensure_inbox(led, step_id: str):
+    """派工時就把收件匣建好，附一份格式說明。
+
+    不要求 worker 自己建目錄：那是一個它可能做不到、而且做不到的時候
+    完全不會有人知道的動作。這條通道存在的意義是把回報的門檻降到最低，
+    那就不該在門檻前面再放一道門檻。
+
+    說明檔用 .md，因為 collect_inbox 只撿 .txt，不會把它當成一則回報。
+    """
+    d = led.inbox_dir(step_id)
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "README.md").write_text(INBOX_README, encoding="utf-8")
+    except OSError:
+        pass
+    return d
+
+
+def _report_by_writing(led, step_id: str) -> list[str]:
+    """只需要 Write 權限的回報方式（B-10）。
+
+    一個檔案一筆事件，不用 append。read-modify-write 對一個只有 Write
+    的 worker 是額外的失敗機會，而這條通道存在的意義就是把回報的門檻
+    降到跟寫產物一樣低。
+    """
+    d = _ensure_inbox(led, step_id)
+    return [
+        "你可能沒有執行指令的權限。那不影響回報：寫一個檔案就是回報。",
+        "",
+        f"收件匣　{d}",
+        "",
+        "在那個目錄底下建一個 .txt，第一行寫事件種類，第二行起寫說明。",
+        "檔名隨便取，一個檔案一筆，不用去改舊的檔案。",
+        "",
+        "  例如　accepted.txt",
+        "      WORKER_ACCEPTED",
+        "      接下了，正在讀 ledger.py",
+        "",
+        "  例如　p1.txt",
+        "      WORKER_PROGRESS",
+        "      骨架寫完了，還差 exit code 的處理",
+        "",
+        "  卡住也要寫，沉默跟卡住在帳本裡長得一模一樣：",
+        "      WORKER_BLOCKED",
+        "      找不到 schema 定義在哪",
+        "",
+        "控制端巡檢的時候會去撿，撿到就變成帳本裡真正的事件。",
+        "寫了就等於說了，不必等它撿。",
+    ]
+
+
 def _handoff_message(led, step_id: str, task_id: str) -> str:
     """給 worker 的訊息。帶著它回報所需的一切。
 
@@ -863,16 +947,25 @@ def _handoff_message(led, step_id: str, task_id: str) -> str:
         "你不回話超過一段時間會被巡檢標出來。這對你有利：",
         "你死掉的話有人會知道，而不是等十七小時。",
         "",
-        "開始做之前先回報一次，之後有進展就回報：",
-        f'  python3 "{cli}" event WORKER_ACCEPTED {step_id} "接下了"',
-        f'  python3 "{cli}" event WORKER_PROGRESS {step_id} "做到哪裡"',
-        "",
-        "卡住不要沉默，卡住也是一種要回報的狀態：",
-        f'  python3 "{cli}" event WORKER_BLOCKED {step_id} "被什麼擋住"',
-        "",
-        "做完之後跑驗證。驗證是真的去看磁碟，不是你說了算：",
-        f'  python3 "{cli}" verify {step_id}',
     ]
+
+    cap = led.can_report(step_id)
+    if cap in ("full", "unknown"):
+        lines += [
+            "開始做之前先回報一次，之後有進展就回報：",
+            f'  python3 "{cli}" event WORKER_ACCEPTED {step_id} "接下了"',
+            f'  python3 "{cli}" event WORKER_PROGRESS {step_id} "做到哪裡"',
+            "",
+            "卡住不要沉默，卡住也是一種要回報的狀態：",
+            f'  python3 "{cli}" event WORKER_BLOCKED {step_id} "被什麼擋住"',
+            "",
+            "做完之後跑驗證。驗證是真的去看磁碟，不是你說了算：",
+            f'  python3 "{cli}" verify {step_id}',
+        ]
+    if cap in ("write_only", "unknown"):
+        if cap == "unknown":
+            lines += ["", "── 如果上面那些指令跑不起來 ──", ""]
+        lines += _report_by_writing(led, step_id)
     if st and st["expected_outputs"]:
         lines += ["", "要產出的東西："] + [f"  {o}" for o in st["expected_outputs"]]
     if st and st["verifier"]:
@@ -893,6 +986,15 @@ def cmd_handoff(args: list[str]) -> int:
     led_mod, led = _open_ledger()
     if led is None:
         return 1
+    # B-10：worker 能不能執行指令,是派工方本來就知道的事。
+    # 沒宣告就是 unknown,那不是「大概可以」,是「沒問過」。
+    cap = "unknown"
+    if "--no-shell" in args:
+        cap = "write_only"
+        args = [a for a in args if a != "--no-shell"]
+    elif "--shell" in args:
+        cap = "full"
+        args = [a for a in args if a != "--shell"]
     try:
         if args and args[0] == "--new":
             if len(args) < 3:
@@ -924,11 +1026,19 @@ def cmd_handoff(args: list[str]) -> int:
                 print(f"  找不到步驟：{local}")
                 return 1
 
-        led.dispatch(step_id, worker, f"跨 session 派給 {worker}")
+        led.dispatch(step_id, worker, f"跨 session 派給 {worker}",
+                     can_report=cap)
 
         print()
         print(f"  已登記　{step_id}")
         print(f"  負責人　{worker}")
+        note = {"full": "能執行指令，直接寫帳本",
+                "write_only": "只能寫檔案，回報走收件匣",
+                "unknown": "沒有宣告，訊息裡兩種方式都給了"}[cap]
+        print(f"  回報能力　{cap}　（{note}）")
+        if cap == "unknown":
+            print("  下次可以用 --shell 或 --no-shell 講清楚，")
+            print("  巡檢就不必把「它不回話」跟「它回不了話」混在一起。")
         print()
         print("  watchdog 現在看得到它了。忘記它也沒關係，")
         print("  用 watch 會把它掃出來。")

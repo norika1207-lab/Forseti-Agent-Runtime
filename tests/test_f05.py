@@ -274,5 +274,126 @@ class TestSweepFindsForgottenWorkers(F05Case):
         self.assertEqual(found[0]["worker"], "worker-a")
 
 
+class TestInboxReportingChannel(F05Case):
+    """B-10：只有 Write 權限的 worker 也要能回報。
+
+    實測發現的事：一個用 `--permission-mode acceptEdits` 開的 worker，
+    Write 允許、Bash 被擋，於是它交得出合格的產物，卻連一句「我接下了」
+    都送不出去，因為送出的方式是跑一行 python。
+
+    能做事跟能回話是兩種不同的權限。收件匣把後者的門檻降到跟前者一樣。
+    """
+
+    def write_inbox(self, name: str, kind: str, body: str = "") -> None:
+        d = self.led.inbox_dir(self.s1)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(f"{kind}\n{body}", encoding="utf-8")
+
+    def test_a_file_becomes_a_real_event(self):
+        self.write_inbox("a.txt", "WORKER_ACCEPTED", "接下了")
+        got = self.led.collect_inbox(self.s1)
+        self.assertEqual(got, ["WORKER_ACCEPTED"])
+        kinds = [e["kind"] for e in self.led.events_of(self.t)]
+        self.assertIn("WORKER_ACCEPTED", kinds)
+
+    def test_collecting_twice_does_not_duplicate(self):
+        """撿過的不再撿。冪等靠 idem_key，不靠記得移走檔案。"""
+        self.write_inbox("a.txt", "WORKER_PROGRESS", "一半了")
+        self.led.collect_inbox(self.s1)
+        # 就算檔案又被放回來，也不該再算一次
+        self.write_inbox("a.txt", "WORKER_PROGRESS", "一半了")
+        self.led.collect_inbox(self.s1)
+        n = sum(1 for e in self.led.events_of(self.t)
+                if e["kind"] == "WORKER_PROGRESS")
+        self.assertEqual(n, 1)
+
+    def test_appledouble_sidecars_are_not_counted_as_reports(self):
+        """`._` 開頭的附屬檔不算回報。
+
+        這個 repo 在 exFAT 外接碟上，macOS 會為每個檔案寫一個 `._` 附屬檔。
+        不濾掉的話一則回報會被算成兩則，第二則的內容還是二進位垃圾。
+        tools/orphans.mjs 因為同一個原因假警報過兩次。
+        """
+        self.write_inbox("a.txt", "WORKER_PROGRESS", "真的回報")
+        d = self.led.inbox_dir(self.s1)
+        (d / "._a.txt").write_bytes(b"\x00\x05\x16\x07AppleDouble")
+        self.led.collect_inbox(self.s1)
+        n = sum(1 for e in self.led.events_of(self.t)
+                if e["kind"] == "WORKER_PROGRESS")
+        self.assertEqual(n, 1, "附屬檔不該被當成第二則回報")
+
+    def test_unknown_kind_is_recorded_not_discarded(self):
+        """不認得的種類不丟掉。
+
+        丟掉會讓 worker 的話消失得無聲無息，而那正是這條通道要解決的
+        問題。記成 INBOX_UNKNOWN_KIND，讓它至少看得見。
+        """
+        self.write_inbox("x.txt", "差不多好了", "嗨")
+        self.led.collect_inbox(self.s1)
+        kinds = [e["kind"] for e in self.led.events_of(self.t)]
+        self.assertIn("INBOX_UNKNOWN_KIND", kinds)
+
+    def test_claiming_completion_in_a_file_does_not_verify_anything(self):
+        """worker 寫檔案說自己完成了，步驟不會因此變成已驗證。
+
+        這條是整個收件匣最重要的邊界。降低回報的門檻不等於降低驗證的
+        門檻 —— 一個檔案裡的「我做完了」跟嘴巴說的「我做完了」是同一
+        種東西，都是 claim。
+        """
+        self.write_inbox("done.txt", "WORKER_COMPLETION", "全部做完了")
+        self.led.collect_inbox(self.s1)
+        state = self.led.steps_of(self.t)[0]["state"]
+        self.assertNotEqual(state, "VERIFIED_COMPLETE")
+        self.assertIn(state, L.ACTIVE)
+
+    def test_writing_a_file_rescues_a_worker_from_being_called_stalled(self):
+        """寫一個檔案就足以證明自己還活著。
+
+        這是這條通道存在的理由。沒有它，一個只能寫檔的 worker 在還沒
+        產出第一個檔案之前，四個因子會是「久 × 沒產物 × 沒事件 × 該有產物」，
+        於是活得好好的它會被判定成停滯。
+        """
+        self.age_step(7200)
+        a = self.led.check_liveness(self.s1)
+        self.assertTrue(a.suspect, "沒有任何訊號時確實該被標出來")
+
+        self.age_step(7200)
+        self.write_inbox("alive.txt", "WORKER_PROGRESS", "還在讀規格，慢但沒死")
+        a2 = self.led.check_liveness(self.s1)
+        self.assertFalse(a2.suspect, "它說話了，就不該再被當成停滯")
+
+    def test_the_ladder_skips_asking_a_worker_that_cannot_answer(self):
+        """回不了話的 worker，不要浪費三階去問它。
+
+        階梯的前三階都是「問它」。問一個只有 Write 權限的 worker 三次，
+        它不會因此變得能回答，只是把真正有用的動作往後推三輪。
+        """
+        full = WD.next_rung(None, can_report="full")
+        self.assertEqual(full, "SUSPECT")
+        self.assertEqual(WD.next_rung("SUSPECT", can_report="full"), "SOFT_PING")
+
+        # 只能寫檔的，跳過問話，直接去看它留下了什麼
+        self.assertEqual(WD.next_rung("SUSPECT", can_report="write_only"),
+                         "CHECKPOINT")
+
+    def test_recover_uses_the_workers_declared_capability(self):
+        """帳本裡宣告的能力要真的影響決定，不是只存著好看。"""
+        self.led.dispatch(self.s1, "worker-a", "重派", can_report="write_only")
+        self.assertEqual(self.led.recover(self.s1, current_rung="SUSPECT"),
+                         "CHECKPOINT")
+
+    def test_dispatch_records_whether_the_worker_can_report(self):
+        """派工方宣告的能力要留在帳本裡。
+
+        不宣告就是 unknown，那不是「大概可以」，是「沒問過」。
+        把它記成 full 會讓一個沒有答案的問題看起來已經有答案。
+        """
+        self.assertEqual(self.led.can_report(self.s1), "unknown")
+        self.led.dispatch(self.s1, "worker-b", "重派", can_report="write_only")
+        self.assertEqual(self.led.can_report(self.s1), "write_only")
+        with self.assertRaises(ValueError):
+            self.led.dispatch(self.s1, "worker-b", "亂填", can_report="maybe")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

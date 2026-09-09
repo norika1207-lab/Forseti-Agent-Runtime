@@ -37,3 +37,7 @@ fingerprints*.json
 # Python 編譯產物
 __pycache__/
 *.py[cod]
+
+# B-10 的收件匣。worker 的回報落在這裡,撿完就移到 .done/。
+# 不進版控:它是執行期的暫存,不是專案的一部分。
+.forseti/inbox/

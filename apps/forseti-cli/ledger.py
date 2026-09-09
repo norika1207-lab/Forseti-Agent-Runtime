@@ -157,7 +157,8 @@ CREATE TABLE IF NOT EXISTS steps (
   objective TEXT, dependencies TEXT, assigned_worker TEXT,
   state TEXT, started_at REAL, last_progress_at REAL,
   expected_outputs TEXT, verifier TEXT, evidence_refs TEXT,
-  retry_count INTEGER DEFAULT 0, next_action TEXT
+  retry_count INTEGER DEFAULT 0, next_action TEXT,
+  worker_can_report TEXT DEFAULT 'unknown'
 );
 CREATE TABLE IF NOT EXISTS events (
   event_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -169,7 +170,7 @@ CREATE INDEX IF NOT EXISTS idx_steps_task ON steps(task_id, seq);
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, at);
 """
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 # F04 §3 要求的 worker 事件。這八種是 worker 那一端會發出的,
 # 其餘(TASK_STATE、DISPATCH、REASSIGN…)是控制端自己的紀錄。
@@ -177,6 +178,13 @@ WORKER_EVENTS = (
     "WORKER_ACCEPTED", "WORKER_PROGRESS", "WORKER_COMPLETION", "WORKER_BLOCKED",
     "WORKER_FAILED", "WORKER_CANCELLED", "EVIDENCE_AVAILABLE", "ARTIFACT_CHANGED",
 )
+
+# B-10：worker 能不能回話,是派工方本來就知道的事。
+#   full        能執行指令,所以能直接寫帳本
+#   write_only  只能寫檔案,要靠收件匣
+#   unknown     沒有人宣告過。這不是「大概可以」,是「沒問過」,
+#               所以判斷時要把它當成一個已知的未知,不是預設值。
+CAN_REPORT = ("full", "write_only", "unknown")
 
 
 def _migrate(con: sqlite3.Connection) -> None:
@@ -200,6 +208,12 @@ def _migrate(con: sqlite3.Connection) -> None:
     scols = {r[1] for r in con.execute("PRAGMA table_info(steps)")}
     if "requires_human" not in scols:
         con.execute("ALTER TABLE steps ADD COLUMN requires_human INTEGER DEFAULT 0")
+    if "worker_can_report" not in scols:
+        # B-10：worker 能不能回報,是派工方本來就知道的事,不該由控制端
+        # 從沉默去猜。舊資料一律 unknown,因為它們確實不知道 —— 填
+        # 'full' 會把一個沒問過的問題偽裝成已經有答案。
+        con.execute("ALTER TABLE steps ADD COLUMN worker_can_report TEXT"
+                    " DEFAULT 'unknown'")
     con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idem"
                 " ON events(idem_key) WHERE idem_key IS NOT NULL")
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
@@ -553,7 +567,7 @@ class Ledger:
     # -- 派工與收件（F03-CSI-001、F04 §3）---------------------------------
 
     def dispatch(self, step_id: str, worker: str, cause: str = "", *,
-                 auto: bool = False) -> None:
+                 auto: bool = False, can_report: str = "") -> None:
         """把一個步驟派給 worker。
 
         auto=True 代表這一次是系統自己接上的，沒有人開口叫它繼續。
@@ -567,8 +581,16 @@ class Ledger:
         if row is None:
             raise TransitionError(f"沒有這個步驟：{step_id}")
         task_id, cur = row
-        self.con.execute("UPDATE steps SET assigned_worker=? WHERE step_id=?",
-                         (worker, step_id))
+        if can_report:
+            if can_report not in CAN_REPORT:
+                raise ValueError(f"worker_can_report 只能是 {'/'.join(CAN_REPORT)}，"
+                                 f"收到 {can_report}")
+            self.con.execute(
+                "UPDATE steps SET assigned_worker=?, worker_can_report=?"
+                " WHERE step_id=?", (worker, can_report, step_id))
+        else:
+            self.con.execute("UPDATE steps SET assigned_worker=? WHERE step_id=?",
+                             (worker, step_id))
         self.con.commit()
         if cur != "RUNNING":
             self.step_transition(step_id, "RUNNING", cause or f"派給 {worker}", actor=worker)
@@ -697,6 +719,99 @@ class Ledger:
             self.con.commit()
         return fresh
 
+    # -- 不需要執行權限的回報通道（B-10）---------------------------------
+
+    def inbox_dir(self, step_id: str) -> Path:
+        """這一步的收件匣。worker 只要能寫檔案就能回報。
+
+        B-10：回報通道原本假設 worker 能執行 shell，因為送出一筆事件的
+        方式是跑一行 python。實測發現那個假設不成立：一個用
+        `--permission-mode acceptEdits` 開的 worker，Write 允許、Bash 被擋，
+        於是它交得出 5,952 bytes 的合格產物，卻連一句「我接下了」都送不出去。
+
+        能做事跟能回話是兩種不同的權限。這個收件匣把後者的門檻降到跟
+        前者一樣：寫一個檔案。
+
+        放在 home 不放 repo，跟帳本同一個理由（exFAT 跑不了 sqlite，
+        而且回報不該污染工作目錄）。
+        """
+        safe = step_id.replace("/", "__").replace("..", "_")
+        # 放在 repo 裡，不放 home。這一條是被實測推翻之後改的。
+        #
+        # 第一版放 ~/.forseti/inbox/，理由是「回報不該污染工作目錄」。
+        # 實測結果：那個 worker 三條路全被擋（Write 工具、Bash 重導向、
+        # 單指令重導向），因為它的沙盒白名單只有 repo 目錄，home 在外面。
+        # 它自己的診斷比我的假設精確：沉默不是因為死掉，是因為寫不進去，
+        # 而那兩件事在帳本裡長得一模一樣。
+        #
+        # 污染工作目錄的成本，遠低於通道整條斷掉。而且放 repo 還有一個
+        # 更重要的性質：worker 本來就有 repo 的寫入權限，因為它要寫產物。
+        # 於是「能做事」就蘊含「能回話」，不必再另外要一份權限。
+        #
+        # 帳本仍然留在 home，那是另一回事：exFAT 跑不了 sqlite 的鎖，
+        # 而收件匣只是普通檔案，沒有那個限制。
+        return self.cwd / ".forseti" / "inbox" / safe
+
+    def collect_inbox(self, step_id: str) -> list[str]:
+        """把收件匣裡的檔案轉成真的事件。回傳收到的事件種類。
+
+        檔案格式刻意做到最簡單：第一行是事件種類，其餘是說明。
+        一個檔案一筆事件，不用 append，因為 read-modify-write 對一個
+        只有 Write 的 worker 是額外的失敗機會。
+
+        守住的邊界：只收 F04 §3 那八種，而且它們全部是宣稱型。
+        worker 寫一個檔案說自己完成了，不會讓步驟變成 VERIFIED_COMPLETE ——
+        那仍然只有 verifier 說了算。收件匣降低的是回報的門檻，
+        不是驗證的門檻。
+        """
+        d = self.inbox_dir(step_id)
+        if not d.is_dir():
+            return []
+        done = d / ".done"
+        got = []
+        # `._` 開頭的是 macOS 在 exFAT 上寫的 AppleDouble 附屬檔，
+        # 每個真檔案都會多出一個。不濾掉的話一則回報會被算成兩則，
+        # 而且第二則的內容是二進位垃圾。tools/orphans.mjs 因為同一個
+        # 原因假警報過兩次，那個教訓寫在 tools/README.md。
+        for f in sorted(d.glob("*.txt")):
+            if f.name.startswith("._"):
+                continue
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            head, _, body = text.partition("\n")
+            kind = head.strip().upper()
+            if kind not in WORKER_EVENTS:
+                # 不認得的種類不丟掉也不當成事件。丟掉會讓 worker 的話
+                # 消失得無聲無息,那正是這個通道要解決的問題。
+                self._event("INBOX_UNKNOWN_KIND", f"{f.name}：{head[:60]}",
+                            actor="controller", step_id=step_id,
+                            task_id=self._task_of_step(step_id))
+                got.append(f"（不認得的種類 {kind[:24]}）")
+            else:
+                self.worker_event(kind, step_id, body.strip()[:200] or kind,
+                                  worker="inbox",
+                                  idem_key=f"inbox:{step_id}:{f.name}")
+                got.append(kind)
+            try:
+                done.mkdir(parents=True, exist_ok=True)
+                f.rename(done / f.name)
+            except OSError:
+                pass
+        return got
+
+    def _task_of_step(self, step_id: str) -> str:
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        return row[0] if row else ""
+
+    def can_report(self, step_id: str) -> str:
+        row = self.con.execute(
+            "SELECT worker_can_report FROM steps WHERE step_id=?",
+            (step_id,)).fetchone()
+        return (row[0] if row and row[0] else "unknown")
+
     def auto_dispatch(self, task_id: str, worker: str, cause: str = "") -> dict | None:
         """F04 §5 的自動派工。四個條件都滿足才派。
 
@@ -758,7 +873,8 @@ class Ledger:
         now = time.time()
         rows = self.con.execute(
             "SELECT s.step_id,s.task_id,s.objective,s.state,s.assigned_worker,"
-            "s.started_at,s.last_progress_at,s.retry_count,t.objective"
+            "s.started_at,s.last_progress_at,s.retry_count,t.objective,"
+            "s.worker_can_report"
             " FROM steps s JOIN tasks t ON t.task_id=s.task_id"
             f" WHERE s.state IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchall()
         out = []
@@ -769,6 +885,7 @@ class Ledger:
                 "objective": r[2], "state": r[3], "worker": r[4] or "",
                 "idle_sec": max(now - since, 0.0), "retry_count": r[7],
                 "task_objective": r[8],
+                "can_report": r[9] or "unknown",
             })
         out.sort(key=lambda d: d["idle_sec"], reverse=True)
         return out
@@ -790,6 +907,14 @@ class Ledger:
         if state not in ACTIVE:
             return w.assess(age_sec=0.0, progress_changed=True, events_since=1,
                             expected_to_progress=False, config=config)
+
+        # B-10：先去收件匣撿。一個只有 Write 權限的 worker 的話都在那裡，
+        # 不撿就等於它從來沒說過。撿要在算 age 之前，因為撿到
+        # WORKER_PROGRESS 會更新 last_progress_at，那正是它想告訴我們的。
+        self.collect_inbox(step_id)
+        last_prog = self.con.execute(
+            "SELECT last_progress_at FROM steps WHERE step_id=?",
+            (step_id,)).fetchone()[0]
 
         since = last_prog or started or time.time()
         age = time.time() - since
@@ -846,7 +971,7 @@ class Ledger:
         """
         w = _watchdog_mod()
         rung = w.next_rung(current_rung, unresponsive_count=unresponsive_count,
-                           config=config)
+                           can_report=self.can_report(step_id), config=config)
         row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
                                (step_id,)).fetchone()
         self._event("RECOVERY_RUNG", rung, actor="watchdog",
