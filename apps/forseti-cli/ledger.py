@@ -202,6 +202,17 @@ def connect(db: Path | None = None) -> sqlite3.Connection:
     return con
 
 
+def _worker_mod():
+    """延遲載入 worker,避免兩個模組互相 import。"""
+    import importlib
+    import sys as _sys
+    try:
+        return importlib.import_module("worker")
+    except ImportError:
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        return importlib.import_module("worker")
+
+
 def _j(v) -> str:
     return json.dumps(v or [], ensure_ascii=False)
 
@@ -245,6 +256,7 @@ class Ledger:
     """F01 的 PersistentExecutionContract 與 F02 的狀態機。"""
 
     def __init__(self, db: Path | None = None, cwd: Path | None = None):
+        self.db_path = db or default_db()
         self.con = connect(db)
         self.cwd = cwd or Path(__file__).resolve().parents[2]
 
@@ -453,6 +465,118 @@ class Ledger:
             self.step_transition(step_id, "RUNNING",
                                  f"驗證未過：{failed[0].spec}　{failed[0].detail}", actor)
         return ok, results
+
+    # -- 派工與收件（F03-CSI-001、F04 §3）---------------------------------
+
+    def dispatch(self, step_id: str, worker: str, cause: str = "") -> None:
+        """把一個步驟派給 worker。"""
+        row = self.con.execute("SELECT task_id,state FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{step_id}")
+        task_id, cur = row
+        self.con.execute("UPDATE steps SET assigned_worker=? WHERE step_id=?",
+                         (worker, step_id))
+        self.con.commit()
+        if cur != "RUNNING":
+            self.step_transition(step_id, "RUNNING", cause or f"派給 {worker}", actor=worker)
+        self._event("DISPATCH", cause or f"派給 {worker}", actor="controller",
+                    task_id=task_id, step_id=step_id, payload={"worker": worker})
+
+    def stash(self, step_id: str, text: str, label: str = "log") -> str:
+        """把原始輸出落檔，回傳 packet 用的引用。細節見 worker.stash_raw。"""
+        w = _worker_mod()
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        return w.stash_raw(text, task_id=row[0] if row else "", step_id=step_id,
+                           store=w.default_store(self.db_path), label=label)
+
+    def submit_result(self, packet, *, strict: bool = True):
+        """worker 交回結果。回傳 worker.Receipt。
+
+        關鍵一條：worker 說 COMPLETED 只讓步驟進 VERIFYING，不是
+        VERIFIED_COMPLETE。F02 §3 說得很清楚，模型說 done 而要求未滿足時
+        任務維持非終止。要進 VERIFIED_COMPLETE 得跑 verify_step()，
+        而那是真的去看磁碟。
+
+        這是整條交接鏈裡最容易抄近路的地方：讓 submit 直接標完成會讓
+        流程順很多，也會讓整套驗證失去意義。
+        """
+        w = _worker_mod()
+        row = self.con.execute(
+            "SELECT task_id,state,expected_outputs FROM steps WHERE step_id=?",
+            (packet.step_id,)).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{packet.step_id}")
+        task_id, cur, expected = row
+
+        if cur not in (*ACTIVE, "VERIFYING"):
+            # 收到一個沒被派工的步驟的結果,代表流程有洞(F04 §2 的順序是
+            # DISPATCH 先於 COMPLETION)。這是明確的拒收,不是例外:
+            # 例外會讓呼叫端以為程式壞了,實際上壞的是流程。
+            receipt = w.Receipt(accepted=False, packet=packet,
+                                violations=[f"步驟狀態是 {cur}，還沒有被派工。"
+                                            f"先 dispatch() 再收結果"])
+            self._event("WORKER_RESULT_REFUSED", f"step is {cur}, never dispatched",
+                        actor="controller", task_id=task_id, step_id=packet.step_id)
+            return receipt
+
+        receipt = w.receive(packet, expected_outputs=_u(expected), strict=strict)
+
+        self._event("WORKER_RESULT",
+                    receipt.brief() if receipt.accepted else "packet 被拒收",
+                    actor=packet.step_id, task_id=task_id, step_id=packet.step_id,
+                    payload={"accepted": receipt.accepted,
+                             "violations": receipt.violations,
+                             "status": packet.status,
+                             "unknowns": packet.unresolved_unknowns,
+                             "out_of_scope": packet.out_of_scope})
+
+        if not receipt.accepted:
+            return receipt
+
+        if packet.evidence_refs or packet.raw_log_refs:
+            cur_refs = _u(self.con.execute(
+                "SELECT evidence_refs FROM steps WHERE step_id=?",
+                (packet.step_id,)).fetchone()[0])
+            self.con.execute("UPDATE steps SET evidence_refs=? WHERE step_id=?",
+                             (_j(cur_refs + packet.evidence_refs + packet.raw_log_refs),
+                              packet.step_id))
+            self.con.commit()
+
+        if packet.status == "COMPLETED":
+            self.step_transition(packet.step_id, "VERIFYING",
+                                 "worker 宣稱完成，等驗證", actor="controller")
+        elif packet.status == "BLOCKED":
+            self.step_transition(packet.step_id, "BLOCKED",
+                                 "；".join(packet.blockers)[:200] or "worker 回報卡住",
+                                 actor="controller")
+        elif packet.status == "FAILED":
+            self.con.execute(
+                "UPDATE steps SET retry_count=retry_count+1 WHERE step_id=?",
+                (packet.step_id,))
+            self.con.commit()
+            if cur != "RUNNING":
+                self.step_transition(packet.step_id, "RUNNING",
+                                     "worker 回報失敗，等重試或重派", actor="controller")
+        return receipt
+
+    def reassign(self, step_id: str, new_worker: str, cause: str) -> None:
+        """換一個 worker。任務不動，因為連續性不在 worker 身上。
+
+        CT-F03-04：worker 死掉，任務保留並可重派。這個方法刻意不碰
+        步驟狀態 —— 換人不是進度。
+        """
+        row = self.con.execute("SELECT task_id,assigned_worker FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{step_id}")
+        task_id, old = row
+        self.con.execute("UPDATE steps SET assigned_worker=?, retry_count=retry_count+1"
+                         " WHERE step_id=?", (new_worker, step_id))
+        self.con.commit()
+        self._event("REASSIGN", cause, actor="controller", task_id=task_id, step_id=step_id,
+                    payload={"from": old, "to": new_worker})
 
     # -- 義務帳本（F02 §6）-----------------------------------------------
 
