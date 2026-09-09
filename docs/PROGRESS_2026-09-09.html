@@ -1,0 +1,613 @@
+<title>Forseti 開發進度總覽</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;450;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#FFFFFF; --ground:#F1F3F4; --sunk:#E9ECED;
+  --ink:#16191C; --ink-2:#5A6266; --ink-3:#8C9498;
+  --rule:#DCE0E2; --rule-soft:#E9ECED;
+  --brass:#9A7B33; --brass-soft:#F2E9D4;
+  --done:#3F7355; --done-soft:#E4EFE8;
+  --active:#C0801F; --active-soft:#FAF0DC;
+  --block:#A94427; --block-soft:#F8E6E0;
+  --idle:#8C9498; --idle-soft:#EDEFF0;
+  --shadow:0 1px 2px rgba(22,25,28,.05), 0 8px 24px -14px rgba(22,25,28,.16);
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"IBM Plex Sans","PingFang TC","Hiragino Sans TC","Microsoft JhengHei",-apple-system,sans-serif;
+  font-size:15px; line-height:1.65; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1000px;margin:0 auto;padding:0 24px 100px}
+
+.plate{border-bottom:1px solid var(--rule);padding:48px 0 30px;margin-bottom:14px}
+.eyebrow{
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--brass);
+  margin:0 0 14px;display:flex;align-items:center;gap:10px;
+}
+.eyebrow::after{content:"";flex:1;height:1px;background:linear-gradient(90deg,var(--rule),transparent)}
+h1{
+  font-family:"Fraunces","PingFang TC","Hiragino Sans TC",Georgia,serif;
+  font-optical-sizing:auto;font-weight:600;
+  font-size:clamp(30px,5vw,44px);line-height:1.12;letter-spacing:-.015em;
+  margin:0 0 16px;text-wrap:balance;
+}
+.lede{max-width:66ch;font-size:16.5px;color:var(--ink-2);margin:0}
+.lede b{font-weight:600;color:var(--ink)}
+
+h2{
+  font-family:"Fraunces","PingFang TC","Hiragino Sans TC",Georgia,serif;
+  font-weight:600;font-size:25px;letter-spacing:-.01em;
+  margin:0 0 6px;text-wrap:balance;
+}
+h3{font-size:16px;font-weight:600;margin:26px 0 8px;color:var(--ink)}
+.sub{color:var(--ink-2);margin:0 0 24px;max-width:68ch;font-size:14.5px}
+section{margin-bottom:60px}
+p{margin:0 0 14px}
+
+.rig{background:var(--paper);border:1px solid var(--rule);border-radius:3px;box-shadow:var(--shadow);overflow:hidden}
+.rig-h{
+  display:flex;align-items:baseline;justify-content:space-between;gap:16px;
+  padding:12px 18px;border-bottom:1px solid var(--rule-soft);
+  font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);
+}
+.rig-b{padding:22px 18px}
+
+/* 統計條 */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:3px;overflow:hidden;margin-bottom:44px}
+.stat{background:var(--paper);padding:16px 18px}
+.stat .n{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:27px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.stat .l{font-size:11.5px;color:var(--ink-3);margin-top:7px;line-height:1.4}
+
+/* 圖 */
+.fig{margin:22px 0 8px;overflow-x:auto;padding-bottom:4px}
+.fig svg{display:block;height:auto}
+.cap{font-size:12.5px;color:var(--ink-3);margin:8px 0 0;font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace}
+.lab{font-family:"IBM Plex Sans","PingFang TC",sans-serif;font-size:11.5px;fill:var(--ink)}
+.lab-s{font-family:"IBM Plex Sans","PingFang TC",sans-serif;font-size:10px;fill:var(--ink-2)}
+.lab-m{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:9.5px;fill:var(--ink-3);letter-spacing:.05em}
+
+/* 表 */
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0}
+th{
+  text-align:left;font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;
+  font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:500;padding:0 12px 9px 0;border-bottom:1px solid var(--rule);
+}
+td{padding:9px 12px 9px 0;border-bottom:1px solid var(--rule-soft);vertical-align:top}
+td:last-child,th:last-child{padding-right:0}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:12.5px;font-variant-numeric:tabular-nums}
+.tbl-scroll{overflow-x:auto}
+
+/* 狀態徽章 */
+.b{display:inline-block;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:10px;
+   letter-spacing:.06em;padding:2px 8px;border-radius:2px;white-space:nowrap;border:1px solid}
+.b.done{color:var(--done);background:var(--done-soft);border-color:var(--done)}
+.b.act{color:var(--active);background:var(--active-soft);border-color:var(--active)}
+.b.blk{color:var(--block);background:var(--block-soft);border-color:var(--block)}
+.b.idle{color:var(--idle);background:var(--idle-soft);border-color:var(--idle)}
+
+/* 情境卡 */
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px;margin-top:18px}
+.card{border:1px solid var(--rule);border-radius:3px;background:var(--paper);padding:0;overflow:hidden}
+.card-h{padding:11px 14px;border-bottom:1px solid var(--rule-soft);background:linear-gradient(180deg,var(--paper),var(--sunk));
+        display:flex;justify-content:space-between;gap:10px;align-items:baseline}
+.card-n{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:10px;color:var(--brass);letter-spacing:.08em}
+.card-t{font-size:13.5px;font-weight:600}
+.card-b{padding:13px 14px;font-size:13px;color:var(--ink-2);line-height:1.6}
+.card-b code{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11.5px;background:var(--sunk);padding:1px 5px;border-radius:2px;color:var(--ink)}
+.card-b .why{margin-top:9px;padding-top:9px;border-top:1px dashed var(--rule);color:var(--ink);font-size:12.5px}
+
+.note{border-left:2px solid var(--brass);padding:3px 0 3px 16px;margin:22px 0;font-size:13.5px;color:var(--ink-2);max-width:70ch}
+.note em{font-style:normal;color:var(--ink);font-weight:600}
+.warn{border-left-color:var(--block)}
+
+pre{background:var(--sunk);border:1px solid var(--rule);border-radius:3px;padding:14px 16px;overflow-x:auto;
+    font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:12.5px;line-height:1.6;margin:12px 0}
+
+footer{border-top:1px solid var(--rule);padding-top:24px;margin-top:20px;font-size:12.5px;color:var(--ink-3);
+       font-family:"IBM Plex Mono","PingFang TC",ui-monospace,monospace;line-height:1.9}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="wrap">
+
+<div class="plate">
+  <p class="eyebrow">Forseti · 開發進度總彙整 · 2026-09-09</p>
+  <h1>讓 AI 的工作狀態變成可觀測、可驗證、可控制、可復原</h1>
+  <p class="lede">一般的錯誤會報錯、會失敗、會有紅字。這套系統處理的是另一種：<b>AI 說改好了但磁碟沒動，說讀完了其實只讀三成，說還沒做完然後停下來等人。</b>五種都不會報錯，系統看起來一切正常，直到很久之後才發現方向早就歪了。</p>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="n" style="color:var(--done)">142</div><div class="l">測試全過<br>十個測試檔</div></div>
+  <div class="stat"><div class="n">3,534</div><div class="l">Python 執行層<br>九個模組</div></div>
+  <div class="stat"><div class="n">13,190</div><div class="l">JS 分析層<br>四十個模組</div></div>
+  <div class="stat"><div class="n" style="color:var(--done)">8/8</div><div class="l">F 線 feature<br>全部已驗證</div></div>
+  <div class="stat"><div class="n" style="color:var(--block)">7</div><div class="l">阻塞<br>已解除兩條</div></div>
+  <div class="stat"><div class="n" style="color:var(--active)">9</div><div class="l">HumanContinue<br>負向指標</div></div>
+</div>
+
+<section>
+  <h2>系統架構</h2>
+  <p class="sub">五層。分工用一句話講：Main 擁有詮釋與驗收，Worker 擁有執行，Forseti 擁有持久的任務真相與連續性。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 430" style="min-width:700px;width:100%" role="img" aria-label="五層架構圖">
+      <defs>
+        <marker id="ar" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="var(--ink-3)"/>
+        </marker>
+      </defs>
+
+      <rect x="330" y="8" width="280" height="34" rx="3" fill="var(--brass-soft)" stroke="var(--brass)"/>
+      <text class="lab" x="470" y="30" text-anchor="middle" font-weight="600">人</text>
+
+      <rect x="230" y="66" width="480" height="52" rx="3" fill="var(--paper)" stroke="var(--ink)" stroke-width="1.5"/>
+      <text class="lab" x="470" y="87" text-anchor="middle" font-weight="600">Main Session　認知控制平面</text>
+      <text class="lab-s" x="470" y="105" text-anchor="middle">詮釋 · 架構 · 優先序 · 驗收 · 綜合</text>
+
+      <rect x="180" y="142" width="580" height="52" rx="3" fill="var(--brass-soft)" stroke="var(--brass)" stroke-width="1.5"/>
+      <text class="lab" x="470" y="163" text-anchor="middle" font-weight="600">Forseti　控制與可靠性平面</text>
+      <text class="lab-s" x="470" y="181" text-anchor="middle">任務真相 · 派工 · 事件路由 · 證據 · 看門狗 · 脈絡復原 · 換人</text>
+
+      <rect x="80" y="218" width="780" height="72" rx="3" fill="var(--sunk)" stroke="var(--rule)"/>
+      <text class="lab-m" x="470" y="238" text-anchor="middle">持久層</text>
+      <g>
+        <rect x="100" y="246" width="140" height="32" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab-s" x="170" y="266" text-anchor="middle">Task Ledger</text>
+        <rect x="252" y="246" width="140" height="32" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab-s" x="322" y="266" text-anchor="middle">Event Bus</text>
+        <rect x="404" y="246" width="132" height="32" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab-s" x="470" y="266" text-anchor="middle">Evidence</text>
+        <rect x="548" y="246" width="132" height="32" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab-s" x="614" y="266" text-anchor="middle">Watchdog</text>
+        <rect x="692" y="246" width="148" height="32" rx="2" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab-s" x="766" y="266" text-anchor="middle">Context Store</text>
+      </g>
+
+      <rect x="230" y="314" width="480" height="52" rx="3" fill="var(--paper)" stroke="var(--ink-2)" stroke-width="1.5"/>
+      <text class="lab" x="470" y="335" text-anchor="middle" font-weight="600">Sub-session / Worker　執行平面</text>
+      <text class="lab-s" x="470" y="353" text-anchor="middle">code · build · test · 批次 · 工具密集的檢查</text>
+
+      <rect x="330" y="390" width="280" height="32" rx="3" fill="var(--sunk)" stroke="var(--rule)"/>
+      <text class="lab-s" x="470" y="410" text-anchor="middle">工具 · 程式碼 · 外部系統</text>
+
+      <g stroke="var(--ink-3)" stroke-width="1" marker-end="url(#ar)" fill="none">
+        <line x1="470" y1="44" x2="470" y2="62"/><line x1="470" y1="120" x2="470" y2="138"/>
+        <line x1="470" y1="196" x2="470" y2="214"/><line x1="470" y1="292" x2="470" y2="310"/>
+        <line x1="470" y1="368" x2="470" y2="386"/>
+      </g>
+      <g stroke="var(--ink-3)" stroke-width="1" marker-end="url(#ar)" fill="none" opacity=".55">
+        <line x1="450" y1="62" x2="450" y2="46"/><line x1="450" y1="138" x2="450" y2="122"/>
+        <line x1="450" y1="214" x2="450" y2="198"/><line x1="450" y1="310" x2="450" y2="294"/>
+      </g>
+    </svg>
+  </div>
+  <p class="cap">上下都是雙向：狀態往上報，指令往下走。</p>
+
+  <div class="note"><em>核心不變量：Turn completion is not Task completion。</em>
+  對話生命週期不等於執行生命週期，Session 記憶不等於任務真相，模型自述不等於已驗證完成，心跳不等於進度。這四條各對應一次實際發生過的事故。</div>
+</section>
+
+<section>
+  <h2>三條並行的線</h2>
+  <p class="sub">它們處理三種不同的失效，所以分開走。合併會出現一個荒謬：用一個已經忘記北極星的 AI，去偵測自己有沒有偏離北極星。</p>
+
+  <div class="tbl-scroll"><table>
+    <thead><tr><th>線</th><th>處理什麼</th><th>進度</th><th>狀態</th></tr></thead>
+    <tbody>
+      <tr><td>主線 階段 0-5</td><td>AI 有沒有偏離目標、有沒有唬爛</td><td class="mono">1/6</td><td><span class="b done">階段 0 VERIFIED</span></td></tr>
+      <tr><td>C 線 C0-C5</td><td>AI 被壓縮之後怎麼繼續正常運作</td><td class="mono">2/6</td><td><span class="b done">C0 C1 DONE</span> <span class="b idle">C2 已由 F08 取代</span></td></tr>
+      <tr><td>F 線 F01-F08</td><td>執行的連續性與可靠性</td><td class="mono">8/8</td><td><span class="b done">全部 VERIFIED_COMPLETE</span></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>一個任務怎麼走完</h2>
+  <p class="sub">關鍵在兩個地方：報告不會推進狀態，宣稱完成只到 VERIFYING。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 380" style="min-width:720px;width:100%" role="img" aria-label="任務生命週期">
+      <defs>
+        <marker id="ar2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="var(--ink-2)"/>
+        </marker>
+        <marker id="ar3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L6,3 L0,6 Z" fill="var(--block)"/>
+        </marker>
+      </defs>
+
+      <rect x="24" y="20" width="150" height="38" rx="3" fill="var(--brass-soft)" stroke="var(--brass)"/>
+      <text class="lab" x="99" y="44" text-anchor="middle">owner 交辦</text>
+
+      <rect x="212" y="20" width="164" height="38" rx="3" fill="var(--paper)" stroke="var(--ink)"/>
+      <text class="lab" x="294" y="38" text-anchor="middle" font-weight="600">accept()</text>
+      <text class="lab-s" x="294" y="52" text-anchor="middle">義務離開模型記憶</text>
+
+      <rect x="414" y="20" width="164" height="38" rx="3" fill="var(--paper)" stroke="var(--ink)"/>
+      <text class="lab" x="496" y="38" text-anchor="middle" font-weight="600">auto_dispatch()</text>
+      <text class="lab-s" x="496" y="52" text-anchor="middle">四條件滿足就自己走</text>
+
+      <rect x="616" y="20" width="150" height="38" rx="3" fill="var(--paper)" stroke="var(--ink-2)"/>
+      <text class="lab" x="691" y="44" text-anchor="middle">worker 做事</text>
+
+      <rect x="616" y="96" width="150" height="38" rx="3" fill="var(--paper)" stroke="var(--ink-2)"/>
+      <text class="lab" x="691" y="114" text-anchor="middle" font-weight="600">receipt()</text>
+      <text class="lab-s" x="691" y="128" text-anchor="middle">早於合成落地</text>
+
+      <rect x="414" y="96" width="164" height="38" rx="3" fill="var(--active-soft)" stroke="var(--active)"/>
+      <text class="lab" x="496" y="114" text-anchor="middle" font-weight="600">submit_result()</text>
+      <text class="lab-s" x="496" y="128" text-anchor="middle">只到 VERIFYING</text>
+
+      <rect x="414" y="172" width="164" height="42" rx="3" fill="var(--paper)" stroke="var(--ink)" stroke-width="1.5"/>
+      <text class="lab" x="496" y="190" text-anchor="middle" font-weight="600">verify_step()</text>
+      <text class="lab-s" x="496" y="205" text-anchor="middle">真的去看磁碟</text>
+
+      <rect x="646" y="176" width="180" height="34" rx="3" fill="var(--done-soft)" stroke="var(--done)"/>
+      <text class="lab" x="736" y="197" text-anchor="middle" fill="var(--done)" font-weight="600">VERIFIED_COMPLETE</text>
+
+      <rect x="180" y="176" width="180" height="34" rx="3" fill="var(--block-soft)" stroke="var(--block)"/>
+      <text class="lab" x="270" y="192" text-anchor="middle" fill="var(--block)" font-weight="600">退回 RUNNING</text>
+      <text class="lab-s" x="270" y="205" text-anchor="middle" fill="var(--block)">retry_count +1</text>
+
+      <rect x="24" y="264" width="330" height="46" rx="3" fill="var(--sunk)" stroke="var(--rule)"/>
+      <text class="lab" x="189" y="283" text-anchor="middle" font-weight="600">report()</text>
+      <text class="lab-s" x="189" y="299" text-anchor="middle">沒有任何可以改狀態的參數 · 刻意的</text>
+
+      <rect x="404" y="264" width="186" height="46" rx="3" fill="var(--paper)" stroke="var(--ink-3)" stroke-dasharray="3 3"/>
+      <text class="lab-s" x="497" y="283" text-anchor="middle">任務維持 RUNNING</text>
+      <text class="lab-s" x="497" y="299" text-anchor="middle">next_step() 立刻回傳下一步</text>
+
+      <rect x="640" y="264" width="200" height="46" rx="3" fill="var(--block-soft)" stroke="var(--block)" stroke-dasharray="3 3"/>
+      <text class="lab-s" x="740" y="283" text-anchor="middle" fill="var(--block)">人若仍說「繼續」</text>
+      <text class="lab-s" x="740" y="299" text-anchor="middle" fill="var(--block)">human_continue() 記一筆負分</text>
+
+      <g stroke="var(--ink-2)" stroke-width="1.2" marker-end="url(#ar2)" fill="none">
+        <line x1="176" y1="39" x2="208" y2="39"/>
+        <line x1="378" y1="39" x2="410" y2="39"/>
+        <line x1="580" y1="39" x2="612" y2="39"/>
+        <line x1="691" y1="60" x2="691" y2="92"/>
+        <line x1="612" y1="115" x2="582" y2="115"/>
+        <line x1="496" y1="136" x2="496" y2="168"/>
+        <line x1="580" y1="193" x2="642" y2="193"/>
+        <line x1="358" y1="281" x2="400" y2="281"/>
+        <line x1="594" y1="281" x2="636" y2="281"/>
+      </g>
+      <g stroke="var(--block)" stroke-width="1.2" marker-end="url(#ar3)" fill="none">
+        <line x1="412" y1="193" x2="364" y2="193"/>
+      </g>
+      <path d="M270,176 L270,120 L400,120" stroke="var(--block)" stroke-width="1.2" fill="none"
+            marker-end="url(#ar3)" stroke-dasharray="3 3"/>
+      <path d="M736,214 L736,240 L496,240 L496,64" stroke="var(--done)" stroke-width="1.2" fill="none"
+            marker-end="url(#ar2)" opacity=".7"/>
+      <text class="lab-m" x="600" y="236" fill="var(--done)">下一步</text>
+      <text class="lab-m" x="300" y="116" fill="var(--block)">重做</text>
+    </svg>
+  </div>
+  <p class="cap">綠色回路是自動往下一步，紅色是驗證沒過退回重做。下排是報告路徑，它不碰狀態。</p>
+
+  <div class="note"><em>verifier 只支援兩種形式。</em>
+  <code>file:&lt;path&gt;</code> 檔案存在且非空，<code>cmd:&lt;command&gt;</code> 指令 exit 0。刻意不支援由人或模型宣告通過的形式，那種東西就是 claim，而不信 claim 正是這個專案存在的理由。如果 verifier 可以用嘴巴過，「宣稱 done 但缺收據要維持非終止」那條測試就是假的，而假的驗證比沒有驗證更危險。</div>
+</section>
+
+<section>
+  <h2>狀態機</h2>
+  <p class="sub">十一種狀態，只有四種是終止。「我報告完了」不在其中。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:700px;width:100%" role="img" aria-label="任務狀態機">
+      <defs>
+        <marker id="ar4" markerWidth="7" markerHeight="7" refX="5.5" refY="2.6" orient="auto">
+          <path d="M0,0 L5.5,2.6 L0,5.2 Z" fill="var(--ink-3)"/>
+        </marker>
+      </defs>
+
+      <rect x="20" y="128" width="112" height="36" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+      <text class="lab" x="76" y="151" text-anchor="middle">PROPOSED</text>
+
+      <rect x="164" y="128" width="112" height="36" rx="3" fill="var(--paper)" stroke="var(--ink-3)"/>
+      <text class="lab" x="220" y="151" text-anchor="middle">ACCEPTED</text>
+
+      <rect x="330" y="24" width="300" height="216" rx="4" fill="var(--active-soft)" stroke="var(--active)" stroke-dasharray="4 3" opacity=".5"/>
+      <text class="lab-m" x="480" y="44" text-anchor="middle" fill="var(--active)">ACTIVE　五個狀態之間可以互轉</text>
+
+      <rect x="352" y="58" width="120" height="34" rx="3" fill="var(--paper)" stroke="var(--active)" stroke-width="1.5"/>
+      <text class="lab" x="412" y="80" text-anchor="middle" font-weight="600">RUNNING</text>
+
+      <rect x="490" y="58" width="120" height="34" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+      <text class="lab-s" x="550" y="79" text-anchor="middle">WAITING_DEP</text>
+
+      <rect x="352" y="110" width="120" height="34" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+      <text class="lab-s" x="412" y="131" text-anchor="middle">BLOCKED</text>
+
+      <rect x="490" y="110" width="120" height="34" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+      <text class="lab-s" x="550" y="131" text-anchor="middle">NEEDS_HUMAN</text>
+
+      <rect x="420" y="180" width="132" height="36" rx="3" fill="var(--paper)" stroke="var(--active)" stroke-width="1.5"/>
+      <text class="lab" x="486" y="203" text-anchor="middle" font-weight="600">VERIFYING</text>
+
+      <rect x="684" y="58" width="228" height="36" rx="3" fill="var(--done-soft)" stroke="var(--done)" stroke-width="1.5"/>
+      <text class="lab" x="798" y="81" text-anchor="middle" fill="var(--done)" font-weight="600">VERIFIED_COMPLETE</text>
+
+      <rect x="684" y="112" width="228" height="30" rx="3" fill="var(--paper)" stroke="var(--ink-3)"/>
+      <text class="lab-s" x="798" y="132" text-anchor="middle">CANCELLED_BY_OWNER</text>
+      <rect x="684" y="150" width="228" height="30" rx="3" fill="var(--paper)" stroke="var(--ink-3)"/>
+      <text class="lab-s" x="798" y="170" text-anchor="middle">FAILED_TERMINAL</text>
+      <rect x="684" y="188" width="228" height="30" rx="3" fill="var(--paper)" stroke="var(--ink-3)"/>
+      <text class="lab-s" x="798" y="208" text-anchor="middle">SUPERSEDED</text>
+      <text class="lab-m" x="798" y="238" text-anchor="middle">四個終止狀態</text>
+
+      <g stroke="var(--ink-3)" stroke-width="1.1" marker-end="url(#ar4)" fill="none">
+        <line x1="134" y1="146" x2="160" y2="146"/>
+        <line x1="278" y1="140" x2="348" y2="82"/>
+        <line x1="472" y1="75" x2="486" y2="75"/><line x1="490" y1="82" x2="476" y2="88"/>
+        <line x1="412" y1="94" x2="412" y2="106"/><line x1="550" y1="94" x2="550" y2="106"/>
+        <line x1="440" y1="146" x2="460" y2="176"/><line x1="530" y1="146" x2="512" y2="176"/>
+        <line x1="554" y1="196" x2="680" y2="82"/>
+      </g>
+      <path d="M420,198 L400,198 L400,170 L390,170 L390,96" stroke="var(--block)" stroke-width="1.1"
+            fill="none" marker-end="url(#ar4)" stroke-dasharray="3 2"/>
+      <text class="lab-m" x="352" y="166" fill="var(--block)">驗證沒過</text>
+      <text class="lab-m" x="600" y="152">全部可被 owner 取消或取代</text>
+    </svg>
+  </div>
+  <p class="cap">VERIFYING 可以回到 RUNNING，驗證沒過要回去做，不是直接失敗。</p>
+</section>
+
+<section>
+  <h2>X 光：一場真實的偏離</h2>
+  <p class="sub">2026-09-08 到 09 這一場的軌跡。北極星是固定的一條線，AI 的路徑是那條起伏的線，兩者的距離就是偏離度。紅圈是使用者出手把它拉回來的位置。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 300" style="min-width:720px;width:100%" role="img" aria-label="偏離軌跡 X 光圖">
+      <defs>
+        <linearGradient id="dr" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="var(--block)" stop-opacity=".15"/>
+          <stop offset="100%" stop-color="var(--block)" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+
+      <line x1="56" y1="244" x2="900" y2="244" stroke="var(--brass)" stroke-width="1" stroke-dasharray="3 3"/>
+      <text class="lab-m" x="56" y="262" fill="var(--brass)">北極星　偏離 0</text>
+
+      <line x1="56" y1="40" x2="900" y2="40" stroke="var(--rule-soft)"/>
+      <line x1="56" y1="110" x2="900" y2="110" stroke="var(--rule-soft)"/>
+      <line x1="56" y1="178" x2="900" y2="178" stroke="var(--rule-soft)"/>
+      <text class="lab-m" x="20" y="44">高</text>
+      <text class="lab-m" x="20" y="182">低</text>
+
+      <path d="M56,232 L160,92 L264,54 L368,210 L472,146 L576,238 L680,236 L784,164 L890,240 L890,244 L56,244 Z" fill="url(#dr)"/>
+      <path d="M56,232 L160,92 L264,54 L368,210 L472,146 L576,238 L680,236 L784,164 L890,240"
+            fill="none" stroke="var(--block)" stroke-width="2" stroke-linejoin="round"/>
+
+      <g stroke="var(--block)" stroke-width="1" stroke-dasharray="2 3" opacity=".45">
+        <line x1="368" y1="54" x2="368" y2="244"/><line x1="576" y1="54" x2="576" y2="244"/>
+        <line x1="890" y1="54" x2="890" y2="244"/>
+      </g>
+
+      <g>
+        <circle cx="56" cy="232" r="3.5" fill="var(--paper)" stroke="var(--ink-3)" stroke-width="2"/>
+        <circle cx="160" cy="92" r="3.5" fill="var(--paper)" stroke="var(--active)" stroke-width="2"/>
+        <circle cx="264" cy="54" r="4.5" fill="var(--block)"/>
+        <circle cx="368" cy="210" r="5" fill="var(--paper)" stroke="var(--block)" stroke-width="2.5"/>
+        <circle cx="472" cy="146" r="3.5" fill="var(--paper)" stroke="var(--active)" stroke-width="2"/>
+        <circle cx="576" cy="238" r="5" fill="var(--paper)" stroke="var(--block)" stroke-width="2.5"/>
+        <circle cx="680" cy="236" r="3.5" fill="var(--paper)" stroke="var(--ink-3)" stroke-width="2"/>
+        <circle cx="784" cy="164" r="3.5" fill="var(--paper)" stroke="var(--active)" stroke-width="2"/>
+        <circle cx="890" cy="240" r="5" fill="var(--paper)" stroke="var(--block)" stroke-width="2.5"/>
+      </g>
+      <g class="lab-m" fill="var(--ink-2)">
+        <text x="56" y="224" text-anchor="middle">1</text><text x="160" y="84" text-anchor="middle">2</text>
+        <text x="264" y="45" text-anchor="middle">3</text><text x="368" y="202" text-anchor="middle">4</text>
+        <text x="472" y="138" text-anchor="middle">5</text><text x="576" y="230" text-anchor="middle">6</text>
+        <text x="680" y="228" text-anchor="middle">7</text><text x="784" y="156" text-anchor="middle">8</text>
+        <text x="890" y="232" text-anchor="middle">9</text>
+      </g>
+      <text class="lab-m" x="56" y="284">09-08 09:40</text>
+      <text class="lab-m" x="890" y="284" text-anchor="end">09-09 13:00</text>
+    </svg>
+  </div>
+
+  <div class="tbl-scroll"><table>
+    <thead><tr><th>節點</th><th>發生什麼</th><th>類型</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">1</td><td>接手這條線</td><td><span class="b idle">起點</span></td></tr>
+      <tr><td class="mono">2</td><td>九份來源文件只讀了一份</td><td><span class="b act">偏離</span></td></tr>
+      <tr><td class="mono">3</td><td>掃 15,130 則訊息，只留下五個平均值</td><td><span class="b act">偏離高峰</span></td></tr>
+      <tr><td class="mono">4</td><td>「你事實上根本沒達到我的 Goal」</td><td><span class="b blk">使用者糾正</span></td></tr>
+      <tr><td class="mono">5</td><td>把 scope 定義當成北極星</td><td><span class="b act">偏離</span></td></tr>
+      <tr><td class="mono">6</td><td>「你真的知道我的北極星？？」</td><td><span class="b blk">使用者糾正</span></td></tr>
+      <tr><td class="mono">7</td><td>寫下 soul.md 與 bible.md</td><td><span class="b done">回到線上</span></td></tr>
+      <tr><td class="mono">8</td><td>又問一次她已經回答過的事</td><td><span class="b act">偏離</span></td></tr>
+      <tr><td class="mono">9</td><td>「你去開相關檔案」</td><td><span class="b blk">使用者糾正</span></td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note"><em>兩個峰值都不是突然的。</em>第一次爬升在使用者開口之前一小時就開始了，跡象是讀的文件比例掉下來、引用出處變少。要抓的是那一段爬坡，不是等到峰頂才響。</div>
+</section>
+
+<section>
+  <h2>停滯偵測怎麼算</h2>
+  <p class="sub">四個因子相乘，每個 0 到 1。相乘的意思是任何一個接近 0 就足以洗掉懷疑。</p>
+
+  <pre>STALL_RISK = duration_anomaly × no_progress_growth × no_event_activity × expected_progress_confidence</pre>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 200" style="min-width:680px;width:100%" role="img" aria-label="停滯風險四因子">
+      <g>
+        <rect x="24" y="30" width="200" height="58" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="124" y="52" text-anchor="middle" font-weight="600">duration_anomaly</text>
+        <text class="lab-s" x="124" y="70" text-anchor="middle">跑多久。300 秒以下一律 0</text>
+
+        <rect x="244" y="30" width="200" height="58" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="344" y="52" text-anchor="middle" font-weight="600">no_progress_growth</text>
+        <text class="lab-s" x="344" y="70" text-anchor="middle">產物 hash 有沒有變</text>
+
+        <rect x="464" y="30" width="200" height="58" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="564" y="52" text-anchor="middle" font-weight="600">no_event_activity</text>
+        <text class="lab-s" x="564" y="70" text-anchor="middle">有沒有回話</text>
+
+        <rect x="684" y="30" width="228" height="58" rx="3" fill="var(--brass-soft)" stroke="var(--brass)" stroke-width="1.5"/>
+        <text class="lab" x="798" y="52" text-anchor="middle" font-weight="600">expected_progress_confidence</text>
+        <text class="lab-s" x="798" y="70" text-anchor="middle">這一步本來就該有產物嗎</text>
+      </g>
+      <text class="lab" x="234" y="66" text-anchor="middle" fill="var(--ink-3)">×</text>
+      <text class="lab" x="454" y="66" text-anchor="middle" fill="var(--ink-3)">×</text>
+      <text class="lab" x="674" y="66" text-anchor="middle" fill="var(--ink-3)">×</text>
+
+      <rect x="330" y="126" width="280" height="44" rx="3" fill="var(--paper)" stroke="var(--ink)" stroke-width="1.5"/>
+      <text class="lab" x="470" y="146" text-anchor="middle" font-weight="600">STALL_RISK ≥ 0.5 → STALL_SUSPECT</text>
+      <text class="lab-s" x="470" y="162" text-anchor="middle">任一因子接近 0，整個乘積接近 0</text>
+      <line x1="470" y1="92" x2="470" y2="122" stroke="var(--ink-3)" stroke-width="1" marker-end="url(#ar)"/>
+    </svg>
+  </div>
+
+  <div class="note warn"><em>最右邊那個是關鍵煞車。</em>如果這一步本來就不預期有可見產物（例如在等外部依賴），再久也不算停滯。沒有它，所有等待都會被誤判成卡住。這四個門檻全部沒有實測校準，規格只給了公式沒給值域。</div>
+</section>
+
+<section>
+  <h2>實務情境</h2>
+  <p class="sub">十四個。每一個都對應實作裡的一段程式碼，不是設計稿。</p>
+
+  <div class="cards">
+    <div class="card"><div class="card-h"><span class="card-t">說改好了，磁碟沒動</span><span class="card-n">01</span></div>
+      <div class="card-b"><code>verify_step()</code> 真的去看檔案，發現沒動過。步驟從 VERIFYING 退回 RUNNING，retry +1。
+      <div class="why">任務不會終止 —— 終止狀態只有四個，「AI 說做完了」不在其中。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">報告完就停下來等人</span><span class="card-n">02</span></div>
+      <div class="card-b"><code>report()</code> 沒有任何可以順手改狀態的參數，是刻意的。任務維持 RUNNING，<code>next_step()</code> 立刻回傳下一步。
+      <div class="why">報告是觀察通道，不是流程關卡。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">人還是說了「繼續」</span><span class="card-n">03</span></div>
+      <div class="card-b"><code>human_continue()</code> 記一筆。這個函式存在的唯一目的是讓 HumanContinueBurden 算得出來。
+      <div class="why">每記一筆，就是系統失敗了一次。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">交回 100KB 的編譯 log</span><span class="card-n">04</span></div>
+      <div class="card-b"><code>stash()</code> 落檔，packet 只帶 <code>path#size</code>。實測 packet 小於 2,000 字元，是原始輸出的 1/50。
+      <div class="why">Main 拿到路徑，要不要讀是它的選擇。塞進 packet 的話它沒有選擇。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">worker 順手多做了事</span><span class="card-n">05</span></div>
+      <div class="card-b"><code>check_scope()</code> 比對 expected_outputs，標出範圍外的產物，packet 拒收。判準是結構的，不讀語意。
+      <div class="why">偏離不會公告。它會安靜地多做幾件事一起交回來，而那些看起來都很合理。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">沒定義預期產物</span><span class="card-n">06</span></div>
+      <div class="card-b">不判定超出範圍，回空清單。
+      <div class="why">沒有範圍就談不上超出範圍。那是 TaskStep 沒定義好，不是 worker 的錯，混為一談會開始責怪 worker 做對的事。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">長時間建置</span><span class="card-n">07</span></div>
+      <div class="card-b">跑兩小時但 log 一直在長。產物 hash 有變，因子歸零，判 ALIVE。
+      <div class="why">把「久」當成「卡住」會讓所有長工作都被誤判，而長工作正是最不該被打斷的那種。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">真的卡住了</span><span class="card-n">08</span></div>
+      <div class="card-b">兩小時、產物沒動、沒有事件。STALL_RISK 0.996。復原階梯八階，人排最後。
+      <div class="why">叫人是最貴的一步，不是最方便的一步。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">活著但做錯了</span><span class="card-n">09</span></div>
+      <div class="card-b">心跳正常、產物一直在動，但產物是空檔案。liveness 回 ALIVE，verify 回不通過，產生 CORRECTNESS incident。
+      <div class="why">分開的理由不是分類整齊，是混在一起會出現最糟的情況：心跳正常於是沒人去看產物，而產物是錯的。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">建置成功但輸出空白</span><span class="card-n">10</span></div>
+      <div class="card-b">ResultReceipt 已落地，診斷 OUTPUT_STARVATION，恢復計畫是只重做合成不重跑。
+      <div class="why">已經花掉的建置時間是真的成本，不該因為一句話沒說出來就再付一次。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">連續空白</span><span class="card-n">11</span></div>
+      <div class="card-b">判 BLANK_OUTPUT_SEQUENCE，恢復計畫多一步：換一個乾淨的來講。
+      <div class="why">單次可能是意外，連續不是。重複本身就是證據。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">壓縮發生了</span><span class="card-n">12</span></div>
+      <div class="card-b">從 jsonl 讀到精確的帳：<code>997,325 → 17,472，丟棄 979,853</code>。然後考四個具體問題。
+      <div class="why">不是問「你還記得嗎」—— 那個問題的答案永遠是「記得」。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">新 session 接手</span><span class="card-n">13</span></div>
+      <div class="card-b"><code>forseti doctor</code> 讀出北極星、階段、未讀、阻塞、未完成數。實測一個全新 session 沒人告訴它有這個指令，它自己找到了。
+      <div class="why">控制檔本身就撐得住接手，doctor 只是讓它更快。</div></div></div>
+
+    <div class="card"><div class="card-h"><span class="card-t">找回被壓縮丟掉的</span><span class="card-n">14</span></div>
+      <div class="card-b"><code>forseti recall</code> 從 73,115 段裡撈，被丟出 context 的加權，過時的講法標出來。
+      <div class="why">輸出是一句話加一個地址，不是一坨資料。</div></div></div>
+  </div>
+</section>
+
+<section>
+  <h2>還沒做的，與接下來的順序</h2>
+
+  <h3>三個誠實要講的落差</h3>
+  <div class="tbl-scroll"><table>
+    <thead><tr><th>落差</th><th>實際狀況</th></tr></thead>
+    <tbody>
+      <tr><td><b>auto_continued 是 0</b></td><td>做完 <code>auto_dispatch()</code> 之後，自己推進那八個 feature 時走的是手動 <code>dispatch()</code>。做出一個能自動繼續的東西，跟真的讓它自動繼續，是兩件事。</td></tr>
+      <tr><td><b>跨 session 派工在帳本外</b></td><td>解法是先 dispatch 登記再送訊息，寫完了然後又忘了用。所以 worker 死了十七小時 watchdog 看不到。</td></tr>
+      <tr><td><b>所有門檻都是拍的</b></td><td>SUMMARY_LIMIT、PACKET_LIMIT、suspect_at、BLANK_SEQUENCE_AT 全部沒有實測校準。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>順序</h3>
+  <div class="tbl-scroll"><table>
+    <thead><tr><th style="width:38px">#</th><th>做什麼</th><th>為什麼是這個順序</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">1</td><td>把 F04 的事件真的接上</td><td>auto_dispatch 存在但沒被用。接上之後 HumanContinueBurden 才會真的降下來，那是整條 F 線的目的。無依賴。</td></tr>
+      <tr><td class="mono">2</td><td>跨 session 派工走帳本</td><td>worker 有 step，watchdog 才看得到它。依賴 1。</td></tr>
+      <tr><td class="mono">3</td><td>補讀工程書 Phase 1-2</td><td>階段 1 與階段 4 的補讀門檻，現在只讀三成。不補讀不准動那兩階。</td></tr>
+      <tr><td class="mono">4</td><td>門檻校準</td><td>拿真實資料量出合理值。依賴 1、2 先跑一段時間累積資料。</td></tr>
+      <tr><td class="mono">5</td><td>讓閘門在對的時機出現</td><td>不是加強制力。實測證明一個只是要加輸出格式的 session 不讀控制檔是對的。依賴 1、2。</td></tr>
+      <tr><td class="mono">6</td><td>階段 1 事件帳本</td><td>依賴 3 的補讀門檻。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>不做什麼</h3>
+  <div class="tbl-scroll"><table>
+    <tbody>
+      <tr><td style="width:36%">精進現有的 detector</td><td>有實測的系統性假陽性，而且沒有事件帳本就沒有正確輸入</td></tr>
+      <tr><td>任何 UI</td><td>工程書 Phase 0 明令禁止</td></tr>
+      <tr><td>重寫照妖鏡與 Token Monitor</td><td>在 <code>~/code-matrix-rebuild/app.py</code>，要接不要重寫</td></tr>
+      <tr><td>改原始 jsonl</td><td>永久禁止。所有加工都可能丟東西，而丟東西正是要解決的問題</td></tr>
+      <tr><td>為索引精度上模型</td><td>索引錯了刪掉重建就好，原檔在原地</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section>
+  <h2>自我審計</h2>
+  <p class="sub">給接手的人與未來的 AI session。這一節的存在是因為前面所有內容都會過期。</p>
+
+  <h3>怎麼檢查這份文件有沒有過期</h3>
+  <pre>python3 apps/forseti-cli/forseti.py doctor    # 階段、阻塞、未讀
+python3 apps/forseti-cli/forseti.py tasks     # 未完成的義務
+for f in tests/test_*.py; do python3 $f &gt;/dev/null 2&gt;&amp;1 || echo "FAIL $f"; done
+git log --oneline -1</pre>
+  <p>四個輸出跟這份文件對不上，就是文件過期了，以指令輸出為準。</p>
+
+  <h3>三個最容易犯的錯</h3>
+  <div class="tbl-scroll"><table>
+    <tbody>
+      <tr><td style="width:32%"><b>把中間結論當發現</b></td><td>一個 1.6 倍的跨引擎差距，三輪清理之後歸零。每一個中間結論都比最終結論「有意思」，越像發現的東西越該多查一次。</td></tr>
+      <tr><td><b>讀到的是真的，歸納是假的</b></td><td>讀 72 筆覺得「前一則幾乎都零工具」，量化之後 52.8% 對 47.9%，差距落在雜訊內。讀連續樣本沒有對照組會產生強烈但錯誤的模式感。</td></tr>
+      <tr><td><b>做出機制然後不用它</b></td><td>目前最大的問題，而且它不會報錯。</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>驗證方法的優先序</h3>
+  <div class="tbl-scroll"><table>
+    <thead><tr><th style="width:38px">#</th><th>問什麼</th><th>成本</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">1</td><td>有沒有發生過</td><td>掃現有資料，零成本</td></tr>
+      <tr><td class="mono">2</td><td>會不會發生</td><td>開一個真的 session 試，要花錢</td></tr>
+      <tr><td class="mono">3</td><td>為什麼會這樣</td><td>讀原始碼與原文，要時間</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">B-02 那條掛了三天的阻塞就是照這個順序解掉的，而第一層直接給出了關鍵事實：從來沒有人從那個目錄啟動過 session。hook 註冊在那裡兩天，一次都沒機會跑。<em>一個「看起來沒在運作」的機制，可能只是觸發條件從來沒被滿足。</em></div>
+</section>
+
+<footer>
+  Forseti 開發進度總彙整 · 2026-09-09 · commit e944350 · 第 87 個 commit<br>
+  完整版含全部參數定義、事件定義與展示案例：docs/PROGRESS_2026-09-09.md<br>
+  這份文件的每一個數字都是當天實跑的。沿用記憶或估算的地方一律標記，這是本專案第零條規則的直接要求。
+</footer>
+
+</div>
