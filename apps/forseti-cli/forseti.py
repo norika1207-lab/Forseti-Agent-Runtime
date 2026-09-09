@@ -20,6 +20,8 @@
     python3 apps/forseti-cli/forseti.py status
     python3 apps/forseti-cli/forseti.py gate takeover
     python3 apps/forseti-cli/forseti.py context [--all|<path.jsonl>]
+    python3 apps/forseti-cli/forseti.py index [--rebuild]
+    python3 apps/forseti-cli/forseti.py recall "為何會有點名板"
 """
 
 from __future__ import annotations
@@ -407,14 +409,29 @@ def cmd_gate_takeover(rep: Report) -> int:
 # ~/.claude/projects 底下的 jsonl，來源不同、失效方式也不同，混在一起
 # 會讓「這個指令讀不到東西」變成兩種完全不同的意思。
 
-def cmd_context(args: list[str]) -> int:
+def _sibling(name: str):
+    """載入同目錄的模組。從別的 cwd 呼叫時 sys.path 不一定含得到這裡。"""
+    import importlib
     try:
-        import context_meter
+        return importlib.import_module(name)
     except ImportError:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
-        import context_meter  # noqa: E402
+        return importlib.import_module(name)
 
-    return context_meter.main(["context_meter", *args])
+
+def cmd_context(args: list[str]) -> int:
+    return _sibling("context_meter").main(["context_meter", *args])
+
+
+def cmd_index(args: list[str]) -> int:
+    return _sibling("recall").main(["recall", "index", *args])
+
+
+def cmd_recall(args: list[str]) -> int:
+    if not args:
+        print("要問什麼？　forseti recall \"為何會有點名板\"", file=sys.stderr)
+        return 2
+    return _sibling("recall").main(["recall", *args])
 
 
 def main(argv: list[str]) -> int:
@@ -434,6 +451,10 @@ def main(argv: list[str]) -> int:
         return cmd_gate_takeover(rep)
     if cmd == "context":
         return cmd_context(argv[2:])
+    if cmd == "index":
+        return cmd_index(argv[2:])
+    if cmd == "recall":
+        return cmd_recall(argv[2:])
 
     print(__doc__)
     return 2
