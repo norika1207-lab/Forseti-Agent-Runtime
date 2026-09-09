@@ -146,7 +146,15 @@ def extract_phase(text: str) -> tuple[str | None, str | None]:
 
 
 def extract_blockers(text: str) -> list[str]:
-    """抓 BLOCKERS.md 裡每個 B-xx 標題與它擋住什麼。"""
+    """抓 BLOCKERS.md 裡每個 B-xx 標題與它擋住什麼。
+
+    只算「已解除」那個一級標題之前的。BLOCKERS.md 開頭自己寫著
+    「擋不住任何東西的不叫阻塞」,所以解除的不該還算進數字裡 ——
+    doctor 報「9 項阻塞」而其中一項已經解除,那個數字是假的。
+
+    解除的仍然留在檔案裡,因為「怎麼驗掉的」比「它曾經擋住什麼」有用。
+    """
+    text = re.split(r"^#\s*已解除\s*$", text, maxsplit=1, flags=re.M)[0]
     out: list[str] = []
     for m in re.finditer(
         r"^##\s*(B-\d+)[　\s]+(.+?)\s*$(.*?)(?=^##|\Z)", text, re.M | re.S

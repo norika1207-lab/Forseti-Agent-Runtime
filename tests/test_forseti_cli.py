@@ -101,6 +101,19 @@ class TestControlFileParsing(unittest.TestCase):
         for name in ("Vol1", "Vol2", "Vol3", "Vol4", "Design Evolution"):
             self.assertNotIn(name, joined)
 
+    def test_resolved_blockers_are_not_counted(self):
+        """已解除的不算阻塞。
+
+        BLOCKERS.md 開頭自己寫著「擋不住任何東西的不叫阻塞」。
+        doctor 報「9 項」而其中一項已經解除的話，那個數字是假的，
+        而假的數字比沒有數字更糟。
+        """
+        joined = " ".join(self.rep.blockers)
+        self.assertNotIn("B-02", joined, "B-02 已於 2026-09-09 解除，不該算進阻塞數")
+        text = (ROOT / ".forseti" / "BLOCKERS.md").read_text(encoding="utf-8")
+        self.assertIn("# 已解除", text, "解除的要留在檔案裡，只是不算數")
+        self.assertIn("B-02", text.split("# 已解除")[1], "B-02 的全文要保留")
+
     def test_control_files_all_present(self):
         missing = [f.what for f in self.rep.missing]
         self.assertEqual(missing, [], f"缺控制檔：{missing}")

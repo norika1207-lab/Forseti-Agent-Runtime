@@ -45,114 +45,6 @@
 
 ---
 
-## B-02　hook 的載入條件與寫入位置（2026-09-09 全部驗完，已解除）
-
-**擋住：無。這一條已經解除。**
-
-### 最後一塊：從 repo 目錄啟動會不會觸發（2026-09-09 13:15 實測）
-
-84 號查不到這一條，因為 Claude Code 載入 project settings 的規則在
-harness 內部。讀不到就從外面觀察效果：
-
-```bash
-cd "/Volumes/NewDrive/AI Project/Forseti" && claude -p "建立 docs/cases/hook-probe.md" --permission-mode acceptEdits
-```
-
-結果，三件事同時成立：
-
-`repo/.forseti/state.json` 與 `streak.json` 在 13:15 被建立，時間戳與那次
-Write 對得上。state 裡有一筆 coverage，session `7307ad03`，
-`EDITED /Volumes/NewDrive/AI Project/Forseti/docs/cases/hook-probe.md`。
-streak 是 `{"total_off":0,"total_checked":1}`。
-
-全域 `~/.forseti/streak.json` 維持 `12/8` 完全沒動。
-
-所以：**從 repo 目錄啟動確實會載入 project settings 並觸發 hook；
-寫入位置是啟動時的 cwd；`insideRepo` 那條硬邊界真的擋得住，
-沒有污染全域。**
-
-### 為什麼它看起來像從來沒運作過
-
-掃全機 jsonl 找 cwd 在 repo 底下的 session，**結果是零個**。
-hook 註冊在那裡兩天，一次都沒有機會跑，因為從來沒有人從那個目錄
-啟動 session。不是機制壞了，是條件從來沒滿足過。
-
-這一點值得記：一個「看起來沒在運作」的機制，可能只是它的觸發條件
-從來沒有被滿足。先查有沒有發生過，再查會不會發生 —— 前者是零成本的，
-後者才要花錢。
-
-### 驗證方法對其他 blocker 的意義
-
-B-07 也是「只有 owner 能驗」那一類，理由是需要一個全新 session。
-現在證明了 `claude -p` 可以開一個真正獨立的 session（有自己的
-session id、會載入 project settings、會觸發 hook）。
-**所以 B-07 也不需要 owner 動手了。**
-
-### 載入條件
-
-hook 只註冊在 **repo 的** `.claude/settings.json`（3 處，
-Pre/PostToolUse matcher 是 `Write|Edit|MultiEdit|NotebookEdit` 與 `Stop`）。
-全域 `~/.claude/settings.json` 是 0 處。
-
-第二道是硬邊界，寫在 `hooks/forseti-hook.mjs:273-275`，在讀任何狀態、
-建任何目錄之前就檢查：
-
-```js
-const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
-if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
-```
-
-`insideRepo`（`:77-81`）比對的是 `REPO_ROOT = resolvePath(HERE, '..')`，
-也就是 hook 檔案自己的位置往上一層。**不看設定、不看環境變數**，
-所以這條邊界改不掉，只能改程式碼。
-
-### 寫入位置
-
-`:164-173`。一律寫 `projectRoot(cwd)/.forseti/{state,streak,goal}.json`，
-而 `projectRoot = CLAUDE_PROJECT_DIR || cwd || process.cwd()`。
-寫到哪由觸發當下的環境決定，不是固定寫 repo。
-另有全域 `$HOME/.forseti/goal.json`，hook 只讀不寫。
-
-### `~/.forseti/` 那批資料是什麼（我昨天解讀錯了）
-
-**它不是「hook 正常運作的證據」，是 2026-09-08 那場事故的殘骸。**
-
-`forseti-hook.mjs:18-35` 自己寫了經過：這個檔案原本有三個
-`process.exit(2)`，一個都沒問過 `intervention.js` 的 `canIntervene`。
-裝上去之後，一個只寫著某專案路徑的 scope 對整台機器每一個目錄生效，
-擁有者其他所有工作連續寫五個檔就被 deny 一次，整整九個小時。
-
-原文最後一句：「留下的證據是 streak.json 的 total_checked: 12,
-total_off: 8」。
-
-所以那個 8 不是「8 次判離題」，是 8 次擋掉她的正常工作。
-事故後撤出全域設定、只留 repo settings、加上 `insideRepo` 硬邊界，
-所以現行程式碼跑不出那批資料 —— cwd 在 home 一帶的 session 會在 `:275`
-就 exit 0，連目錄都不會建。
-
-**2026-09-09 我把事故的殘骸當成了機制運作的證明。方向沒錯，性質反了。**
-
-### 剩下三條沒驗的（由 norikaoda-84 查出並誠實標記）
-
-一，Claude Code 決定載入哪份 project settings 的規則讀不到（harness 內部）。
-只能反推「本 session 的 project 是 home、沒載 repo settings」，
-**無法直接證明「從 repo 目錄啟動就一定會載入並觸發」。這一條仍然只有
-owner 從 repo 目錄開 session 驗得到。**
-
-二，「09-08 當時全域 settings.json 確實註冊過這三個 hook」沒有直接檔案
-證據，現在全域已經沒有它們。時序判定是靠 hook 自述、`~/.forseti/` 遺留、
-streak 三者一致反推。要坐實需要 settings.json 的版控或備份歷史。
-
-三，全域 `~/.forseti/goal.json` 多出的 ISEEU 與 `/private/tmp` scope
-是誰寫的，沒找到寫入者。`forseti-declare.mjs:27` 寫的是
-`declarations.json` 不是 `goal.json`，hook 只讀不寫。寫者應該是
-某個 CLI 或安裝腳本，還沒讀到那段，不猜。
-
-### 出處
-
-行號由 `norikaoda-84` 提供，**本 session 親自抽驗過 `:73-84`、`:270-280`、
-`:162-175`、`:16-36` 四段，全部對上。** 它也清掉了自己製造的測試污染。
-
 
 ## B-03　Python 版本是 3.11.5，工程書要求 3.12
 
@@ -305,3 +197,120 @@ SendMessage，而不是只送訊息。這樣 worker 就有 step，watchdog 才�
 
 **這條跟 auto_dispatch 那個落差是同一類：** 做出一個能自動繼續的東西，
 跟真的讓它自動繼續，是兩件事。
+
+---
+
+# 已解除
+
+放在這裡的不再是阻塞，`forseti doctor` 不會算進去。
+保留全文是因為「怎麼驗掉的」比「它曾經擋住什麼」有用。
+
+---
+
+## B-02　hook 的載入條件與寫入位置（2026-09-09 全部驗完，已解除）
+
+**擋住：** 無，2026-09-09 全部驗完。保留在這裡是為了記錄怎麼驗的。
+
+### 最後一塊：從 repo 目錄啟動會不會觸發（2026-09-09 13:15 實測）
+
+84 號查不到這一條，因為 Claude Code 載入 project settings 的規則在
+harness 內部。讀不到就從外面觀察效果：
+
+```bash
+cd "/Volumes/NewDrive/AI Project/Forseti" && claude -p "建立 docs/cases/hook-probe.md" --permission-mode acceptEdits
+```
+
+結果，三件事同時成立：
+
+`repo/.forseti/state.json` 與 `streak.json` 在 13:15 被建立，時間戳與那次
+Write 對得上。state 裡有一筆 coverage，session `7307ad03`，
+`EDITED /Volumes/NewDrive/AI Project/Forseti/docs/cases/hook-probe.md`。
+streak 是 `{"total_off":0,"total_checked":1}`。
+
+全域 `~/.forseti/streak.json` 維持 `12/8` 完全沒動。
+
+所以：**從 repo 目錄啟動確實會載入 project settings 並觸發 hook；
+寫入位置是啟動時的 cwd；`insideRepo` 那條硬邊界真的擋得住，
+沒有污染全域。**
+
+### 為什麼它看起來像從來沒運作過
+
+掃全機 jsonl 找 cwd 在 repo 底下的 session，**結果是零個**。
+hook 註冊在那裡兩天，一次都沒有機會跑，因為從來沒有人從那個目錄
+啟動 session。不是機制壞了，是條件從來沒滿足過。
+
+這一點值得記：一個「看起來沒在運作」的機制，可能只是它的觸發條件
+從來沒有被滿足。先查有沒有發生過，再查會不會發生 —— 前者是零成本的，
+後者才要花錢。
+
+### 驗證方法對其他 blocker 的意義
+
+B-07 也是「只有 owner 能驗」那一類，理由是需要一個全新 session。
+現在證明了 `claude -p` 可以開一個真正獨立的 session（有自己的
+session id、會載入 project settings、會觸發 hook）。
+**所以 B-07 也不需要 owner 動手了。**
+
+### 載入條件
+
+hook 只註冊在 **repo 的** `.claude/settings.json`（3 處，
+Pre/PostToolUse matcher 是 `Write|Edit|MultiEdit|NotebookEdit` 與 `Stop`）。
+全域 `~/.claude/settings.json` 是 0 處。
+
+第二道是硬邊界，寫在 `hooks/forseti-hook.mjs:273-275`，在讀任何狀態、
+建任何目錄之前就檢查：
+
+```js
+const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
+if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
+```
+
+`insideRepo`（`:77-81`）比對的是 `REPO_ROOT = resolvePath(HERE, '..')`，
+也就是 hook 檔案自己的位置往上一層。**不看設定、不看環境變數**，
+所以這條邊界改不掉，只能改程式碼。
+
+### 寫入位置
+
+`:164-173`。一律寫 `projectRoot(cwd)/.forseti/{state,streak,goal}.json`，
+而 `projectRoot = CLAUDE_PROJECT_DIR || cwd || process.cwd()`。
+寫到哪由觸發當下的環境決定，不是固定寫 repo。
+另有全域 `$HOME/.forseti/goal.json`，hook 只讀不寫。
+
+### `~/.forseti/` 那批資料是什麼（我昨天解讀錯了）
+
+**它不是「hook 正常運作的證據」，是 2026-09-08 那場事故的殘骸。**
+
+`forseti-hook.mjs:18-35` 自己寫了經過：這個檔案原本有三個
+`process.exit(2)`，一個都沒問過 `intervention.js` 的 `canIntervene`。
+裝上去之後，一個只寫著某專案路徑的 scope 對整台機器每一個目錄生效，
+擁有者其他所有工作連續寫五個檔就被 deny 一次，整整九個小時。
+
+原文最後一句：「留下的證據是 streak.json 的 total_checked: 12,
+total_off: 8」。
+
+所以那個 8 不是「8 次判離題」，是 8 次擋掉她的正常工作。
+事故後撤出全域設定、只留 repo settings、加上 `insideRepo` 硬邊界，
+所以現行程式碼跑不出那批資料 —— cwd 在 home 一帶的 session 會在 `:275`
+就 exit 0，連目錄都不會建。
+
+**2026-09-09 我把事故的殘骸當成了機制運作的證明。方向沒錯，性質反了。**
+
+### 剩下三條沒驗的（由 norikaoda-84 查出並誠實標記）
+
+一，Claude Code 決定載入哪份 project settings 的規則讀不到（harness 內部）。
+只能反推「本 session 的 project 是 home、沒載 repo settings」，
+**無法直接證明「從 repo 目錄啟動就一定會載入並觸發」。這一條仍然只有
+owner 從 repo 目錄開 session 驗得到。**
+
+二，「09-08 當時全域 settings.json 確實註冊過這三個 hook」沒有直接檔案
+證據，現在全域已經沒有它們。時序判定是靠 hook 自述、`~/.forseti/` 遺留、
+streak 三者一致反推。要坐實需要 settings.json 的版控或備份歷史。
+
+三，全域 `~/.forseti/goal.json` 多出的 ISEEU 與 `/private/tmp` scope
+是誰寫的，沒找到寫入者。`forseti-declare.mjs:27` 寫的是
+`declarations.json` 不是 `goal.json`，hook 只讀不寫。寫者應該是
+某個 CLI 或安裝腳本，還沒讀到那段，不猜。
+
+### 出處
+
+行號由 `norikaoda-84` 提供，**本 session 親自抽驗過 `:73-84`、`:270-280`、
+`:162-175`、`:16-36` 四段，全部對上。** 它也清掉了自己製造的測試污染。
