@@ -745,6 +745,34 @@ class Ledger:
 
     # -- Watchdog（F05-WDG-001）------------------------------------------
 
+    def active_steps(self) -> list[dict]:
+        """全部進行中的步驟，不分任務，最久沒動靜的排前面。
+
+        B-09 的機制缺口就在這裡：`check_liveness()` 要有人記得對某一個
+        特定的 step 呼叫它，而「記得」正是會失敗的東西。2026-09-08
+        那個 worker 死了十七小時沒人知道，不是因為 watchdog 不會動，
+        是因為沒有人想到要對它問一次。
+
+        所以巡檢的入口不能是「看某一個」，必須是「看全部」。
+        """
+        now = time.time()
+        rows = self.con.execute(
+            "SELECT s.step_id,s.task_id,s.objective,s.state,s.assigned_worker,"
+            "s.started_at,s.last_progress_at,s.retry_count,t.objective"
+            " FROM steps s JOIN tasks t ON t.task_id=s.task_id"
+            f" WHERE s.state IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchall()
+        out = []
+        for r in rows:
+            since = r[6] or r[5] or now
+            out.append({
+                "step_id": r[0], "task_id": r[1], "local_id": r[0].split("/")[-1],
+                "objective": r[2], "state": r[3], "worker": r[4] or "",
+                "idle_sec": max(now - since, 0.0), "retry_count": r[7],
+                "task_objective": r[8],
+            })
+        out.sort(key=lambda d: d["idle_sec"], reverse=True)
+        return out
+
     def check_liveness(self, step_id: str, *, expected_to_progress: bool = True,
                        config: dict | None = None):
         """這一步還活著嗎。只回答活不活著，不回答做得對不對。
@@ -769,7 +797,12 @@ class Ledger:
         probe = w.ProgressProbe.take(_u(expected), self.cwd)
         prev = self._last_probe(step_id)
         changed = probe.changed_from(prev)
-        self._save_probe(step_id, probe)
+        # 只在有新資訊時才落一筆。巡檢是可以每分鐘跑的東西，每次都寫
+        # 一筆「取樣了但什麼都沒變」會讓事件表以巡檢頻率膨脹，而那些
+        # 筆數一個字的資訊都沒有。沒寫也不影響判斷：changed_from 比的
+        # 是內容，基準留在上一筆有變化的地方仍然對得出來。
+        if prev is None or changed:
+            self._save_probe(step_id, probe)
 
         events = self.con.execute(
             "SELECT COUNT(*) FROM events WHERE step_id=? AND at>? AND kind IN"

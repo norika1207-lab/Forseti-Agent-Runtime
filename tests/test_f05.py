@@ -197,5 +197,82 @@ class TestProgressProbe(unittest.TestCase):
         self.assertFalse(p2.changed_from(p1))
 
 
+class TestSweepFindsForgottenWorkers(F05Case):
+    """B-09 的回歸測試：controller 忘記 worker 存在。
+
+    2026-09-08 一個 worker 死了十七小時沒人知道。watchdog 那時已經
+    寫好也測過，但它要有人記得對那個特定的 step 呼叫 check_liveness()，
+    而「記得」正是會失敗的東西。
+
+    所以這一組測的不是「watchdog 判斷得準不準」（那是上面那些），
+    是「不必記得也找得到」。
+    """
+
+    def test_active_steps_finds_it_without_knowing_the_id(self):
+        """不給 step_id，也要找得到進行中的步驟。"""
+        found = self.led.active_steps()
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["worker"], "worker-a")
+        self.assertEqual(found[0]["local_id"], "s1")
+
+    def test_terminal_steps_are_not_swept(self):
+        """已經結束的步驟不該一直出現在巡檢裡。"""
+        (self.tmp / "build.log").write_text("done", encoding="utf-8")
+        self.led.verify_step(self.s1)
+        self.assertEqual(self.led.active_steps(), [])
+
+    def test_the_longest_silent_one_comes_first(self):
+        """最久沒動靜的排最前面，因為那是最可能已經死掉的。"""
+        self.led.con.execute(
+            "INSERT INTO steps (step_id,task_id,seq,objective,dependencies,state,"
+            "started_at,last_progress_at,expected_outputs,verifier,evidence_refs,"
+            "retry_count,next_action,requires_human,assigned_worker)"
+            " VALUES (?,?,?,?,'[]','RUNNING',?,?,'[]','[]','[]',0,'',0,?)",
+            (f"{self.t}/s2", self.t, 2, "剛派出去的", time.time(), time.time(),
+             "worker-b"))
+        self.led.con.commit()
+        self.age_step(7200)
+
+        found = self.led.active_steps()
+        self.assertEqual([f["local_id"] for f in found], ["s1", "s2"])
+        self.assertGreater(found[0]["idle_sec"], 7000)
+
+    def test_sweeping_repeatedly_does_not_bloat_the_event_log(self):
+        """重複巡檢不該讓事件表以巡檢頻率膨脹。
+
+        watch 是可以掛進排程每分鐘跑的東西。每次都寫一筆「取樣了但
+        什麼都沒變」，一天就是上千筆零資訊的紀錄，而真正的事件會被
+        淹沒在裡面。只在有變化時才記。
+        """
+        def probes():
+            return sum(1 for e in self.led.events_of(self.t)
+                       if e["kind"] == "PROGRESS_PROBE")
+
+        for _ in range(5):
+            self.led.check_liveness(self.s1)
+        self.assertEqual(probes(), 1, "五次巡檢什麼都沒變，只該留一筆基準")
+
+        (self.tmp / "build.log").write_text("進度", encoding="utf-8")
+        self.led.check_liveness(self.s1)
+        self.assertEqual(probes(), 2, "產物真的變了才記第二筆")
+
+    def test_a_worker_that_never_reported_is_still_visible(self):
+        """派出去之後一個事件都沒回報，仍然看得見。
+
+        這正是十七小時那次的形狀：worker 收到訊息、沒有接、或接了就死。
+        帳本裡沒有它的任何 worker 事件，但派工那一刻已經留下了 step，
+        所以巡檢找得到它。派工登記進帳本是整條防線的第一塊。
+        """
+        events = [e for e in self.led.events_of(self.t)
+                  if e["kind"].startswith("WORKER_")]
+        self.assertEqual(events, [], "這個 worker 從來沒有回報過任何事")
+
+        self.age_step(7200)
+        a = self.led.check_liveness(self.s1)
+        self.assertTrue(a.suspect, "兩小時沒有產物也沒有事件，該被標出來")
+        found = self.led.active_steps()
+        self.assertEqual(found[0]["worker"], "worker-a")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

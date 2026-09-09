@@ -32,6 +32,16 @@
     python3 apps/forseti-cli/forseti.py verify <step>
     python3 apps/forseti-cli/forseti.py continuity <task>
 
+跨 session 派工（B-09）：
+    python3 apps/forseti-cli/forseti.py handoff <task> <local_id> <worker>
+    python3 apps/forseti-cli/forseti.py handoff --new <worker> "目標" [verifier]
+    python3 apps/forseti-cli/forseti.py watch
+
+handoff 先把步驟登記進帳本再產出要送的訊息，watch 一次掃完所有
+進行中的步驟。原本的做法是直接送 SendMessage，那條路徑在帳本外面，
+於是 worker 對 watchdog 而言不存在，死了十七小時沒有人知道。
+watch 有可疑項時回傳 1，可以直接掛進排程。
+
 這六個先前只存在於 Python API 裡，沒有 CLI 入口。結果是
 auto_dispatch() 寫好也測過，卻從來沒有被真正的工作呼叫過一次，
 continuity 分數長期是 0 —— 不是機制不會動，是沒有門可以進去。
@@ -336,9 +346,23 @@ def cmd_doctor(rep: Report) -> int:
         if led_mod.default_db().exists():
             led = led_mod.Ledger()
             n = led.total_unfinished()
+            # 有人正在替這個專案做事的話，接手的人第一眼就該看到。
+            # B-09 那次十七小時，失敗的不是偵測，是沒有人想到要問一次。
+            # 所以這一段不等人問，doctor 一跑就講。
+            active = led.active_steps()
             led.close()
             if n:
                 print(f"  未完成的義務　{n} 項　（`forseti tasks` 看細節）")
+                print()
+            if active:
+                print(f"  有人正在做事　{len(active)} 步")
+                for s in active[:5]:
+                    who = s["worker"] or "沒有負責人"
+                    print(f"    · {who}　{_fmt_age(s['idle_sec'])}沒動靜"
+                          f"　{s['objective'][:34]}")
+                if len(active) > 5:
+                    print(f"    …另外 {len(active) - 5} 步")
+                print("    這些是別的 session 在跑的。`forseti watch` 會判斷它們還活著沒。")
                 print()
     except Exception:
         # 帳本壞掉不該讓 doctor 整個掛掉。doctor 的價值在於它一定跑得起來。
@@ -751,6 +775,173 @@ def cmd_continuity(args: list[str]) -> int:
         led.close()
 
 
+def _fmt_age(sec: float) -> str:
+    if sec < 90:
+        return f"{int(sec)} 秒"
+    if sec < 5400:
+        return f"{sec / 60:.0f} 分"
+    if sec < 172800:
+        return f"{sec / 3600:.1f} 小時"
+    return f"{sec / 86400:.1f} 天"
+
+
+def cmd_watch(args: list[str]) -> int:
+    """巡檢所有進行中的步驟。一個指令看全部，不是記得看某一個。
+
+    B-09：2026-09-08 一個 worker 死了十七小時沒人知道。watchdog 會動，
+    但要有人記得對那個 step 呼叫它。這個指令把「記得」換成「掃過」。
+
+    回傳 1 代表有可疑的，這樣它可以直接掛進 cron 或 hook。
+    """
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        steps = led.active_steps()
+        print()
+        if not steps:
+            print("  沒有進行中的步驟。")
+            print()
+            return 0
+
+        print(f"  進行中　{len(steps)} 步")
+        print()
+        suspect = []
+        for s in steps:
+            a = led.check_liveness(s["step_id"])
+            mark = "！" if a.suspect else "　"
+            who = s["worker"] or "沒有負責人"
+            print(f"  {mark} {s['local_id']:<10}{s['state']:<12}"
+                  f"{_fmt_age(s['idle_sec']):>8} 沒動靜　{who}")
+            print(f"      {s['objective'][:56]}")
+            if a.suspect:
+                suspect.append((s, a))
+        print()
+
+        if not suspect:
+            print("  沒有可疑的。")
+            print()
+            return 0
+
+        print(f"  可疑　{len(suspect)} 步")
+        print()
+        for s, a in suspect:
+            rung = led.recover(s["step_id"], unresponsive_count=s["retry_count"])
+            print(f"  {s['local_id']}　風險 {a.risk:.3f}")
+            print(f"      {a.why}")
+            print(f"      下一階　{rung}")
+        print()
+        print("  風險是四個因子相乘的結果，不是計時器。")
+        print("  任何一個因子接近 0 就足以洗掉懷疑，所以被標出來的")
+        print("  代表四個條件同時成立，不是「只是有點久」。")
+        print()
+        return 1
+    finally:
+        led.close()
+
+
+def _handoff_message(led, step_id: str, task_id: str) -> str:
+    """給 worker 的訊息。帶著它回報所需的一切。
+
+    刻意寫成可以直接貼進 SendMessage 的形狀。CLI 送不了訊息（那是
+    Claude 的工具，shell 呼叫不到），所以它只做登記與產文，不假裝
+    自己能送。
+    """
+    st = next((x for x in led.steps_of(task_id) if x["step_id"] == step_id), None)
+    row = led.con.execute("SELECT objective FROM tasks WHERE task_id=?",
+                          (task_id,)).fetchone()
+    cli = str(Path(__file__).resolve())
+    repo = Path(__file__).resolve().parents[2]
+    lines = [
+        f"任務　{row[0] if row else task_id}",
+        f"這一步　{st['objective'] if st else ''}",
+        "",
+        f"repo　{repo}",
+        f"step_id　{step_id}",
+        "",
+        "這一步已經登記在帳本裡，所以你的狀態看得見，"
+        "你不回話超過一段時間會被巡檢標出來。這對你有利：",
+        "你死掉的話有人會知道，而不是等十七小時。",
+        "",
+        "開始做之前先回報一次，之後有進展就回報：",
+        f'  python3 "{cli}" event WORKER_ACCEPTED {step_id} "接下了"',
+        f'  python3 "{cli}" event WORKER_PROGRESS {step_id} "做到哪裡"',
+        "",
+        "卡住不要沉默，卡住也是一種要回報的狀態：",
+        f'  python3 "{cli}" event WORKER_BLOCKED {step_id} "被什麼擋住"',
+        "",
+        "做完之後跑驗證。驗證是真的去看磁碟，不是你說了算：",
+        f'  python3 "{cli}" verify {step_id}',
+    ]
+    if st and st["expected_outputs"]:
+        lines += ["", "要產出的東西："] + [f"  {o}" for o in st["expected_outputs"]]
+    if st and st["verifier"]:
+        lines += ["", "會這樣驗你："] + [f"  {v}" for v in st["verifier"]]
+    return "\n".join(lines)
+
+
+def cmd_handoff(args: list[str]) -> int:
+    """跨 session 派工。先登記帳本，再產出要送的訊息。
+
+    B-09 的解法。原本的做法是直接送 SendMessage，那條路徑完全在帳本
+    外面，於是 worker 對 watchdog 而言不存在。
+
+    兩種用法：
+        handoff <task> <local_id> <worker>              派一個已存在的步驟
+        handoff --new <worker> "目標" [verifier ...]     開一個單步任務並派出去
+    """
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        if args and args[0] == "--new":
+            if len(args) < 3:
+                print('用法：forseti.py handoff --new <worker> "目標" [verifier ...]',
+                      file=sys.stderr)
+                print('verifier 形式：file:<路徑> 或 cmd:<指令>', file=sys.stderr)
+                return 2
+            worker, objective, verifiers = args[1], args[2], list(args[3:])
+            step = led_mod.Step("s1", objective, verifier=verifiers,
+                                expected_outputs=[v[5:] for v in verifiers
+                                                  if v.startswith("file:")])
+            task = led.accept(objective, [step],
+                              definition_of_done=verifiers or ["（沒有給驗證條件）"],
+                              accepted_by="controller")
+            led.transition(task, "RUNNING", f"派給 {worker}", actor="controller")
+            step_id = led.sid(task, "s1")
+        else:
+            if len(args) < 3:
+                print("用法：forseti.py handoff <task> <local_id> <worker>",
+                      file=sys.stderr)
+                return 2
+            task, local, worker = args[0], args[1], args[2]
+            if not led.state_of(task):
+                print(f"  找不到任務：{task}")
+                return 1
+            step_id = led.sid(task, local)
+            if not led.con.execute("SELECT 1 FROM steps WHERE step_id=?",
+                                   (step_id,)).fetchone():
+                print(f"  找不到步驟：{local}")
+                return 1
+
+        led.dispatch(step_id, worker, f"跨 session 派給 {worker}")
+
+        print()
+        print(f"  已登記　{step_id}")
+        print(f"  負責人　{worker}")
+        print()
+        print("  watchdog 現在看得到它了。忘記它也沒關係，")
+        print("  用 watch 會把它掃出來。")
+        print()
+        print("  ── 以下貼給 worker ──")
+        print()
+        print(_handoff_message(led, step_id, task))
+        print()
+        return 0
+    finally:
+        led.close()
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -786,6 +977,10 @@ def main(argv: list[str]) -> int:
         return cmd_verify(argv[2:])
     if cmd == "continuity":
         return cmd_continuity(argv[2:])
+    if cmd == "watch":
+        return cmd_watch(argv[2:])
+    if cmd == "handoff":
+        return cmd_handoff(argv[2:])
 
     print(__doc__)
     return 2
