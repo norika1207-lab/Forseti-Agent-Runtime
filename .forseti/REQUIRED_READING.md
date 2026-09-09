@@ -27,36 +27,111 @@
 
 ---
 
+## 讀取深度怎麼記
+
+出自 Vol2 第 4 節 Context Understanding Coverage。用這個量表取代
+「約三成」那種模糊描述，因為模糊描述沒辦法檢查。
+
+| Level | 意思 |
+|---|---|
+| 0 NONE | 完全未讀 |
+| 1 TITLE_ONLY | 只見檔名或標題 |
+| 2 HEADER_SCAN | 讀檔頭或摘要 |
+| 3 SAMPLED | 取樣讀了部分段落 |
+| 4 STRUCTURAL | 讀完整結構與關鍵段落 |
+| 5 FULL_READ | 逐段完整讀取 |
+| 6 VERIFIED_UNDERSTANDING | 完整讀取後能正確引用、重建、通過 challenge |
+
+**level 5 跟 6 的差別是這份文件裡最重要的一條。** 5 是我說我讀完了，
+6 是有人考過我。`forseti gate takeover` 現在只列題目不驗答案
+（見 `BLOCKERS.md` 的 B-08），所以任何文件現在最高只能到 5。
+
+完整的 schema 還有 `read_ranges[]`，記錄實際讀了哪些範圍。
+現在沒有實作，所以下面的 level 是我自己標的，屬於宣稱不是事實。
+這件事要標明，不然這張表會變成另一個「我以為我讀完了」。
+
+---
+
 ## 源頭文件
 
 放在 `~/Dropbox/My project/Forseti Agent Runtime/`。九份。
 
-| 文件 | 字數 | 讀取狀態 | 什麼時候必須補完 |
-|---|---|---|---|
-| Formal Specification v2.0 | 78,650 | **完整** | — |
-| ChatGPT 對話（產品願景）※ | 21,587 | **完整** | — |
-| v5.0 架構規格 | 108,401 | 約八成，第 1-24 節 | 動階段 1 之前補第 20 節儲存架構 |
-| AI-First 工程書 | 157,680 | **約三成** | **動階段 1 之前必須補 Phase 1-2** |
-| 產品策略白皮書 | 34,157 | 約五成，第 1-7 節 | 談商業化或研究語料之前 |
-| Mercury `all.md` | 224,213 | 導覽總結完整，其餘未讀 | 需要 ISEEU/Bragi 細節時 |
-| Five Mechanisms Handoff | 50,838 | **約兩成** | 動 M3-M5 之前 |
-| Guardian v2.0 架構規格 | 39,873 | 開頭，與 v5.0 高度重疊 | 低優先，內容重複 |
-| 龍蝦 memory 四份 | — | **完整** | — |
+| 文件 | 字數 | Level | 讀取狀態 | 什麼時候必須補完 |
+|---|---|---|---|---|
+| Formal Specification v2.0（revA） | 78,650 | 5 | 逐段完整 | — |
+| ChatGPT 對話（產品願景）※ | 21,587 | 5 | 逐段完整 | — |
+| v5.0 架構規格 | 108,401 | 4 | 約八成，第 1-24 節 | 動階段 1 之前補第 20 節儲存架構 |
+| AI-First 工程書 | 157,680 | 3 | **約三成，Phase 1-12 未讀** | **動階段 1 之前必須補 Phase 1-2** |
+| 產品策略白皮書 | 34,157 | 3 | 約五成，第 1-7 節 | 談商業化或研究語料之前 |
+| Mercury `all.md` | 224,213 | 2 | 導覽總結完整，其餘未讀 | 需要 ISEEU/Bragi 細節時 |
+| Five Mechanisms Handoff | 50,838 | 2 | **約兩成** | 動 M3-M5 之前 |
+| Guardian v2.0 架構規格 | 39,873 | 1 | 開頭，與 v5.0 高度重疊 | 低優先，內容重複 |
+| 龍蝦 memory 四份 | — | 5 | 逐段完整 | — |
+
+Formal Spec 那份在目錄裡有四個變體（docx/md × 有無 revA）。讀的是
+`_revA_2026-09-08.md`，78,650 bytes。repo 裡的 `docs/spec-v2.0.md` 是它的副本
+加了一段來源說明，所以雜湊對不上，只能靠檔案大小推。**沒有版本指紋，
+來源改了不會有人發現。** Vol2 第 10 節的 content-addressable evidence store
+就是在解這件事，還沒做。
 
 ※ ChatGPT 對話不在資料夾裡，連結由她提供。分享頁只有五則訊息，
 最後一則 21,587 字是主體。要看的是第 1 到 61 節全部，不是跳到第 60 節。
 
-**docx 轉純文字的指令**（那些是 zip，不用裝套件）：
+**docx 轉 markdown**：用 `tools/docx2md.py`，給目錄就整批轉。
 
 ```bash
-python3 -c "
-import zipfile,re
-f='檔名.docx'
-xml=zipfile.ZipFile(f).read('word/document.xml').decode('utf8')
-xml=re.sub(r'</w:p>','\n',xml)
-print(re.sub(r'<[^>]+>','',xml))
-"
+python3 tools/docx2md.py ~/Dropbox/My\ project/Forseti\ Agent\ Runtime/platform/
 ```
+
+不要用「剝掉所有標籤」那種一行指令。它不會漏字，但會把標題、清單、
+表格壓成沒有層級的平行文字行。Vol1 的三層產品定位是一張表，剝完之後
+變成十二行散落的字，讀的人要自己猜回它是表格。結構本身就是資訊。
+
+也不要用正則抓 `<w:t>`。它在自閉合標籤上會跨越邊界，把 XML 標籤吃進
+文字裡。2026-09-09 我用它量 Vol1 得到 16,859 字，以為原轉法漏了 83%，
+差點據此重查所有讀過的文件。真實是 2,876。
+
+---
+
+## 平台願景文件（vNext）
+
+放在 `~/Dropbox/My project/Forseti Agent Runtime/platform/`。五份，2026-09-08。
+2026-09-09 已用 `tools/docx2md.py` 轉成 md，與 docx 並排。
+
+**這五份跟上面那九份不是同一層。** 上面九份是現在這條線的規格，
+這五份是平台願景，範圍比現在做的大很多。Vol4 第 12 節自己寫了
+Kill Criteria，第 14 節寫「任何 Stage 都必須能獨立證明價值，
+不可以用終極願景掩蓋目前產品不好用」。**讀它們是為了知道方向，
+不是為了現在就做。**
+
+| 文件 | 字數 | Level | 這份在講什麼 |
+|---|---|---|---|
+| Design Evolution History | 2,385 | 5 | 推導過程，不是結論。為什麼從溫度計變成協作平台 |
+| Vol1 Platform Constitution | 2,599 | 5 | 三層產品定位、平台北極星、不可違反的十條憲法 |
+| Vol2 Platform Architecture | 4,200 | 5 | 物件模型、Raw Ledger、Context Coverage 量表、X-Ray Graph |
+| Vol3 Collaboration Protocol | 3,595 | 5 | Rehydration、雙 Session、Goal 演化、Fork、Replay |
+| Vol4 Product Ecosystem Roadmap | 2,727 | 4 | Stage 0-8 路線與 Kill Criteria。第 11 節商業層次只到 level 4 |
+
+### 這五份裡現在就用得到的四處
+
+| 出處 | 內容 | 對應到現在的什麼 |
+|---|---|---|
+| Vol2 §4 | Context Understanding Coverage 七級量表 | 就是本檔上面那張表 |
+| Vol2 §3.2 | CompressionEpoch schema | `context_meter.py` 已抓到大部分欄位，缺 `lost_context_refs[]` |
+| Vol2 §10 | content-addressable evidence store | 版本指紋，現在完全沒有 |
+| Vol3 §4.1 | RehydrationPacket schema | **C2 的正確規格**，取代原本自己拍的「context 增加小於 500 token」 |
+| Vol3 §5 | Dual-Session Protocol | Assistant Session 回報要附 Evidence + Result + **Unknowns** |
+| Vol3 §6 | Goal Evolution Protocol | `NORTH_STAR.md` 缺的版本機制 |
+
+### 一件待決的事，不要自己決定
+
+Vol1 第 2 節的平台北極星是**雙向**的（Human-AI Collaboration Unit，
+第四條憲法明說不是單向檢討 AI）。`.forseti/NORTH_STAR.md` 現在寫的是
+**單向**的（AI 的狀態可觀測，使用者是被服務方）。
+
+這是擴大不是措辭差異。但 Vol3 第 6 節規定 Goal 演化要走 proposal →
+owner confirm → dependency analysis 的流程。**所以這件事要 owner 拍板，
+接手的 session 不准自己改 `NORTH_STAR.md`。**
 
 ---
 

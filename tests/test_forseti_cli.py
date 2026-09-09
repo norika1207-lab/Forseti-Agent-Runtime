@@ -77,6 +77,30 @@ class TestControlFileParsing(unittest.TestCase):
         for g in self.rep.gates:
             self.assertTrue(g.startswith("階段"), f"門檻表混進了文件：{g}")
 
+    def test_fully_read_documents_are_not_listed_as_unread(self):
+        """level 5 逐段完整讀過的，不該出現在未讀清單。
+
+        2026-09-09 這裡壞過：REQUIRED_READING 的表加了 Level 欄之後，
+        解析器還在抓第三欄，於是九份全部被列成沒讀完，包括讀完的那幾份，
+        而且顯示成一個孤零零的數字。當時 16 條測試全過，因為它們檢查
+        表格結構不檢查語意。這條補的就是語意。
+        """
+        joined = " ".join(self.rep.unread)
+        self.assertNotIn("Formal Specification", joined)
+        self.assertNotIn("龍蝦", joined)
+        for u in self.rep.unread:
+            self.assertRegex(u, r"level [0-4]", f"未讀清單裡出現非 0-4 級：{u}")
+
+    def test_platform_vision_docs_are_not_mixed_into_source_docs(self):
+        """平台願景那五份是另一張表，不該混進源頭文件的未讀清單。
+
+        它們是願景不是現在這條線的規格，混在一起會讓 doctor 報出
+        「還有十四份沒讀完」這種嚇人又沒有用的數字。
+        """
+        joined = " ".join(self.rep.unread)
+        for name in ("Vol1", "Vol2", "Vol3", "Vol4", "Design Evolution"):
+            self.assertNotIn(name, joined)
+
     def test_control_files_all_present(self):
         missing = [f.what for f in self.rep.missing]
         self.assertEqual(missing, [], f"缺控制檔：{missing}")

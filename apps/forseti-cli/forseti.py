@@ -180,17 +180,29 @@ def _table_rows(text: str, heading_pattern: str) -> list[list[str]]:
 def extract_unread(text: str) -> list[str]:
     """從「## 源頭文件」那張表抓還沒讀完的文件。
 
-    結構比對不是語意判斷：那張表格式固定，第三欄是讀取狀態。
-    「完整」或空白算讀完，其餘算沒讀完。
+    判準是 Level 欄（Vol2 §4 的七級量表）：level 5 逐段完整讀過的不算未讀，
+    5 以下都算。level 6 要通過 challenge，現在的閘門做不到（B-08），
+    所以任何文件目前最高只能到 5。
+
+    2026-09-09 這裡壞過一次：REQUIRED_READING 的表加了 Level 欄，
+    這個函式還在抓第三欄，於是把 level 5 讀完的也列成「沒讀完」，
+    而且顯示的是一個孤零零的數字。16 條測試全過，因為它們檢查的是
+    表格結構不是語意。修法是改抓 Level 欄，並加一條語意測試守著。
     """
     out: list[str] = []
     for cells in _table_rows(text, r"^##\s*源頭文件\s*$"):
-        name, status = cells[0], cells[2]
+        if len(cells) < 4:
+            continue
+        name, level, status = cells[0], cells[2].strip(), cells[3]
         if name.startswith("文件"):
             continue
-        if "完整" in status or status in ("—", ""):
+        try:
+            lv = int(re.sub(r"\D", "", level) or -1)
+        except ValueError:
             continue
-        out.append(f"{name}：{status.replace('**', '')}")
+        if lv < 0 or lv >= 5:
+            continue
+        out.append(f"{name}：level {lv}，{status.replace('**', '')}")
     return out
 
 
