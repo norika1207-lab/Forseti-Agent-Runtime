@@ -147,6 +147,55 @@
 
 ---
 
+## F 線：Execution Foundation（2026-09-09 完成）
+
+規格是 `~/Dropbox/My project/forseti_20260909-2_Modular_Spec/` 那九份，
+一個 feature 一份，各自有 conformance tests。九份都 READ_COVERAGE=FULL，
+hash 記在 `REQUIRED_READING.md`。
+
+| ID | 交付 | 測試 | 狀態 |
+|---|---|---|---|
+| F01+F02 | `ledger.py` 持久執行契約與狀態機 | 19 條 | `VERIFIED_COMPLETE` |
+| F03 | `worker.py` Main/Sub 隔離與 Result Packet | 16 條 | `VERIFIED_COMPLETE` |
+| F04 | 事件驅動派工（在 `ledger.py`） | 11 條 | `VERIFIED_COMPLETE` |
+| F05 | `watchdog.py` 停滯偵測與復原階梯 | 13 條 | `VERIFIED_COMPLETE` |
+| F06 | `continuity.py` 執行連續性 | 12 條 | `VERIFIED_COMPLETE` |
+| F07 | `starvation.py` 空輸出與結果保全 | 10 條 | `VERIFIED_COMPLETE` |
+| F08 | `rehydration.py` Context 隔離與 Rehydration | 11 條 | `VERIFIED_COMPLETE` |
+
+每一步的完成都是跑 `cmd:python3 tests/test_fXX.py` 拿到 exit 0 才標的，
+不是宣稱。帳本在 `~/.forseti/ledgers/`（exFAT 跑不了 sqlite，見 `ledger.py`）。
+
+### 任務層的 definition of done，三條裡兩條已驗
+
+| 條件 | 狀態 |
+|---|---|
+| 八個 feature 的 conformance tests 全過 | 已達成，10 個測試檔全過 |
+| HumanContinueBurden 明顯低於 8 | 已達成。整場 9 次，任務期間 1 次，F03 之後 0 次 |
+| 新 session 跑 doctor 就知道還有什麼沒做 | **只有 owner 能驗**，跟 B-02、B-07 同一類 |
+
+所以任務狀態是 `VERIFYING` 不是 `VERIFIED_COMPLETE`。
+工程書 AI-04：WRITTEN 跟 VERIFIED 是不同狀態，不准跳。
+
+### 一個要誠實講的落差
+
+`continuity(task)` 算出來的 `auto_continued` 是 0，score 也是 0。
+
+原因是我做完 `auto_dispatch()` 之後，自己在推進這八個 feature 時走的是
+手動 `dispatch()`。機制做出來了，但我沒有用它。
+
+這不影響 conformance tests（那些測的是機制本身），但它說明一件事：
+做出一個能自動繼續的東西，跟真的讓它自動繼續，是兩件事。
+後者要等 F04 的事件真的接上 harness。
+
+### C 線的變更
+
+原本的 C2「助理查詢」已由 F08 取代。F08 的規格更完整，而且出口條件
+從我自己拍的「context 增加小於 500 token」換成 F08 的五條 CT。
+C3 到 C5 仍然有效，見 `docs/context-continuity.md`。
+
+---
+
 ## 這個 repo 現在的東西是什麼性質
 
 **重要，接手的人先看這條。**
