@@ -248,6 +248,16 @@ def _worker_mod():
         return importlib.import_module("worker")
 
 
+def _continuity_mod():
+    import importlib
+    import sys as _sys
+    try:
+        return importlib.import_module("continuity")
+    except ImportError:
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        return importlib.import_module("continuity")
+
+
 def _watchdog_mod():
     import importlib
     import sys as _sys
@@ -790,6 +800,65 @@ class Ledger:
                     task_id=row[0] if row else "", step_id=step_id,
                     payload={"from": current_rung, "unresponsive": unresponsive_count})
         return rung
+
+    # -- 執行連續性（F06-EXC-001）-----------------------------------------
+
+    def stop(self, task_id: str, reason: str, detail: str = "",
+             actor: str = "controller") -> str:
+        """記錄一次停止。理由必須是 F06 §4 的八種之一。
+
+        不合法的理由會丟 ContinuityViolation，而且違規本身會先被記進
+        帳本再丟 —— 因為一次違規的嘗試本身就是資料，不該因為它失敗了
+        就消失。
+
+        這個方法是那 9 次的機制形式：把停止變成一個需要理由的動作。
+        """
+        c = _continuity_mod()
+        try:
+            ok = c.classify_stop(reason, detail)
+        except c.ContinuityViolation as e:
+            self._event("EXECUTION_CONTINUITY_VIOLATION", str(e), actor=actor,
+                        task_id=task_id, payload={"attempted_reason": reason,
+                                                  "detail": detail})
+            raise
+        if c.requires_named_target(ok) and not detail.strip():
+            self._event("EXECUTION_CONTINUITY_VIOLATION",
+                        f"{ok} 必須講出對象，不然跟「我先停一下」沒有差別",
+                        actor=actor, task_id=task_id)
+            raise c.ContinuityViolation(
+                f"{ok} 必須在 detail 裡講出等什麼、被什麼擋住、或要誰決定")
+        self._event("EXECUTION_STOP", f"{ok}：{detail}" if detail else ok,
+                    actor=actor, task_id=task_id, payload={"reason": ok})
+        return ok
+
+    def human_continue(self, task_id: str, prompt: str = "") -> None:
+        """記錄一次「使用者必須開口說繼續」。
+
+        這個方法存在的唯一目的是讓 HumanContinueBurden 算得出來。
+        每呼叫一次,就是系統失敗了一次 —— 那一次本來應該自己走。
+        """
+        self._event("HUMAN_CONTINUE", prompt[:200] or "使用者要求繼續",
+                    actor="owner", task_id=task_id)
+
+    def continuity(self, task_id: str) -> dict:
+        """F06 §5 的兩個指標，從事件算，不是從印象算。"""
+        c = _continuity_mod()
+        ev = self.events_of(task_id)
+        kinds = [e["kind"] for e in ev]
+        auto = sum(1 for e in ev if e["kind"] == "DISPATCH"
+                   and "自動" in (e["cause"] or ""))
+        # 應該繼續的場合:每一次非終止的報告之後,都應該有人接著動。
+        expected = kinds.count("PROGRESS_REPORT") + kinds.count("WORKER_RESULT")
+        burden = kinds.count("HUMAN_CONTINUE")
+        violations = kinds.count("EXECUTION_CONTINUITY_VIOLATION")
+        return {
+            "auto_continued": auto,
+            "expected_continuation": expected,
+            "score": c.continuity_score(auto, expected),
+            "human_continue_burden": burden,
+            "burden_verdict": c.burden_verdict(burden),
+            "violations": violations,
+        }
 
     # -- 義務帳本（F02 §6）-----------------------------------------------
 
