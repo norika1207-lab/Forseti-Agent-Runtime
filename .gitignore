@@ -29,6 +29,10 @@ node_modules/
 *profiles.json
 negatives.json
 corpus-*.json
+signals.json
+reactive.json
+turns*.json
+fingerprints*.json
 
 # Python 編譯產物
 __pycache__/
