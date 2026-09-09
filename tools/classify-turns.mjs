@@ -75,6 +75,35 @@ function extract(text) {
   };
 }
 
+/**
+ * 往後找 owner 的反應，跳過中間的 AI 與工具結果。
+ *
+ * 回傳三個欄位而不是一個字串，因為「有反應」這件事有距離：
+ * 同一輪裡十個 AI 回合會關聯到同一個反應，但 owner 是對整輪反應的，
+ * 不是對其中某一則。所以要記錄隔了幾個 AI 回合，以及這一則是不是
+ * 那一輪的最後一則 —— owner 看到的最後一個東西是它。
+ *
+ * 這個關聯是相關不是因果。owner 可能因為別的事不爽，
+ * 也可能是被那一輪更早的某一則惹到。這裡只提供定位，不下判定。
+ */
+function reactionAhead(turns, i) {
+  let gap = 0;
+  for (let j = i + 1; j < turns.length; j += 1) {
+    const r = turns[j].role;
+    if (r === 'AI') { gap += 1; continue; }
+    if (r === 'TOOL_RESULT') continue;
+    if (r === 'HUMAN') {
+      const txt = turns[j].text ?? '';
+      const strong = /幹你娘|幹您娘|操你|你他媽|他媽的|我他媽|氣死|受夠|不高興/.test(txt);
+      const medium = /^幹|^靠|又來了|你又|騙我|唬爛|亂做|亂搞|腦補|你在幹嘛/.test(txt);
+      const pattern = /我說過|我講過|你沒做|你漏了|你忘了|重來|重做|不是要你|你搞錯/.test(txt);
+      const level = strong ? 'STRONG' : medium ? 'MEDIUM' : pattern ? 'PATTERN' : 'NEUTRAL';
+      return { owner_next: level, owner_gap: gap, is_last_of_round: gap === 0 };
+    }
+  }
+  return { owner_next: null, owner_gap: null, is_last_of_round: null };
+}
+
 async function classifySession(file, meta) {
   const turns = [];
   const rl = createInterface({
@@ -167,23 +196,19 @@ async function classifySession(file, meta) {
       files_supported: supported.length,
       numbers: e.numbers,
       excerpt: (t.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 150),
-      /** 這一輪之後 owner 有沒有反應，反應是什麼。 */
-      owner_next: (() => {
-        for (let j = i + 1; j < turns.length; j += 1) {
-          if (turns[j].role === 'AI') return null;
-          if (turns[j].role === 'HUMAN') {
-            const txt = turns[j].text;
-            const strong = /幹你娘|幹您娘|操你|你他媽|他媽的|我他媽|氣死|受夠|不高興/.test(txt);
-            const medium = /^幹|^靠|又來了|你又|騙我|唬爛|亂做|亂搞|腦補|你在幹嘛/.test(txt);
-            const pattern = /我說過|我講過|你沒做|你漏了|你忘了|重來|重做|不是要你|你搞錯/.test(txt);
-            if (strong) return 'STRONG';
-            if (medium) return 'MEDIUM';
-            if (pattern) return 'PATTERN';
-            return 'NEUTRAL';
-          }
-        }
-        return null;
-      })(),
+      /**
+       * 這一輪之後 owner 的反應。
+       *
+       * 2026-09-09 修過一個讓整欄失效的 bug：原本寫
+       * `if (turns[j].role === 'AI') return null;`，遇到 AI 就放棄。
+       * 但真實 transcript 裡一個 AI 回合後面幾乎一定還是 AI，
+       * 因為每一次工具呼叫都是一則獨立的 assistant 訊息。
+       * 所以它永遠在第一步就 return null，六個類別的反應率全是 0.0%，
+       * 而同一批資料 build-fingerprints 抓得到 92 處反應。
+       *
+       * 一個永遠回 null 的欄位不會報錯，它只是安靜地讓整張表沒有意義。
+       */
+      ...reactionAhead(turns, i),
     });
   });
 
@@ -201,16 +226,27 @@ for (const s of targets) {
 const all = out.flatMap((s) => s.turns);
 const CLASSES = ['NORMAL', 'MIXED', 'UNSUPPORTED', 'EVASIVE', 'CHATTER', 'INTENT'];
 const table = {};
+const REACT = ['STRONG', 'MEDIUM', 'PATTERN'];
+const rate = (hit, n) => (n ? +(hit / n).toFixed(3) : null);
+
 for (const c of CLASSES) {
   const rows = all.filter((t) => t.cls === c);
-  const withReaction = rows.filter((t) => ['STRONG', 'MEDIUM', 'PATTERN'].includes(t.owner_next));
-  const strong = rows.filter((t) => t.owner_next === 'STRONG');
+  // 全部:同一輪的每一則都算,會膨脹但涵蓋「不是最後一則卻惹到人」的情況。
+  const withReaction = rows.filter((t) => REACT.includes(t.owner_next));
+  // 只算每輪最後一則:owner 看到的最後一個東西,更接近因果。
+  const last = rows.filter((t) => t.is_last_of_round === true);
+  const lastWithReaction = last.filter((t) => REACT.includes(t.owner_next));
   table[c] = {
     count: rows.length,
-    share: all.length ? +(rows.length / all.length).toFixed(3) : null,
+    share: rate(rows.length, all.length),
     followed_by_reaction: withReaction.length,
-    reaction_rate: rows.length ? +(withReaction.length / rows.length).toFixed(3) : null,
-    strong_rate: rows.length ? +(strong.length / rows.length).toFixed(3) : null,
+    reaction_rate: rate(withReaction.length, rows.length),
+    strong_rate: rate(rows.filter((t) => t.owner_next === 'STRONG').length, rows.length),
+    // 每輪最後一則的版本
+    last_of_round: last.length,
+    last_followed_by_reaction: lastWithReaction.length,
+    last_reaction_rate: rate(lastWithReaction.length, last.length),
+    last_strong_rate: rate(last.filter((t) => t.owner_next === 'STRONG').length, last.length),
     mean_chars: rows.length ? Math.round(rows.reduce((a, t) => a + t.chars, 0) / rows.length) : null,
   };
 }
@@ -224,14 +260,21 @@ writeFileSync(outFile, JSON.stringify({
 }, null, 2));
 
 console.log(`\n  ${out.length} 個 session，${all.length} 個 AI 回合\n`);
-console.log('  類別         數量    佔比   後面有反應   強烈反應率   平均字數');
+const pct = (v) => (v === null ? '—' : (v * 100).toFixed(1) + '%');
+console.log('  類別          數量   佔比    有反應   反應率  |  末則  末則反應  末則率  平均字數');
 for (const c of CLASSES) {
   const t = table[c];
   if (!t.count) continue;
   console.log(`  ${c.padEnd(12)}${String(t.count).padStart(5)}`
-    + `${String((t.share * 100).toFixed(1) + '%').padStart(8)}`
-    + `${String(t.followed_by_reaction).padStart(11)}`
-    + `${String((t.reaction_rate * 100).toFixed(1) + '%').padStart(13)}`
-    + `${String(t.mean_chars).padStart(11)}`);
+    + `${pct(t.share).padStart(8)}`
+    + `${String(t.followed_by_reaction).padStart(9)}`
+    + `${pct(t.reaction_rate).padStart(9)}`
+    + `  |${String(t.last_of_round).padStart(6)}`
+    + `${String(t.last_followed_by_reaction).padStart(10)}`
+    + `${pct(t.last_reaction_rate).padStart(8)}`
+    + `${String(t.mean_chars).padStart(10)}`);
 }
+console.log('\n  「有反應」是往後找到的下一則 owner 訊息，跳過中間的 AI 與工具結果。');
+console.log('  「末則」只算每一輪的最後一則 AI 回合 —— owner 看到的最後一個東西。');
+console.log('  這是相關不是因果：owner 可能因為別的事不爽，也可能被那一輪更早的某一則惹到。');
 console.log(`\n  寫到 ${outFile}\n`);
