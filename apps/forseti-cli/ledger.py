@@ -248,6 +248,16 @@ def _worker_mod():
         return importlib.import_module("worker")
 
 
+def _watchdog_mod():
+    import importlib
+    import sys as _sys
+    try:
+        return importlib.import_module("watchdog")
+    except ImportError:
+        _sys.path.insert(0, str(Path(__file__).resolve().parent))
+        return importlib.import_module("watchdog")
+
+
 def _j(v) -> str:
     return json.dumps(v or [], ensure_ascii=False)
 
@@ -702,6 +712,84 @@ class Ledger:
             if not ok:
                 break
         return out
+
+    # -- Watchdog（F05-WDG-001）------------------------------------------
+
+    def check_liveness(self, step_id: str, *, expected_to_progress: bool = True,
+                       config: dict | None = None):
+        """這一步還活著嗎。只回答活不活著，不回答做得對不對。
+
+        F05 §6：A worker can be alive and wrong。所以這個方法絕不碰
+        verifier，也絕不改變步驟狀態。它只產生一個判斷。
+        """
+        w = _watchdog_mod()
+        row = self.con.execute(
+            "SELECT task_id,state,started_at,last_progress_at,expected_outputs"
+            " FROM steps WHERE step_id=?", (step_id,)).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{step_id}")
+        task_id, state, started, last_prog, expected = row
+        if state not in ACTIVE:
+            return w.assess(age_sec=0.0, progress_changed=True, events_since=1,
+                            expected_to_progress=False, config=config)
+
+        since = last_prog or started or time.time()
+        age = time.time() - since
+
+        probe = w.ProgressProbe.take(_u(expected), self.cwd)
+        prev = self._last_probe(step_id)
+        changed = probe.changed_from(prev)
+        self._save_probe(step_id, probe)
+
+        events = self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE step_id=? AND at>? AND kind IN"
+            " ('WORKER_PROGRESS','EVIDENCE_AVAILABLE','ARTIFACT_CHANGED')",
+            (step_id, since - 0.001)).fetchone()[0]
+
+        a = w.assess(age_sec=age, progress_changed=changed, events_since=events,
+                     expected_to_progress=expected_to_progress, config=config)
+        if a.suspect:
+            self._event("STALL_SUSPECT", a.why, actor="watchdog",
+                        task_id=task_id, step_id=step_id,
+                        payload={"risk": a.risk, "factors": a.factors})
+        return a
+
+    def _last_probe(self, step_id: str):
+        """上一次取樣。存在 events 裡，不另開表：取樣本身就是一種觀測事件。"""
+        w = _watchdog_mod()
+        row = self.con.execute(
+            "SELECT payload,at FROM events WHERE step_id=? AND kind='PROGRESS_PROBE'"
+            " ORDER BY event_id DESC LIMIT 1", (step_id,)).fetchone()
+        if not row or not row[0]:
+            return None
+        try:
+            data = json.loads(row[0])
+        except (ValueError, TypeError):
+            return None
+        return w.ProgressProbe(at=row[1], files={k: tuple(v) for k, v in data.items()})
+
+    def _save_probe(self, step_id: str, probe) -> None:
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        self._event("PROGRESS_PROBE", "watchdog 取樣", actor="watchdog",
+                    task_id=row[0] if row else "", step_id=step_id,
+                    payload={k: list(v) for k, v in probe.files.items()})
+
+    def recover(self, step_id: str, *, unresponsive_count: int = 0,
+                current_rung: str | None = None, config: dict | None = None) -> str:
+        """復原階梯的下一階。人排在最後（F05 §5）。
+
+        叫人是最貴的一步，不是最方便的一步。
+        """
+        w = _watchdog_mod()
+        rung = w.next_rung(current_rung, unresponsive_count=unresponsive_count,
+                           config=config)
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        self._event("RECOVERY_RUNG", rung, actor="watchdog",
+                    task_id=row[0] if row else "", step_id=step_id,
+                    payload={"from": current_rung, "unresponsive": unresponsive_count})
+        return rung
 
     # -- 義務帳本（F02 §6）-----------------------------------------------
 
