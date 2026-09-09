@@ -135,6 +135,60 @@ owner confirm → dependency analysis 的流程。**所以這件事要 owner 拍
 
 ---
 
+## 模組化執行規格（Modular Spec，2026-09-09）
+
+放在 `~/Dropbox/My project/forseti_20260909-2_Modular_Spec/`。九份，全部是 md。
+`spec_manifest.json` 是機器可讀的清單。
+
+**這一組是「怎麼做」，platform 五份是「做什麼」。** 而且這一組現在就做得到。
+
+它的 `reading_policy` 寫著 full-file required，sampled 或 title-only 的閱讀
+直接判為 non-conformant。ARCH-EXEC-001 第 5 節有 AI Reading Contract 六條，
+其中一條要求回報 `READ_COVERAGE=FULL` 加檔案 hash，另一條要求明確列出
+沒看懂的段落。下表的 hash 就是照那條記的。
+
+| ID | 檔案 | Level | sha256(前12) | 主題 |
+|---|---|---|---|---|
+| ARCH-EXEC-001 | `00_Forseti_Execution_Foundation_Architecture.md` | 5 | `4ca6689973e5` | 五層架構、核心不變量、Reading Contract |
+| F01-PEC-001 | `F01_Persistent_Execution_Contract.md` | 5 | `fe86cb2a1ab7` | 持久執行契約，TURN_END ≠ TASK_END |
+| F02-TSM-001 | `F02_Task_State_Machine.md` | 5 | `99ec01294dde` | 狀態機與外部任務真相 |
+| F03-CSI-001 | `F03_Main_SubSession_Context_Isolation.md` | 5 | `792cd95009f0` | Main/Worker 隔離、Worker Result Packet |
+| F04-EVT-001 | `F04_Event_Driven_Dispatch.md` | 5 | `91dfb59b5dfa` | 事件驅動派工，心跳不是轉換機制 |
+| F05-WDG-001 | `F05_Watchdog_Heartbeat_Recovery.md` | 5 | `17ca3a6ee9c4` | 停滯偵測與復原階梯 |
+| F06-EXC-001 | `F06_Execution_Continuity.md` | 5 | `e2c0dfb0f965` | 解釋完就停、報告完就停 |
+| F07-OUT-001 | `F07_Output_Starvation.md` | 5 | `c721da66a062` | 空輸出與結果保全 |
+| F08-CTX-001 | `F08_Context_Isolation_Rehydration.md` | 5 | `b80b985fdfc0` | Context Coverage、壓縮邊界、Rehydration |
+
+### 讀完當下的自我審計
+
+F06 第 5 節定義 `HumanContinueBurden` = 每個任務裡人類必須說「繼續」的次數，
+應趨近於零。
+
+**2026-09-09 這一場實測 8 次。** 時間點：06:32、06:56、10:18、10:28、10:52、
+13:48、02:09、03:50（UTC）。F01 第 2 節那段 problem statement 是逐字劇本，
+定性是「This converts the human into an artificial heartbeat and supervisor」。
+
+這個數字是這一組規格要解決的問題本身，也是 F01/F02 要先做的理由：
+義務只存在於模型記憶裡，回合結束它就消失。
+
+### 兩處沒看懂，照 Reading Contract 列出
+
+`F05 §3` 的 `STALL_RISK` 是四個因子相乘，但沒有定義各因子的值域與量法。
+概念懂（不能只看時間長），不知道怎麼實作成一個數字。
+
+`F07 §2` 的 `STALE_WATCHER`。從 CT-F07-04「ESC reveals completion」推測是
+「工作已完成但介面沒更新」，這是推測不是理解。
+
+### 一處規格之間不一致，不要自己補
+
+`F01 §3` 說非終止狀態包含 `REPORTING`、`NEEDS_REVIEW`、`NO_OUTPUT`，
+但 `F02 §2` 的 canonical states 沒有這三個。
+
+實作以 F02 的狀態機為準（那是狀態機的規格），F01 那三個先記為待澄清。
+**不要自己決定要不要加進狀態機。**
+
+---
+
 ## 各階段動工前的補讀門檻
 
 這張表是給 `forseti doctor` 檢查用的。

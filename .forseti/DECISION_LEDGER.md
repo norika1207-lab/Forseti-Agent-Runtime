@@ -166,3 +166,39 @@ C5 的指紋切片需要主線階段 3 的人與 AI 雙向記錄。
 
 如果 C1 的索引在真實使用中查不出東西，或者助理的回覆品質差到
 不如直接讀原文，那整條線的前提就不成立，該停下來重新想。
+
+---
+
+## ADR-002 補充　「Code Duo」指的是哪一份檔案（2026-09-09）
+
+**問題：** 有兩個目錄，而且不同。
+
+```
+~/Code-Duo/app.py              1642 行  2026-09-02  md5 11a9f4cf
+~/code-matrix-rebuild/app.py   1746 行  2026-09-03  md5 ced1cfc5
+```
+
+**實際在跑的是 `~/code-matrix-rebuild/app.py`。**
+`~/.claude/launch.json` 的 `code-duo` 設定指向它，port 8765。
+`~/Code-Duo` 是 git repo，用來版控，不是每天在改的那份。
+
+memory 的 `code_matrix_repo_split_trap` 早就記了這件事：
+天天改的 `~/code-matrix-rebuild` 沒有 git，repo 在 `~/Code-Duo`。
+
+**2026-09-09 我讀錯了那一份。** 讀的是 `~/Code-Duo/app.py`，
+並且把行號寫進 `BLOCKERS.md` 與 `docs/context-continuity.md`。
+兩份差 104 行，同名函式的行號差 61：
+
+| 函式 | ~/Code-Duo | ~/code-matrix-rebuild |
+|---|---|---|
+| `token_stats` | 1154 | 1215 |
+| `check_honesty` | 1268 | 1329 |
+| bluff 判定 | 1307 | 1368 |
+| `record_behavior` | 1321 | 1382 |
+
+出處已更正。機制本身沒有讀錯，兩份的那幾個函式邏輯相同，
+新版只多了 `_session_name` 與 `read_ssh_hosts`，跟照妖鏡無關。
+
+**教訓：** 讀一個外部專案之前先確認哪一份是活的。
+`launch.json` 或 `ps` 會告訴你，猜不會。
+這次沒有造成錯誤結論，只是出處錯，但下一次可能不會這麼好運。
