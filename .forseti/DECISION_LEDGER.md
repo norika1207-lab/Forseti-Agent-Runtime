@@ -202,3 +202,91 @@ memory 的 `code_matrix_repo_split_trap` 早就記了這件事：
 **教訓：** 讀一個外部專案之前先確認哪一份是活的。
 `launch.json` 或 `ps` 會告訴你，猜不會。
 這次沒有造成錯誤結論，只是出處錯，但下一次可能不會這麼好運。
+
+---
+
+## 待裁決　工程書與現行實作的六條分歧（2026-09-09）
+
+來源是六份讀後對照（`docs/reading/`），由六個 worker 分段讀 AI-First
+工程書並逐條對照 repo，主 session 抽驗 19 條，全部屬實。
+
+**這六條都是「接手的 session 不准自己決定」等級的。** 放在這裡不是
+拖延，是因為每一條選哪邊都會影響後面很久，而且兩邊各自都有道理。
+在有裁決之前，動到那一塊的人請先回來看這一節。
+
+### 一　Phase 0 VERIFIED 同名不同義
+
+`PHASE_STATUS.md:9` 的 VERIFIED 是照 `docs/build-plan.md` 第五節驗的，
+2026-09-09 真的用新 session 驗過出口。書 401 行要求的 VERIFIED 是它
+第 9.2 節那七條全數完成，而七條裡有四條半沒做（HANDOFF.md、
+policies.yaml、Pydantic models、fixture manifest，加上不是 pytest）。
+
+**風險：** 拿 A 定義的驗收去蓋 B 定義的章，然後據此動 Phase 1。
+
+**兩條路：** 以書為準補齊缺項；或記一條 ADR 說明本專案的 Phase 0
+定義取代書的定義。
+
+### 二　「事件帳本」即將撞名
+
+書 Phase 1 的 event ledger 是 provider 行為事件（445-450 行六類：
+Dialogue / Tool / Runtime / Artifact / Usage / Governance）。
+現有 `ledger.py` 的 events 表是派工協調事件（`WORKER_*` 八種）。
+兩者都叫 ledger、都有 events 表、都在講事件。
+
+**風險：** 做 Phase 1 時直接往 `ledger.py` 的表裡塞 provider 事件；
+或接手的 session 以為 `ledger.py` 就是 Phase 1 的事件帳本而標記已做。
+
+**要決定的：** 分成不同資料庫，或至少不同表與不同文件名義。
+
+### 三　Pydantic 對零依賴
+
+書 389 行明定用 Pydantic domain models。現行 Python 模組的設計約束是
+零依賴，寫在 `ledger.py:31` 與 `forseti.py` 檔頭。六條 ADR 沒有任何
+一條裁過依賴政策（ADR-001 只裁了 Python 對 JS）。
+
+**這是真的二選一：** 遵守書就要引入第三方依賴，遵守現行慣例就永遠
+不會有 Pydantic。
+
+### 四　NPG 公式對「拒絕相減」
+
+書 919-932 行要求把效益與成本加減成一個淨值。
+`test/overhead.test.mjs` 第 2 行逐字寫著：「負擔可以量，效益只能估，
+而這個模組拒絕把兩者相減。」
+
+**這不是漏做，是 repo 端刻意做了相反的決定。** 照書實作 NPG 就要
+推翻那個立場；維持那個立場，書的 NPG 就得降級成概念框架而不是
+要算出來的數字。
+
+### 五　證據分級四套並存
+
+| 出處 | 分級 |
+|---|---|
+| 工程書 344-352、889-897 | 五級，多一個 COUNTERFACTUAL |
+| `src/evidence.js:36-39` | 四級，v2 規格書的 OBSERVED/DECLARED/INFERRED/MISSING |
+| `src/conformance.js:32` | v1 的 EPISTEMIC 序列 |
+| `tools/save-case.py` | 第四套，用 `MODEL_SELF_REPORT` |
+
+四套的精神一致（低級不得冒充高級），但要照書實作 fixture 之前，
+五級與現有分級的對映必須先決，否則同一份材料會有兩個等級標籤。
+
+### 六　§27 的 HANDOFF 模板對「handoff 是文字就會失效」
+
+書 §27 要求每個 session 產出一份文字交接模板。
+`DECISION_LEDGER.md:162-163` 已經否決過 handoff.md 產生器，理由是
+「那還是塞」「這條路先前試過，撐不過六個 session」。
+`bible.md` H-01 記著她的原話：handoff 是文字就會失效，要是可驗證狀態。
+
+**精神其實一致**（書 1003 行自己也說交接不是證據的替代品），
+分歧在形式：書要一份模板檔，repo 選了控制檔集合加 doctor 加帳本。
+缺的是一條 ADR 寫明「我們用什麼取代 §27 模板、模板裡哪幾欄因此沒人記」。
+
+### 不必裁決但要知道的三件事
+
+`src/rescue.js` 檔名撞書的 Phase 7，但它是 spec v0.1 §7 的中斷前快照；
+書 Phase 7 的對應物在 `src/recovery.js`。用檔名對照書的人會對錯位。
+
+`src/thermometer.js` 量的是「查過的對自己生出來的」比例，不是健康溫度。
+接書 Phase 8 的 UI 時把它接到體溫那個位置，會把事實比例當健康度顯示。
+
+書的章節號與 `docs/spec-v2.0.md` 是兩套系統（書 §16 Phase 7 ≈
+spec-v2.0 §17）。repo 程式碼註解裡的 § 編號一律指 spec-v2.0。
