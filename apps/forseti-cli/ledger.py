@@ -186,6 +186,19 @@ WORKER_EVENTS = (
 #               所以判斷時要把它當成一個已知的未知,不是預設值。
 CAN_REPORT = ("full", "write_only", "unknown")
 
+# 收件匣的別名。這張表只收「實測真的發生過的誤用」,不預先想像。
+#
+# 每一條都要附出處,不然它會慢慢長成一張什麼都收的表,那等於沒有協定 ——
+# 協定的價值在於下游能對著固定的名字寫邏輯。
+#
+#   WORKER_DONE  2026-09-09 claude-p-worker-3。訊息裡列了八種,它仍然
+#                寫了這個。那不是它不小心,是這個名字比 COMPLETION 更
+#                像人會講的話。可預期的寫法失誤要由設計吸收,不是靠
+#                要求對方更小心。
+ALIASES = {
+    "WORKER_DONE": "WORKER_COMPLETION",
+}
+
 
 def _migrate(con: sqlite3.Connection) -> None:
     """schema 演進。只加欄位,絕不 drop。
@@ -781,13 +794,23 @@ class Ledger:
             except OSError:
                 continue
             head, _, body = text.partition("\n")
-            kind = head.strip().upper()
+            # 第一行可能整行都是種類,也可能是「種類 說明」寫在同一行。
+            # 合法的種類都沒有空白,所以取第一個 token 是安全的,
+            # 而且省掉一種可預期的寫法失誤。
+            first = head.strip().split()
+            kind = ALIASES.get(first[0].upper(), first[0].upper()) if first else ""
+            body = (" ".join(first[1:]) + "\n" + body).strip()
             if kind not in WORKER_EVENTS:
                 # 不認得的種類不丟掉也不當成事件。丟掉會讓 worker 的話
                 # 消失得無聲無息,那正是這個通道要解決的問題。
-                self._event("INBOX_UNKNOWN_KIND", f"{f.name}：{head[:60]}",
+                # body 一定要一起留:2026-09-09 第一版只記了檔名與第一行,
+                # 於是 worker 寫了什麼還是消失了一半,那等於沒有做到
+                # 上面那句話宣稱的事。
+                self._event("INBOX_UNKNOWN_KIND",
+                            f"{f.name}：{head.strip()[:40]}　{body[:160]}",
                             actor="controller", step_id=step_id,
-                            task_id=self._task_of_step(step_id))
+                            task_id=self._task_of_step(step_id),
+                            payload={"raw_kind": head.strip()[:60], "body": body[:2000]})
                 got.append(f"（不認得的種類 {kind[:24]}）")
             else:
                 self.worker_event(kind, step_id, body.strip()[:200] or kind,

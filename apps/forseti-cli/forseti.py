@@ -809,6 +809,9 @@ def cmd_watch(args: list[str]) -> int:
         print()
         suspect = []
         for s in steps:
+            # 先撿收件匣。只有 Write 權限的 worker 的話都在那裡，
+            # 不撿就等於它從來沒說過。
+            got = led.collect_inbox(s["step_id"])
             a = led.check_liveness(s["step_id"])
             mark = "！" if a.suspect else "　"
             who = s["worker"] or "沒有負責人"
@@ -817,6 +820,8 @@ def cmd_watch(args: list[str]) -> int:
             print(f"  {mark} {s['local_id']:<10}{s['state']:<12}"
                   f"{_fmt_age(s['idle_sec']):>8} 沒動靜　{who}{cap}")
             print(f"      {s['objective'][:56]}")
+            if got:
+                print(f"      收到回報 {len(got)} 則　{'、'.join(got)}")
             if a.suspect:
                 suspect.append((s, a))
         print()

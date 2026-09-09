@@ -333,6 +333,48 @@ class TestInboxReportingChannel(F05Case):
         kinds = [e["kind"] for e in self.led.events_of(self.t)]
         self.assertIn("INBOX_UNKNOWN_KIND", kinds)
 
+    def test_unknown_kind_keeps_the_body_too(self):
+        """種類不認得的時候，說明本身更要留住。
+
+        第一版只記了檔名與第一行，於是 worker 寫了什麼還是消失了一半。
+        那等於沒有做到「不讓它的話無聲消失」這句話宣稱的事。
+        """
+        self.write_inbox("x.txt", "差不多好了", "報告寫在 docs/x.md，有四個發現")
+        self.led.collect_inbox(self.s1)
+        ev = next(e for e in self.led.events_of(self.t)
+                  if e["kind"] == "INBOX_UNKNOWN_KIND")
+        self.assertIn("四個發現", ev["cause"] + ev["payload"].get("body", ""))
+
+    def test_a_predictable_misspelling_is_absorbed_not_punished(self):
+        """WORKER_DONE 這種寫法要收。
+
+        2026-09-09 實測：訊息裡列了八種，worker 仍然寫了 WORKER_DONE。
+        那不是它不小心，是那個名字比 COMPLETION 更像人會講的話。
+        可預期的寫法失誤由設計吸收，不是靠要求對方更小心。
+
+        別名表只收實測發生過的，每條附出處，否則它會長成一張什麼都收
+        的表，那等於沒有協定。
+        """
+        self.write_inbox("d.txt", "WORKER_DONE", "做完了")
+        self.led.collect_inbox(self.s1)
+        kinds = [e["kind"] for e in self.led.events_of(self.t)]
+        self.assertIn("WORKER_COMPLETION", kinds)
+        self.assertNotIn("INBOX_UNKNOWN_KIND", kinds)
+
+    def test_kind_and_text_on_the_same_line_still_parses(self):
+        """種類跟說明寫在同一行也要讀得懂。
+
+        合法的種類都沒有空白，所以取第一個 token 是安全的，
+        而且省掉一種可預期的寫法失誤。
+        """
+        d = self.led.inbox_dir(self.s1)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "one.txt").write_text("WORKER_PROGRESS 讀到一半", encoding="utf-8")
+        self.led.collect_inbox(self.s1)
+        ev = next(e for e in self.led.events_of(self.t)
+                  if e["kind"] == "WORKER_PROGRESS")
+        self.assertIn("讀到一半", ev["cause"])
+
     def test_claiming_completion_in_a_file_does_not_verify_anything(self):
         """worker 寫檔案說自己完成了，步驟不會因此變成已驗證。
 
