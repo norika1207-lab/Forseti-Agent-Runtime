@@ -221,6 +221,19 @@ class TestSweepFindsForgottenWorkers(F05Case):
         self.led.verify_step(self.s1)
         self.assertEqual(self.led.active_steps(), [])
 
+    def test_steps_of_a_terminated_task_drop_out_of_the_sweep(self):
+        """任務結束了，它的步驟就不該還被當成「有人在做」。
+
+        2026-09-09 實測撞到：兩個任務轉成 SUPERSEDED 之後，巡檢仍然
+        每次都列出它們的步驟，因為步驟自己還停在 RUNNING。一個永遠
+        清不掉的待辦會讓整張巡檢表失去意義 —— 看久了就會開始忽略它，
+        而那正是它存在的反面。
+        """
+        self.assertEqual(len(self.led.active_steps()), 1)
+        self.led.transition(self.t, "SUPERSEDED", "換一個做法", actor="owner")
+        self.assertEqual(self.led.active_steps(), [],
+                         "任務被取代之後，它的步驟不該還在巡檢表上")
+
     def test_the_longest_silent_one_comes_first(self):
         """最久沒動靜的排最前面，因為那是最可能已經死掉的。"""
         self.led.con.execute(

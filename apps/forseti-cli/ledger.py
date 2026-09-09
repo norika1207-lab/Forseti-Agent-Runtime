@@ -899,7 +899,14 @@ class Ledger:
             "s.started_at,s.last_progress_at,s.retry_count,t.objective,"
             "s.worker_can_report"
             " FROM steps s JOIN tasks t ON t.task_id=s.task_id"
-            f" WHERE s.state IN ({','.join('?' * len(ACTIVE))})", ACTIVE).fetchall()
+            f" WHERE s.state IN ({','.join('?' * len(ACTIVE))})"
+            # 任務結束了,它底下的步驟就不該還被當成「有人在做」。
+            # 2026-09-09 實測撞到:兩個任務轉成 SUPERSEDED 之後,
+            # 巡檢仍然每次都列出它們的步驟,因為步驟自己還停在 RUNNING。
+            # 一個永遠清不掉的待辦會讓整張巡檢表失去意義 —— 看久了
+            # 就會開始忽略它,而那正是它存在的反面。
+            f" AND t.current_state NOT IN ({','.join('?' * len(TERMINAL))})",
+            (*ACTIVE, *TERMINAL)).fetchall()
         out = []
         for r in rows:
             since = r[6] or r[5] or now

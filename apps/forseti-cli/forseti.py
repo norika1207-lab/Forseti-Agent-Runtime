@@ -1041,6 +1041,12 @@ def cmd_handoff(args: list[str]) -> int:
                 "write_only": "只能寫檔案，回報走收件匣",
                 "unknown": "沒有宣告，訊息裡兩種方式都給了"}[cap]
         print(f"  回報能力　{cap}　（{note}）")
+        if cap == "write_only":
+            # 2026-09-09 實測:兩個 worker 同時卡住,因為我把要讀的源檔
+            # 放在 Dropbox。它們的沙盒只准存取 repo,連讀都不行。
+            # B-10 學到「worker 只能寫 repo」,當時沒推廣到「也只能讀 repo」。
+            print("  ⚠ 這種 worker 通常只存取得到 repo 內的檔案，讀也一樣。")
+            print("    它要用的資料先複製進 repo，不要只給外部路徑。")
         if cap == "unknown":
             print("  下次可以用 --shell 或 --no-shell 講清楚，")
             print("  巡檢就不必把「它不回話」跟「它回不了話」混在一起。")
