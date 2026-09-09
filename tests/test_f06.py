@@ -169,8 +169,10 @@ class TestMetrics(F06Case):
         self.led.report(self.t, "第一步好了")
         self.led.auto_dispatch(self.t, "w")
         m = self.led.continuity(self.t)
-        self.assertGreaterEqual(m["auto_continued"], 2)
+        # 派了兩次,第一次是起步不算接續,所以接上的是 1 次。
+        self.assertGreaterEqual(m["auto_continued"], 1)
         self.assertGreater(m["score"], 0)
+        self.assertLessEqual(m["score"], 1.0, "分數是比例，不該超過 1")
 
 
 if __name__ == "__main__":

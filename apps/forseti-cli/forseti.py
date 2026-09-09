@@ -23,6 +23,19 @@
     python3 apps/forseti-cli/forseti.py index [--rebuild]
     python3 apps/forseti-cli/forseti.py recall "為何會有點名板"
     python3 apps/forseti-cli/forseti.py tasks
+
+執行連續性（F03-F06）：
+    python3 apps/forseti-cli/forseti.py dispatch <step> <worker> [理由]
+    python3 apps/forseti-cli/forseti.py auto <task> <worker> [理由]
+    python3 apps/forseti-cli/forseti.py drain <task> <worker>
+    python3 apps/forseti-cli/forseti.py event <kind> <step> <理由> [worker]
+    python3 apps/forseti-cli/forseti.py verify <step>
+    python3 apps/forseti-cli/forseti.py continuity <task>
+
+這六個先前只存在於 Python API 裡，沒有 CLI 入口。結果是
+auto_dispatch() 寫好也測過，卻從來沒有被真正的工作呼叫過一次，
+continuity 分數長期是 0 —— 不是機制不會動，是沒有門可以進去。
+一個沒有入口的機制等於不存在。
 """
 
 from __future__ import annotations
@@ -526,6 +539,218 @@ def cmd_tasks(args: list[str]) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# 執行連續性（F03-F06）的 CLI 入口
+# ---------------------------------------------------------------------------
+
+def _open_ledger():
+    """開帳本。沒有帳本就講清楚它會建在哪，不要噴 traceback。"""
+    led_mod = _sibling("ledger")
+    db = led_mod.default_db()
+    if not db.exists() or db.stat().st_size == 0:
+        print()
+        print("  還沒有任務帳本。")
+        print(f"  它會建在 {db}")
+        print()
+        return None, None
+    return led_mod, led_mod.Ledger()
+
+
+def _resolve_step(led, ref: str) -> str | None:
+    """接受完整 step_id，也接受 `<task>/<local>`。找不到就回 None。"""
+    row = led.con.execute("SELECT step_id FROM steps WHERE step_id=?", (ref,)).fetchone()
+    if row:
+        return row[0]
+    rows = led.con.execute(
+        "SELECT step_id FROM steps WHERE step_id LIKE ?", (f"%/{ref}",)).fetchall()
+    if len(rows) == 1:
+        return rows[0][0]
+    if len(rows) > 1:
+        print(f"  {ref} 對到 {len(rows)} 個步驟，請用完整 step_id：")
+        for r in rows:
+            print(f"    {r[0]}")
+    return None
+
+
+def cmd_dispatch(args: list[str]) -> int:
+    """手動派工。這一次會被記成非自動，指標上算 owner 推了一把。"""
+    if len(args) < 2:
+        print("用法：forseti.py dispatch <step> <worker> [理由]", file=sys.stderr)
+        return 2
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        step = _resolve_step(led, args[0])
+        if step is None:
+            print(f"  找不到步驟：{args[0]}")
+            return 1
+        led.dispatch(step, args[1], " ".join(args[2:]))
+        print(f"  已派　{step}　→　{args[1]}")
+        print("  這一次記為手動。自動接上的請用 auto 或 drain。")
+        return 0
+    finally:
+        led.close()
+
+
+def cmd_auto(args: list[str]) -> int:
+    """自動派下一步。派不動時要講出卡在哪一個條件。
+
+    auto_dispatch() 回 None 有三種意思，這裡把三種分開講。安靜的 None
+    正是這整套東西要消滅的東西：使用者不該從「沒反應」去推發生什麼事。
+    """
+    if len(args) < 2:
+        print("用法：forseti.py auto <task> <worker> [理由]", file=sys.stderr)
+        return 2
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    task, worker = args[0], args[1]
+    try:
+        if not led.state_of(task):
+            print(f"  找不到任務：{task}")
+            return 1
+        nxt = led.auto_dispatch(task, worker, " ".join(args[2:]))
+        print()
+        if nxt is not None:
+            print(f"  已自動派　{nxt['local_id']}　{nxt['objective']}")
+            print(f"  給　{worker}")
+            print("  沒有人需要說「繼續」。")
+            print()
+            return 0
+
+        state = led.state_of(task)
+        if led_mod.is_terminal(state):
+            print(f"  任務已終止（{state}），不再派工。")
+        elif state == "NEEDS_HUMAN":
+            nx = led.next_step(task)
+            print("  停在這裡等你決定，不是卡住：")
+            if nx:
+                print(f"    {nx['local_id']}　{nx['objective']}")
+            print("  這是 NEEDS_HUMAN，看得見的狀態，不是安靜的沒反應。")
+        elif led.next_step(task) is None:
+            print("  沒有可派的下一步。可能全部完成，或前面的步驟還沒驗證通過。")
+            print("  用 tasks 看未完成的義務。")
+        else:
+            print(f"  沒有派工。任務目前是 {state}。")
+        print()
+        return 0
+    finally:
+        led.close()
+
+
+def cmd_drain(args: list[str]) -> int:
+    """一路派到派不動為止。F04 §2 那條鏈跑完，中間不需要有人說話。"""
+    if len(args) < 2:
+        print("用法：forseti.py drain <task> <worker>", file=sys.stderr)
+        return 2
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        if not led.state_of(args[0]):
+            print(f"  找不到任務：{args[0]}")
+            return 1
+        done = led.drain(args[0], args[1])
+        print()
+        if not done:
+            print("  一步都沒派出去。用 auto 看是卡在哪一個條件。")
+        else:
+            states = {s["step_id"]: s["state"] for s in led.steps_of(args[0])}
+            print(f"  自動走了 {len(done)} 步：")
+            for d in done:
+                print(f"    {d['local_id']}　{d['objective']}　"
+                      f"{states.get(d['step_id'], '')}")
+        print()
+        return 0
+    finally:
+        led.close()
+
+
+def cmd_event(args: list[str]) -> int:
+    """記一筆 worker 事件。只收 F04 §3 那八種。"""
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        if len(args) < 3:
+            print("用法：forseti.py event <kind> <step> <理由> [worker]", file=sys.stderr)
+            print(f"合法的 kind：{'　'.join(led_mod.WORKER_EVENTS)}", file=sys.stderr)
+            return 2
+        step = _resolve_step(led, args[1])
+        if step is None:
+            print(f"  找不到步驟：{args[1]}")
+            return 1
+        try:
+            fresh = led.worker_event(args[0], step, args[2],
+                                     worker=args[3] if len(args) > 3 else "")
+        except ValueError as e:
+            print(f"  {e}")
+            return 2
+        print(f"  已記　{args[0]}" if fresh else f"  重複事件，已被冪等擋下　{args[0]}")
+        return 0
+    finally:
+        led.close()
+
+
+def cmd_verify(args: list[str]) -> int:
+    """跑一個步驟的 verifier。真的去看磁碟，不看模型怎麼說。"""
+    if not args:
+        print("用法：forseti.py verify <step>", file=sys.stderr)
+        return 2
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        step = _resolve_step(led, args[0])
+        if step is None:
+            print(f"  找不到步驟：{args[0]}")
+            return 1
+        ok, results = led.verify_step(step)
+        print()
+        for r in results:
+            print(f"  {'通過' if r.ok else '沒過'}　{r.spec}")
+            if r.detail:
+                print(f"        {r.detail}")
+        if not results:
+            print("  這一步沒有 verifier，所以沒有東西可以驗。")
+        print()
+        print("  驗過了。" if ok else "  沒有全過，步驟退回 RUNNING。")
+        print()
+        return 0 if ok else 1
+    finally:
+        led.close()
+
+
+def cmd_continuity(args: list[str]) -> int:
+    """F06 §5 的兩個指標。從事件算，不是從印象算。"""
+    if not args:
+        print("用法：forseti.py continuity <task>", file=sys.stderr)
+        return 2
+    led_mod, led = _open_ledger()
+    if led is None:
+        return 1
+    try:
+        if not led.state_of(args[0]):
+            print(f"  找不到任務：{args[0]}")
+            return 1
+        c = led.continuity(args[0])
+        print()
+        print(f"  自動接上　{c['auto_continued']} / {c['expected_continuation']}")
+        print(f"  連續性分數　{c['score']}")
+        print(f"  人必須說繼續　{c['human_continue_burden']} 次　{c['burden_verdict']}")
+        if c["violations"]:
+            print(f"  不合法的停止　{c['violations']} 次")
+        print()
+        if c["expected_continuation"] and c["auto_continued"] == 0:
+            print("  分數是 0 而且該接的地方有 "
+                  f"{c['expected_continuation']} 處，代表每一次都是有人推的。")
+            print()
+        return 0
+    finally:
+        led.close()
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -549,6 +774,18 @@ def main(argv: list[str]) -> int:
         return cmd_recall(argv[2:])
     if cmd == "tasks":
         return cmd_tasks(argv[2:])
+    if cmd == "dispatch":
+        return cmd_dispatch(argv[2:])
+    if cmd == "auto":
+        return cmd_auto(argv[2:])
+    if cmd == "drain":
+        return cmd_drain(argv[2:])
+    if cmd == "event":
+        return cmd_event(argv[2:])
+    if cmd == "verify":
+        return cmd_verify(argv[2:])
+    if cmd == "continuity":
+        return cmd_continuity(argv[2:])
 
     print(__doc__)
     return 2

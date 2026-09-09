@@ -552,8 +552,16 @@ class Ledger:
 
     # -- 派工與收件（F03-CSI-001、F04 §3）---------------------------------
 
-    def dispatch(self, step_id: str, worker: str, cause: str = "") -> None:
-        """把一個步驟派給 worker。"""
+    def dispatch(self, step_id: str, worker: str, cause: str = "", *,
+                 auto: bool = False) -> None:
+        """把一個步驟派給 worker。
+
+        auto=True 代表這一次是系統自己接上的，沒有人開口叫它繼續。
+        這個旗標寫進事件 payload，不從 cause 的字面推。先前 continuity()
+        的做法是掃 cause 裡有沒有「自動」兩個字，於是呼叫端只要自己給了
+        cause（例如「owner 已決定」），那一次真的自動派工就會從指標裡
+        消失。一個會漏算自己的指標，比沒有指標更糟，因為它看起來有數字。
+        """
         row = self.con.execute("SELECT task_id,state FROM steps WHERE step_id=?",
                                (step_id,)).fetchone()
         if row is None:
@@ -565,7 +573,8 @@ class Ledger:
         if cur != "RUNNING":
             self.step_transition(step_id, "RUNNING", cause or f"派給 {worker}", actor=worker)
         self._event("DISPATCH", cause or f"派給 {worker}", actor="controller",
-                    task_id=task_id, step_id=step_id, payload={"worker": worker})
+                    task_id=task_id, step_id=step_id,
+                    payload={"worker": worker, "auto": bool(auto)})
 
     def stash(self, step_id: str, text: str, label: str = "log") -> str:
         """把原始輸出落檔，回傳 packet 用的引用。細節見 worker.stash_raw。"""
@@ -712,7 +721,8 @@ class Ledger:
         if self.state_of(task_id) in ("NEEDS_HUMAN", "BLOCKED", "WAITING_DEPENDENCY"):
             self.transition(task_id, "RUNNING", cause or "阻礙解除，恢復執行",
                             actor="controller")
-        self.dispatch(nxt["step_id"], worker, cause or "前一步已驗證，自動派下一步")
+        self.dispatch(nxt["step_id"], worker,
+                      cause or "前一步已驗證，自動派下一步", auto=True)
         return nxt
 
     def drain(self, task_id: str, worker: str, max_steps: int = 50) -> list[dict]:
@@ -851,14 +861,48 @@ class Ledger:
                     actor="owner", task_id=task_id)
 
     def continuity(self, task_id: str) -> dict:
-        """F06 §5 的兩個指標，從事件算，不是從印象算。"""
+        """F06 §5 的兩個指標，從事件算，不是從印象算。
+
+        【分母是我的詮釋，規格沒有定義】F06 §5 只給了公式
+        `ExecutionContinuityScore = AutoContinued / max(ExpectedContinuation,1)`，
+        沒有說 ExpectedContinuation 數的是什麼。下面的定義是我定的，
+        換一個定義分數就會變，所以它跟 F05 的 STALL_RISK 四因子一樣，
+        是待校準的東西，不是從規格推出來的事實。
+
+        ExpectedContinuation 數兩種時刻：
+
+          一，一個步驟驗證通過，而且任務還有下一步。這是最典型的
+              「本來就該自己往下走」，也是 drain 走的路。
+
+          二，一次進度報告。CT-F06-02 明寫 60% status report →
+              workflow continues，報告不該變成流程關卡。
+
+        刻意不算 WORKER_RESULT：worker 交回結果之後的那次繼續，
+        已經被「驗證通過就派下一步」涵蓋，兩邊都算會讓同一次交接
+        被數兩次，分母虛胖、分數虛低。
+
+        AutoContinued 不算任務的第一次派工。那一次是起步不是接續，
+        前面沒有東西可以接。把它算進去的話，一個只有一步的任務會
+        看起來「完美自動」，而它其實從沒接續過任何東西。
+
+        這兩條都是 2026-09-09 第一次真的拿它跑一件真實任務才發現的。
+        在那之前分母是 PROGRESS_REPORT + WORKER_RESULT，而 drain
+        兩種都不產生，於是三步全自動走完的任務算出 3/0 = 3.0 分。
+        一個沒有人用過的指標，會安靜地算出離譜的數字。
+        """
         c = _continuity_mod()
         ev = self.events_of(task_id)
         kinds = [e["kind"] for e in ev]
-        auto = sum(1 for e in ev if e["kind"] == "DISPATCH"
-                   and "自動" in (e["cause"] or ""))
-        # 應該繼續的場合:每一次非終止的報告之後,都應該有人接著動。
-        expected = kinds.count("PROGRESS_REPORT") + kinds.count("WORKER_RESULT")
+
+        dispatches = [e for e in ev if e["kind"] == "DISPATCH"]
+        auto = sum(1 for e in dispatches[1:]
+                   if (e.get("payload") or {}).get("auto") is True)
+
+        n_steps = len(self.steps_of(task_id))
+        verified = sum(1 for e in ev
+                       if e["kind"] == "STEP_STATE" and e["to"] == "VERIFIED_COMPLETE")
+        # 最後一步驗證通過之後沒有下一步可派,那不算「該接而沒接」。
+        expected = min(verified, max(n_steps - 1, 0)) + kinds.count("PROGRESS_REPORT")
         burden = kinds.count("HUMAN_CONTINUE")
         violations = kinds.count("EXECUTION_CONTINUITY_VIOLATION")
         return {
@@ -992,11 +1036,26 @@ class Ledger:
         return len(o["unfinished_tasks"]) + len(o["unfinished_steps"])
 
     def events_of(self, task_id: str) -> list[dict]:
+        """一件任務的全部事件，按發生順序。
+
+        payload 一起帶出來，解析成 dict。先前這個查詢漏掉 payload，
+        於是 continuity() 想知道一次派工是不是自動的，只能去掃 cause
+        裡有沒有「自動」兩個字。指標讀不到自己要的欄位時，就會退化成
+        猜字串，而猜字串的指標會安靜地算錯。
+        """
         rows = self.con.execute(
-            "SELECT at,kind,step_id,from_state,to_state,cause,actor FROM events"
+            "SELECT at,kind,step_id,from_state,to_state,cause,actor,payload FROM events"
             " WHERE task_id=? ORDER BY event_id", (task_id,)).fetchall()
-        return [dict(zip(("at", "kind", "step_id", "from", "to", "cause", "actor"), r))
-                for r in rows]
+        out = []
+        for r in rows:
+            d = dict(zip(("at", "kind", "step_id", "from", "to", "cause", "actor"), r[:7]))
+            try:
+                d["payload"] = json.loads(r[7]) if r[7] else {}
+            except (ValueError, TypeError):
+                # 壞掉的 payload 不該讓整份事件史讀不出來。
+                d["payload"] = {}
+            out.append(d)
+        return out
 
     def close(self) -> None:
         self.con.close()

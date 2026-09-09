@@ -200,6 +200,107 @@ class TestEventContract(F04Case):
         self.assertEqual(n, 2)
 
 
+class TestAutoFlagIsRecorded(F04Case):
+    """自動派工要在事件裡留下明確旗標，不能靠 cause 的字面去猜。
+
+    這一組是回歸測試。原本 continuity() 的做法是掃 DISPATCH 的 cause
+    裡有沒有「自動」兩個字，有兩個後果：呼叫端自己給 cause 時會漏算，
+    而任何人只要在手動派工的理由裡寫到「自動」就會被誤算。指標拿不到
+    payload 就會退化成猜字串，所以 events_of() 也一起補上 payload。
+    """
+
+    def test_manual_dispatch_is_marked_not_auto(self):
+        t = self.make(2)
+        self.led.dispatch(self.led.sid(t, "s1"), "worker-a", "owner 說「繼續做 F03」")
+        ev = [e for e in self.led.events_of(t) if e["kind"] == "DISPATCH"]
+        self.assertEqual(len(ev), 1)
+        self.assertIs(ev[0]["payload"]["auto"], False)
+        self.assertEqual(self.led.continuity(t)["auto_continued"], 0)
+
+    def test_auto_dispatch_is_marked_auto(self):
+        t = self.make(2)
+        self.led.auto_dispatch(t, "worker-a")
+        ev = [e for e in self.led.events_of(t) if e["kind"] == "DISPATCH"]
+        self.assertIs(ev[0]["payload"]["auto"], True)
+
+    def test_first_dispatch_is_a_start_not_a_continuation(self):
+        """第一次派工不算「接上」，因為前面沒有東西可以接。
+
+        旗標與計數是兩件事：這一次確實是自動派的（payload.auto 為真），
+        但它是起步。若把起步算成接續，一個只有一步的任務會看起來
+        完美自動，而它從沒接續過任何東西。
+        """
+        t = self.make(2)
+        self.led.auto_dispatch(t, "worker-a")
+        self.assertEqual(self.led.continuity(t)["auto_continued"], 0)
+
+        self.produce(1)
+        self.led.verify_step(self.led.sid(t, "s1"))
+        self.led.auto_dispatch(t, "worker-a")
+        self.assertEqual(self.led.continuity(t)["auto_continued"], 1,
+                         "第二次才是真的接上前一步")
+
+    def test_auto_dispatch_with_custom_cause_still_counts(self):
+        """舊 bug 的複現：自訂 cause 不含「自動」二字，仍然是自動派工。
+
+        test_CT_F04_05b 就是這個形狀（cause 是「owner 已決定」），
+        在舊寫法下那一次自動派工從指標裡消失了。
+        """
+        t = self.make(3, human_at=2)
+        self.led.auto_dispatch(t, "worker-a")
+        self.produce(1)
+        self.led.verify_step(self.led.sid(t, "s1"))
+        self.led.auto_dispatch(t, "worker-a")
+        self.led.con.execute("UPDATE steps SET requires_human=0 WHERE step_id=?",
+                             (self.led.sid(t, "s2"),))
+        self.led.con.commit()
+
+        self.led.auto_dispatch(t, "worker-a", "owner 已決定")
+        causes = [e["cause"] for e in self.led.events_of(t) if e["kind"] == "DISPATCH"]
+        self.assertIn("owner 已決定", causes)
+        self.assertNotIn("自動", "".join(causes[-1:]), "這一次的 cause 沒有「自動」字樣")
+        self.assertEqual(self.led.continuity(t)["auto_continued"], 1,
+                         "字面上看不出來，但它確實是系統自己接上的"
+                         "（派了兩次，第一次是起步不算接續）")
+
+    def test_manual_cause_containing_the_word_auto_is_not_miscounted(self):
+        """反向：手動派工的理由裡寫到「自動」，不得被誤算成自動續跑。"""
+        t = self.make(2)
+        self.led.dispatch(self.led.sid(t, "s1"), "worker-a",
+                          "自動化那條線先停，改人工派")
+        self.assertEqual(self.led.continuity(t)["auto_continued"], 0)
+
+    def test_drain_gets_a_perfect_score_and_needs_nobody(self):
+        """drain 一路走完，滿分，而且沒有人說過一句話。
+
+        三步的任務裡「本來就該自己往下走」的時刻有兩個（s1 過後、
+        s2 過後），drain 兩個都接上了，所以是 2/2。分子分母要能對上，
+        不然分數會像 2026-09-09 第一次實跑那樣算出 3/0 = 3.0。
+        """
+        t = self.make(3)
+        for i in (1, 2, 3):
+            self.produce(i)
+        self.led.drain(t, "worker-a")
+        c = self.led.continuity(t)
+        self.assertEqual(c["auto_continued"], 2)
+        self.assertEqual(c["expected_continuation"], 2)
+        self.assertEqual(c["score"], 1.0)
+        self.assertEqual(c["human_continue_burden"], 0)
+
+    def test_score_never_exceeds_one(self):
+        """分數是比例，不該超過 1。
+
+        舊分母只算 PROGRESS_REPORT 與 WORKER_RESULT，而 drain 兩種
+        都不產生，於是三步全自動的任務算出 3/0 = 3.0。一個沒有人
+        用過的指標會安靜地算出離譜的數字，而且沒有測試會發現。
+        """
+        t = self.make(3)
+        for i in (1, 2, 3):
+            self.produce(i)
+        self.led.drain(t, "worker-a")
+        self.assertLessEqual(self.led.continuity(t)["score"], 1.0)
+
+
 class TestDrainSafety(F04Case):
     def test_drain_stops_when_verification_fails(self):
         """驗證沒過就停下來，不會硬著頭皮往下派。"""

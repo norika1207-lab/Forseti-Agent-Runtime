@@ -541,7 +541,7 @@ footer{border-top:1px solid var(--rule);padding-top:24px;margin-top:20px;font-si
   <div class="tbl-scroll"><table>
     <thead><tr><th>落差</th><th>實際狀況</th></tr></thead>
     <tbody>
-      <tr><td><b>auto_continued 是 0</b></td><td>做完 <code>auto_dispatch()</code> 之後，自己推進那八個 feature 時走的是手動 <code>dispatch()</code>。做出一個能自動繼續的東西，跟真的讓它自動繼續，是兩件事。</td></tr>
+      <tr><td><b>auto_continued 是 0</b><br><span class="mono" style="color:var(--done);font-size:11px">同日已解除</span></td><td>做完 <code>auto_dispatch()</code> 之後，自己推進那八個 feature 時走的是手動 <code>dispatch()</code>。做出一個能自動繼續的東西，跟真的讓它自動繼續，是兩件事。<br>真正的根因在下一節：CLI 從來沒有把它暴露出來過。</td></tr>
       <tr><td><b>跨 session 派工在帳本外</b></td><td>解法是先 dispatch 登記再送訊息，寫完了然後又忘了用。所以 worker 死了十七小時 watchdog 看不到。</td></tr>
       <tr><td><b>所有門檻都是拍的</b></td><td>SUMMARY_LIMIT、PACKET_LIMIT、suspect_at、BLANK_SEQUENCE_AT 全部沒有實測校準。</td></tr>
     </tbody>
@@ -551,7 +551,7 @@ footer{border-top:1px solid var(--rule);padding-top:24px;margin-top:20px;font-si
   <div class="tbl-scroll"><table>
     <thead><tr><th style="width:38px">#</th><th>做什麼</th><th>為什麼是這個順序</th></tr></thead>
     <tbody>
-      <tr><td class="mono">1</td><td>把 F04 的事件真的接上</td><td>auto_dispatch 存在但沒被用。接上之後 HumanContinueBurden 才會真的降下來，那是整條 F 線的目的。無依賴。</td></tr>
+      <tr><td class="mono">1</td><td>把 F04 的事件真的接上　<span class="mono" style="color:var(--done);font-size:11px">已完成</span></td><td>auto_dispatch 存在但沒被用。接上之後 HumanContinueBurden 才會真的降下來，那是整條 F 線的目的。無依賴。</td></tr>
       <tr><td class="mono">2</td><td>跨 session 派工走帳本</td><td>worker 有 step，watchdog 才看得到它。依賴 1。</td></tr>
       <tr><td class="mono">3</td><td>補讀工程書 Phase 1-2</td><td>階段 1 與階段 4 的補讀門檻，現在只讀三成。不補讀不准動那兩階。</td></tr>
       <tr><td class="mono">4</td><td>門檻校準</td><td>拿真實資料量出合理值。依賴 1、2 先跑一段時間累積資料。</td></tr>
@@ -570,6 +570,101 @@ footer{border-top:1px solid var(--rule);padding-top:24px;margin-top:20px;font-si
       <tr><td>為索引精度上模型</td><td>索引錯了刪掉重建就好，原檔在原地</td></tr>
     </tbody>
   </table></div>
+</section>
+
+<section>
+  <h2>把 F04 接上去</h2>
+  <p class="sub">上一節第一項的解除記錄。過程比結論有用，因為結論只有一行，過程裡有兩個沒有人會發現的錯。</p>
+
+  <h3>根因不是我懶得用它</h3>
+  <p class="sub">動手第一件事是盤 CLI。七個命令，沒有一個碰得到 F03 到 F06。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 176" style="min-width:680px;width:100%" role="img" aria-label="CLI 入口缺口">
+      <text class="lab-s" x="24" y="22" fill="var(--ink-3)">Python API 裡有的</text>
+      <g>
+        <rect x="24" y="32" width="132" height="30" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="90" y="51" text-anchor="middle">dispatch()</text>
+        <rect x="164" y="32" width="132" height="30" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="230" y="51" text-anchor="middle">auto_dispatch()</text>
+        <rect x="304" y="32" width="132" height="30" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="370" y="51" text-anchor="middle">drain()</text>
+        <rect x="444" y="32" width="132" height="30" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="510" y="51" text-anchor="middle">worker_event()</text>
+        <rect x="584" y="32" width="132" height="30" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="650" y="51" text-anchor="middle">verify_step()</text>
+        <rect x="724" y="32" width="132" height="30" rx="3" fill="var(--paper)" stroke="var(--rule)"/>
+        <text class="lab" x="790" y="51" text-anchor="middle">continuity()</text>
+      </g>
+
+      <text class="lab-s" x="24" y="98" fill="var(--ink-3)">CLI 裡有的門</text>
+      <rect x="24" y="106" width="832" height="42" rx="3" fill="var(--block-soft)"
+            stroke="var(--block)" stroke-dasharray="4 3"/>
+      <text class="lab" x="440" y="132" text-anchor="middle" fill="var(--block)" font-weight="600">一個都沒有</text>
+    </svg>
+  </div>
+
+  <div class="note"><em>除了單元測試以外，沒有任何東西呼叫得到 <code>auto_dispatch()</code>。</em>不是我不用它，是沒有門可以進去。一個沒有入口的機制等於不存在。修法是補上 <code>dispatch / auto / drain / event / verify / continuity</code> 六個入口。其中 <code>auto</code> 特別處理了一件事：它回 <code>None</code> 有三種意思（任務已終止、沒有下一步、需要人決定），CLI 必須把三種分開講。安靜的 <code>None</code> 正是這整套東西要消滅的。</div>
+
+  <h3>第一個錯：指標在用字串猜自己有沒有被用</h3>
+  <pre>auto = sum(1 for e in ev if e["kind"] == "DISPATCH"
+           and "自動" in (e["cause"] or ""))</pre>
+  <p class="sub">兩個方向都會錯。呼叫端自己給了 cause（例如「owner 已決定」）時，那一次真的自動派工會從指標裡消失；手動派工的理由裡只要寫到「自動」就會被誤算。而它會退化成猜字串，是因為 <code>events_of()</code> 的 SQL 根本沒有 SELECT payload，指標拿不到它要的欄位。</p>
+
+  <h3>第二個錯：分母是 0，分數算出 3.0</h3>
+  <p class="sub">接上之後第一次真的拿它跑一件真實任務，三步全自動走完，然後印出 <code>3 / 0</code>，分數 3.0。分數是比例，不該超過 1。</p>
+
+  <div class="fig">
+    <svg viewBox="0 0 940 214" style="min-width:680px;width:100%" role="img" aria-label="drain 的事件鏈與舊分母數不到的東西">
+      <text class="lab-s" x="24" y="20" fill="var(--ink-3)">drain() 實際產生的事件</text>
+      <g>
+        <rect x="24" y="30" width="118" height="30" rx="3" fill="var(--brass-soft)" stroke="var(--brass)"/>
+        <text class="lab" x="83" y="49" text-anchor="middle">DISPATCH</text>
+        <rect x="158" y="30" width="140" height="30" rx="3" fill="var(--done-soft)" stroke="var(--done)"/>
+        <text class="lab" x="228" y="49" text-anchor="middle">VERIFIED_COMPLETE</text>
+        <rect x="314" y="30" width="118" height="30" rx="3" fill="var(--brass-soft)" stroke="var(--brass)"/>
+        <text class="lab" x="373" y="49" text-anchor="middle">DISPATCH</text>
+        <rect x="448" y="30" width="140" height="30" rx="3" fill="var(--done-soft)" stroke="var(--done)"/>
+        <text class="lab" x="518" y="49" text-anchor="middle">VERIFIED_COMPLETE</text>
+        <rect x="604" y="30" width="118" height="30" rx="3" fill="var(--brass-soft)" stroke="var(--brass)"/>
+        <text class="lab" x="663" y="49" text-anchor="middle">DISPATCH</text>
+        <rect x="738" y="30" width="140" height="30" rx="3" fill="var(--done-soft)" stroke="var(--done)"/>
+        <text class="lab" x="808" y="49" text-anchor="middle">VERIFIED_COMPLETE</text>
+      </g>
+
+      <text class="lab-s" x="24" y="98" fill="var(--ink-3)">舊分母去找的事件</text>
+      <rect x="24" y="106" width="410" height="40" rx="3" fill="var(--block-soft)"
+            stroke="var(--block)" stroke-dasharray="4 3"/>
+      <text class="lab" x="229" y="131" text-anchor="middle" fill="var(--block)">WORKER_RESULT　＋　PROGRESS_REPORT</text>
+      <text class="lab" x="470" y="131" fill="var(--block)" font-weight="600">上面那條鏈一個都沒有</text>
+
+      <rect x="24" y="164" width="410" height="34" rx="3" fill="var(--paper)" stroke="var(--ink)" stroke-width="1.5"/>
+      <text class="lab" x="229" y="186" text-anchor="middle" font-weight="600">3 / max(0, 1) = 3.0</text>
+      <text class="lab-s" x="470" y="186" fill="var(--ink-2)">142 條測試全過，沒有一條發現分母是 0</text>
+    </svg>
+  </div>
+
+  <p class="sub">規格 F06 §5 只給了公式，沒有定義 <code>ExpectedContinuation</code> 數什麼。所以新的分母是我的詮釋，跟 STALL_RISK 的四因子同一個性質，已在 docstring 標明。</p>
+
+  <pre>ExpectedContinuation = 「步驟驗證通過且任務還有下一步」的次數 + 進度報告次數
+AutoContinued        = 自動派工次數，扣掉任務的第一次派工</pre>
+
+  <p class="sub">扣掉第一次是因為那是起步不是接續，前面沒有東西可以接。不扣的話，一個只有一步的任務會看起來完美自動，而它從沒接續過任何東西。刻意不算 WORKER_RESULT：worker 交回結果之後的那次繼續，已經被「驗證通過就派下一步」涵蓋，兩邊都算會讓同一次交接被數兩次。</p>
+
+  <div class="note warn"><em>這兩個錯都只有在真的用它的時候才會出現。</em>測試都走 <code>submit_result()</code> 那條路，而 <code>drain()</code> 不走。一個沒有人用過的指標，會安靜地算出離譜的數字。</div>
+
+  <h3>驗收</h3>
+  <p class="sub">用一支腳本當驗收條件，動手前後各跑一次。它問的問題跟單元測試不同：單元測試問「它會不會動」，這支問「它有沒有真的被用過」。</p>
+  <div class="tbl-scroll"><table>
+    <thead><tr><th style="width:90px">時間點</th><th>派工事件</th><th>自動接上</th><th>有人推的</th><th style="width:70px">exit</th></tr></thead>
+    <tbody>
+      <tr><td>動手前</td><td class="mono">8 筆</td><td class="mono">0</td><td class="mono">8</td><td class="mono" style="color:var(--block)">1</td></tr>
+      <tr><td>動手後</td><td class="mono">11 筆</td><td class="mono">3</td><td class="mono">8</td><td class="mono" style="color:var(--done)">0</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub">那件任務本身也記在帳本裡（<code>T-eb34677986</code>），三步都是 VERIFIED_COMPLETE，HumanContinueBurden 是 0。整條鏈跑完的過程沒有人說過一次「繼續」。</p>
+
+  <div class="note"><em>還留著的一項待校準。</em>任務終止之後寫的進度報告仍然會計入分母，而那時已經沒有東西可以繼續，所以收尾補記兩則發現之後分數就從 1.0 掉到 0.5。沒有當場改：同一天已經動過一次分母定義，第三次要有實測資料支撐，不是靠直覺。目前只有兩件真實任務，樣本不足。這一項已經用 <code>report()</code> 記進帳本，不是留在某個人的記憶裡。</div>
 </section>
 
 <section>
