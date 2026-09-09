@@ -63,6 +63,54 @@ if (!dir) {
  *
  * PATTERN 那一級特別重要：它不靠語氣，靠的是「同一件事講第二次」。
  */
+/**
+ * 不是 owner 打的字。這些一律排除，而且是在訊號比對之前就排除。
+ *
+ * 2026-09-09 讀 183 筆原文時抓到的：ACCUSATION 那 76 筆裡至少 6 筆
+ * 根本不是她說的話 —— cross-session 訊息、四窗共享內容、壓縮摘要、
+ * skill 的系統提示。它們都被算進「PROFANITY_AT_AI 396」那個數字裡。
+ *
+ * 原本第 109 行只擋開頭是 `<` 的，但 cross-session 訊息的開頭是
+ * 「Another Claude session sent a message:」，尖括號在第二行。
+ */
+const NOT_OWNER = [
+  // Codex 把自己的歷史塞回對話裡,被記成 user_message。
+  // 2026-09-09 實測:Codex 的 8,445 則 user_message 裡有 2,838 則(33.6%)
+  // 是這種東西,而它的 694 處反應裡有 415 處(60%)來自同一批 ——
+  // 也就是它在重播 owner 當初說的話,而工具把重播當成新的一次。
+  // REWORK_DEMANDED 原本 Codex 是 Claude 的 5.4 倍,清掉之後剩 1.8 倍。
+  /The following is the Codex agent history/,
+  /<heartbeat>/,
+  // Claude 這邊是 skill 被載入時塞進來的文字,量小(1.0%)但性質相同。
+  /^Approach this as the design lead/m,
+  /^# \/loop —/m,
+  /^# Workflow authoring reference/m,
+  /^Draw as the engineer who has to live/m,
+  /^# Schedule Cloud Agents/m,
+  /^# In app browser:/m,
+  /Another Claude session sent a message/,
+  /<cross-session-message/,
+  /^=== 共享內容 ===/m,
+  /以下是其他視窗/,
+  /This session is being continued from a previous conversation/,
+  /^Base directory for this skill/m,
+  /^Caveat: The messages below/m,
+  /系統提醒|system-reminder/,
+];
+
+const isOwnerText = (t) => !NOT_OWNER.some((re) => re.test(t));
+
+/**
+ * 罵的對象可能不是 AI。
+ *
+ * 這一類不排除，只降級並標記，因為判斷「她在罵誰」需要語意，
+ * 而語意判斷正是這個工具刻意不做的事。
+ *
+ * 實例：「郭明昌不跟沒錢的公司往來」「我老闆說你睜眼說瞎話」——
+ * 前者完全在講第三人，後者是轉述老闆的話。兩者都命中 ACCUSATION。
+ */
+const THIRD_PARTY = /郭明昌|郭董|陳總|我老闆|老闆說|法務|同事|前一個 ?session|另一個 ?session|別的 ?session|那個 AI|上一個 AI/;
+
 const SIGNALS = Object.freeze([
   { level: 'STRONG', re: /幹你娘|幹您娘|操你|去你的|你他媽|他媽的/, kind: 'PROFANITY_AT_AI' },
   { level: 'STRONG', re: /我他媽|氣死我|受夠了|夠了喔|不要再|給我停/, kind: 'EXASPERATION' },
@@ -86,7 +134,8 @@ function findTranscripts(root) {
   };
   walk(root);
   // subagent 的 transcript 沒有真正的人在場，排除。
-  return out.filter((f) => !/\/subagents\//.test(f));
+  // session_index 是索引不是對話，也排除。
+  return out.filter((f) => !/\/subagents\//.test(f) && !/session_index\.jsonl$/.test(f));
 }
 
 async function scanOne(file) {
@@ -107,12 +156,28 @@ async function scanOne(file) {
       const text = typeof c === 'string' ? c
         : Array.isArray(c) ? c.filter((b) => b?.type === 'text').map((b) => b.text).join('\n') : '';
       if (!text.trim() || /^<|^Caveat|^\[SYSTEM|^\[Request interrupted/.test(text)) continue;
+      if (!isOwnerText(text)) continue;
       turns.push({ at, role: 'HUMAN', text });
     } else if (d.type === 'assistant' && Array.isArray(c)) {
       const txt = c.filter((b) => b?.type === 'text').map((b) => b.text).join('\n');
       const tools = c.filter((b) => b?.type === 'tool_use').map((b) => b.name);
       if (txt.trim() || tools.length) {
         turns.push({ at, role: 'AI', text: txt, tools });
+      }
+    } else if (d.type === 'event_msg' && d.payload?.type) {
+      // Codex 的格式。驗過的欄位:timestamp 是 ISO 同 Claude,
+      // payload.type 為 user_message / agent_message,內容在 payload.message。
+      //
+      // 工具呼叫在 response_item / function_call,但它的欄位名我沒有親自
+      // 確認過,所以這裡不猜、不填。ai_before 的 tools 對 Codex 會是空陣列,
+      // 那是誠實的空,不是漏抓 —— 猜一個欄位名填進去才是錯的。
+      const pt = d.payload.type;
+      const msg = typeof d.payload.message === 'string' ? d.payload.message : '';
+      if (pt === 'user_message') {
+        if (!msg.trim() || !isOwnerText(msg)) continue;
+        turns.push({ at, role: 'HUMAN', text: msg });
+      } else if (pt === 'agent_message' && msg.trim()) {
+        turns.push({ at, role: 'AI', text: msg, tools: [] });
       }
     }
   }
@@ -129,12 +194,20 @@ async function scanOne(file) {
       }
       hits.push({
         file,
-        session: file.split('/').pop().replace('.jsonl', '').slice(0, 8),
+        session: (() => {
+          const base = file.split('/').pop().replace('.jsonl', '');
+          // Codex 檔名是 rollout-<ISO>-<uuid>,取 uuid 開頭;Claude 直接就是 uuid。
+          const m = base.match(/rollout-\d{4}-\d{2}-\d{2}T[\d-]+-([0-9a-f]{8})/);
+          return m ? m[1] : base.slice(0, 8);
+        })(),
+        engine: file.includes('/.codex/') ? 'CODEX' : 'CLAUDE',
         at: t.at,
         turn_index: i,
         level: s.level,
         kind: s.kind,
         owner_said: t.text.replace(/\s+/g, ' ').trim().slice(0, 260),
+        /** 訊息裡提到第三方，罵的對象可能不是 AI。不排除，只標記。 */
+        target_ambiguous: THIRD_PARTY.test(t.text),
         ai_before: before.map((b) => ({
           text: (b.text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200),
           tools: [...new Set(b.tools ?? [])].slice(0, 8),
