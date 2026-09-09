@@ -22,6 +22,7 @@
     python3 apps/forseti-cli/forseti.py context [--all|<path.jsonl>]
     python3 apps/forseti-cli/forseti.py index [--rebuild]
     python3 apps/forseti-cli/forseti.py recall "為何會有點名板"
+    python3 apps/forseti-cli/forseti.py tasks
 """
 
 from __future__ import annotations
@@ -309,6 +310,19 @@ def cmd_doctor(rep: Report) -> int:
         print("    這幾階現在不准動，先補讀。")
         print()
 
+    try:
+        led_mod = _sibling("ledger")
+        if led_mod.default_db().exists():
+            led = led_mod.Ledger()
+            n = led.total_unfinished()
+            led.close()
+            if n:
+                print(f"  未完成的義務　{n} 項　（`forseti tasks` 看細節）")
+                print()
+    except Exception:
+        # 帳本壞掉不該讓 doctor 整個掛掉。doctor 的價值在於它一定跑得起來。
+        pass
+
     if rep.blockers:
         print(f"  阻塞　{len(rep.blockers)} 項")
         for b in rep.blockers:
@@ -446,6 +460,64 @@ def cmd_recall(args: list[str]) -> int:
     return _sibling("recall").main(["recall", *args])
 
 
+def cmd_tasks(args: list[str]) -> int:
+    """未完成的義務。F02 §6 的 obligation ledger。
+
+    CT-F02-02 要求十四個未完成項目要被自動暴露,不需要使用者盤問。
+    這個指令就是「不需要盤問」的具體形式。
+    """
+    led_mod = _sibling("ledger")
+    db = led_mod.default_db()
+    if not db.exists() or db.stat().st_size == 0:
+        print()
+        print("  還沒有任務帳本。")
+        print(f"  它會建在 {db}")
+        print("  帳本存在的理由:義務只活在模型記憶裡的話,回合結束就散了。")
+        print()
+        return 0
+
+    led = led_mod.Ledger()
+    o = led.obligations()
+    total = led.total_unfinished()
+    print()
+    if total == 0:
+        print("  沒有未完成的義務。")
+        print()
+        return 0
+
+    print(f"  未完成　{total} 項")
+    print()
+    for t in o["unfinished_tasks"]:
+        print(f"  {t['task_id']}　{t['state']}　{t['objective']}")
+        if t["next"]:
+            print(f"      下一步　{t['next']}")
+    if o["unfinished_steps"]:
+        print()
+        print(f"  未完成步驟　{len(o['unfinished_steps'])} 個")
+        for st in o["unfinished_steps"][:20]:
+            print(f"    {st['state']:<20}{st['objective']}")
+        if len(o["unfinished_steps"]) > 20:
+            print(f"    …另外 {len(o['unfinished_steps']) - 20} 個")
+    if o["blocked"]:
+        print()
+        print(f"  卡住　{len(o['blocked'])} 項")
+        for b in o["blocked"]:
+            print(f"    {b['objective']}")
+    if o["unverified_claims"]:
+        print()
+        print(f"  宣稱完成但沒有證據　{len(o['unverified_claims'])} 項")
+        for u in o["unverified_claims"]:
+            print(f"    {u['objective']}")
+    if o["orphans"]:
+        print()
+        print(f"  沒有負責人　{len(o['orphans'])} 項")
+        for x in o["orphans"]:
+            print(f"    {x['objective']}")
+    print()
+    led.close()
+    return 0
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -467,6 +539,8 @@ def main(argv: list[str]) -> int:
         return cmd_index(argv[2:])
     if cmd == "recall":
         return cmd_recall(argv[2:])
+    if cmd == "tasks":
+        return cmd_tasks(argv[2:])
 
     print(__doc__)
     return 2
