@@ -169,7 +169,41 @@ CREATE INDEX IF NOT EXISTS idx_steps_task ON steps(task_id, seq);
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id, at);
 """
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# F04 §3 要求的 worker 事件。這八種是 worker 那一端會發出的,
+# 其餘(TASK_STATE、DISPATCH、REASSIGN…)是控制端自己的紀錄。
+WORKER_EVENTS = (
+    "WORKER_ACCEPTED", "WORKER_PROGRESS", "WORKER_COMPLETION", "WORKER_BLOCKED",
+    "WORKER_FAILED", "WORKER_CANCELLED", "EVIDENCE_AVAILABLE", "ARTIFACT_CHANGED",
+)
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """schema 演進。只加欄位,絕不 drop。
+
+    這裡跟 recall.py 的做法剛好相反,差別值得寫下來:
+
+      索引是純函數的產物,原始 jsonl 沒動過,所以 schema 一改就整個
+      刪掉重建,重跑三十秒的事。
+
+      帳本是唯一真相。它記的是「誰接了什麼、還欠什麼」,那些東西
+      不存在於任何別的地方,刪掉就沒了。所以只能 ALTER 不能 DROP,
+      而且加欄位一定要有預設值,舊資料才不會變成半殘。
+    """
+    have = con.execute("PRAGMA user_version").fetchone()[0]
+    if have >= SCHEMA_VERSION:
+        return
+    cols = {r[1] for r in con.execute("PRAGMA table_info(events)")}
+    if "idem_key" not in cols:
+        con.execute("ALTER TABLE events ADD COLUMN idem_key TEXT")
+    scols = {r[1] for r in con.execute("PRAGMA table_info(steps)")}
+    if "requires_human" not in scols:
+        con.execute("ALTER TABLE steps ADD COLUMN requires_human INTEGER DEFAULT 0")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_events_idem"
+                " ON events(idem_key) WHERE idem_key IS NOT NULL")
+    con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+    con.commit()
 
 
 def default_db(root: Path | None = None) -> Path:
@@ -197,6 +231,7 @@ def connect(db: Path | None = None) -> sqlite3.Connection:
     con = sqlite3.connect(path)
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(SCHEMA)
+    _migrate(con)
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     con.commit()
     return con
@@ -250,6 +285,9 @@ class Step:
     evidence_refs: list[str] = field(default_factory=list)
     retry_count: int = 0
     next_action: str = ""
+    # F04 §5:自動派工的四個條件之一是「不需要人的決定」。
+    # 這個旗標讓那個條件變成資料,不是靠誰記得。
+    requires_human: bool = False
 
 
 class Ledger:
@@ -264,13 +302,25 @@ class Ledger:
 
     def _event(self, kind: str, cause: str, actor: str = "system",
                task_id: str = "", step_id: str = "",
-               from_state: str = "", to_state: str = "", payload=None) -> None:
-        self.con.execute(
-            "INSERT INTO events (at,task_id,step_id,kind,from_state,to_state,cause,actor,payload)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (time.time(), task_id, step_id, kind, from_state, to_state, cause, actor,
-             json.dumps(payload, ensure_ascii=False) if payload is not None else None))
+               from_state: str = "", to_state: str = "", payload=None,
+               idem_key: str | None = None) -> bool:
+        """記一筆事件。回傳 False 代表這個 idem_key 已經記過,這次是重複。
+
+        F04 §4：Events are durable and idempotent. Duplicate completion
+        MUST NOT execute the next step twice。冪等靠資料庫的 unique index,
+        不靠呼叫端記得檢查 —— 呼叫端會忘記,索引不會。
+        """
+        try:
+            self.con.execute(
+                "INSERT INTO events (at,task_id,step_id,kind,from_state,to_state,"
+                "cause,actor,payload,idem_key) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (time.time(), task_id, step_id, kind, from_state, to_state, cause, actor,
+                 json.dumps(payload, ensure_ascii=False) if payload is not None else None,
+                 idem_key))
+        except sqlite3.IntegrityError:
+            return False
         self.con.commit()
+        return True
 
     # -- 接受任務（F01 §5）------------------------------------------------
 
@@ -307,6 +357,9 @@ class Ledger:
                  _j([qualify(task_id, d) for d in s.dependencies]), s.assigned_worker,
                  "ACCEPTED", _j(s.expected_outputs), _j(s.verifier), _j(s.evidence_refs),
                  s.next_action))
+            if s.requires_human:
+                self.con.execute("UPDATE steps SET requires_human=1 WHERE step_id=?",
+                                 (qualify(task_id, s.step_id),))
         self.con.commit()
         self._event("TASK_ACCEPTED", "owner requested execution", accepted_by,
                     task_id=task_id, to_state="ACCEPTED",
@@ -385,10 +438,11 @@ class Ledger:
     def steps_of(self, task_id: str) -> list[dict]:
         rows = self.con.execute(
             "SELECT step_id,seq,objective,dependencies,state,expected_outputs,verifier,"
-            "evidence_refs,retry_count,next_action,assigned_worker"
+            "evidence_refs,retry_count,next_action,assigned_worker,requires_human"
             " FROM steps WHERE task_id=? ORDER BY seq", (task_id,)).fetchall()
         return [{
             "step_id": r[0], "local_id": r[0].split("/")[-1],
+            "requires_human": bool(r[11]),
             "seq": r[1], "objective": r[2], "dependencies": _u(r[3]),
             "state": r[4], "expected_outputs": _u(r[5]), "verifier": _u(r[6]),
             "evidence_refs": _u(r[7]), "retry_count": r[8], "next_action": r[9],
@@ -577,6 +631,77 @@ class Ledger:
         self.con.commit()
         self._event("REASSIGN", cause, actor="controller", task_id=task_id, step_id=step_id,
                     payload={"from": old, "to": new_worker})
+
+    # -- 事件驅動（F04-EVT-001）-------------------------------------------
+
+    def worker_event(self, kind: str, step_id: str, cause: str, *,
+                     worker: str = "", payload=None, idem_key: str | None = None) -> bool:
+        """記一筆 worker 事件。回傳 False 代表是重複事件（已被冪等擋下）。
+
+        F04 §3 列了八種 worker 事件,這裡只收那八種。不在清單裡的一律
+        拒絕,因為「事件種類可以隨便取名」等於沒有事件協定 ——
+        下游沒辦法對著一組不固定的名字寫邏輯。
+        """
+        if kind not in WORKER_EVENTS:
+            raise ValueError(f"不是 F04 §3 定義的 worker 事件：{kind}。"
+                             f"合法的是 {'/'.join(WORKER_EVENTS)}")
+        row = self.con.execute("SELECT task_id FROM steps WHERE step_id=?",
+                               (step_id,)).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{step_id}")
+        fresh = self._event(kind, cause, actor=worker or "worker", task_id=row[0],
+                            step_id=step_id, payload=payload, idem_key=idem_key)
+        if fresh and kind == "WORKER_PROGRESS":
+            # 進度訊號要留時間戳,F05 的停滯偵測靠它分辨「久」與「卡住」。
+            self.con.execute("UPDATE steps SET last_progress_at=? WHERE step_id=?",
+                             (time.time(), step_id))
+            self.con.commit()
+        return fresh
+
+    def auto_dispatch(self, task_id: str, worker: str, cause: str = "") -> dict | None:
+        """F04 §5 的自動派工。四個條件都滿足才派。
+
+        回傳被派出去的步驟，或 None。None 有三種意思，呼叫端要能分辨，
+        所以需要人的決定時任務會被轉成 NEEDS_HUMAN，那是看得見的狀態，
+        不是一個安靜的 None。
+
+        這個方法是「不要叫人說繼續」的具體形式：條件滿足就自己走，
+        不滿足就明確講出卡在哪一個條件。
+        """
+        if is_terminal(self.state_of(task_id)):
+            return None
+        nxt = self.next_step(task_id)
+        if nxt is None:
+            return None
+        if nxt["requires_human"]:
+            if self.state_of(task_id) != "NEEDS_HUMAN":
+                self.transition(task_id, "NEEDS_HUMAN",
+                                f"{nxt['local_id']} 需要 owner 決定：{nxt['objective']}",
+                                actor="controller")
+            return None
+        if self.state_of(task_id) in ("NEEDS_HUMAN", "BLOCKED", "WAITING_DEPENDENCY"):
+            self.transition(task_id, "RUNNING", cause or "阻礙解除，恢復執行",
+                            actor="controller")
+        self.dispatch(nxt["step_id"], worker, cause or "前一步已驗證，自動派下一步")
+        return nxt
+
+    def drain(self, task_id: str, worker: str, max_steps: int = 50) -> list[dict]:
+        """一直派到派不動為止。
+
+        F04 §2 的鏈是 DISPATCH → … → VERIFY → NEXT_STEP_DISPATCH。
+        這個方法把那條鏈跑完,不需要有人在旁邊每一輪說一次「繼續」。
+        max_steps 是防呆,不是設計上限。
+        """
+        out = []
+        for _ in range(max_steps):
+            step = self.auto_dispatch(task_id, worker)
+            if step is None:
+                break
+            out.append(step)
+            ok, _res = self.verify_step(step["step_id"])
+            if not ok:
+                break
+        return out
 
     # -- 義務帳本（F02 §6）-----------------------------------------------
 
