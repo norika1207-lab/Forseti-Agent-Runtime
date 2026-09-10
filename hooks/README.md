@@ -105,6 +105,49 @@ It keeps the last 10 minutes of events, capped at 2000, because collision detect
 
 Add `.forseti/` to `.gitignore`.
 
+## The Event Ledger writer (`event-ledger.mjs`)
+
+Since phase 1, `forseti-hook.mjs` also records every event it sees into the
+Event Ledger, the append-only record of what the AI and the runtime actually
+did. `event-ledger.mjs` is the write side of that ledger and nothing else: it
+classifies the hook input into one of the canonical v5.0 §6.2 event types
+(PreToolUse becomes `TOOL_CALL`, Stop becomes `MODEL_OUTPUT`, PostToolUse
+becomes `FILE_WRITE` / `FILE_READ` / `TOOL_RESULT` depending on the tool) and
+appends one line per event, raw and normalized representations together.
+
+**Where it writes.** `<project>/.forseti/event_ledger.jsonl`, one JSON line
+per event. Any single payload field over 64 KB is stored as
+`.forseti/raw_payloads/<sha256>.json` and referenced from the line instead of
+inlined, so the ledger stays readable with ordinary text tools. Tests point
+the writer at a sandbox via `FORSETI_EVENT_LEDGER_DIR` (the comment at that
+env var in `forseti-hook.mjs` records how a test once wrote fake events into
+the real ledger, and why the fix was an escape hatch rather than cleanup).
+Reading, replay and indexing live on the Python side in
+`apps/forseti-cli/event_ledger.py`; its SQLite index is disposable and gets
+rebuilt from the JSONL file, which is the only source of truth.
+
+**Why the write side does not go through Python.** The read side is Python,
+so the obvious move was to shell out to it. It was measured instead
+(2026-09-10, numbers in this file's header): starting a Python interpreter
+plus import plus append is p95 140.8 ms end to end, against the phase-1
+hot-path budget of p95 < 50 ms (`docs/build-plan.md:330`). The append itself
+is 0.173 ms; nearly the whole cost is interpreter startup, not writing. The
+hook has already paid Node's startup, so appending from Node is close to
+free. This is what "the source of truth is a file, not a database" buys: the
+writer does not have to share a language with the reader. The obligation that
+creates instead: `canonicalJson()` here must produce byte-identical output to
+Python's `canonical_json()` (compared 2026-09-10 on samples with Chinese,
+nesting, null, floats, booleans), and the event types emitted here must stay
+inside the Python `TYPES` whitelist, or reindexing rejects the line. That
+rejection is deliberate: better a refused event than an unrecognized type
+lying quietly in the record.
+
+**Same rule as every check above:** no function in `event-ledger.mjs` throws.
+Can't classify, can't stash the payload, can't append: it returns null and
+the work goes through. A ledger missing a few lines beats an editor blocked
+by bookkeeping, which is the 2026-09-08 incident again, and the reason the
+whole call in `forseti-hook.mjs` sits inside one try/catch, import included.
+
 ## What it cannot see
 
 Writes made through opaque shell commands. `python3 - <<'PY'` with `open(p,'w')` inside carries no file path on the command line, and roughly half of real shell commands are opaque to static analysis. The hook says so in its own warning rather than implying its silence means safety.

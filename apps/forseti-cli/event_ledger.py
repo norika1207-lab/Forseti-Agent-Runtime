@@ -118,7 +118,7 @@ SPEC_DEVIATIONS = (
 # 分析的時候該排除,取證的時候不該假裝沒發生過。
 #
 # 來源已經修掉:hook 現在尊重 FORSETI_EVENT_LEDGER_DIR,測試導向沙箱。
-KNOWN_TEST_SESSIONS = ("insider", "perf", "probe-1", "b", "s")
+KNOWN_TEST_SESSIONS = ("insider", "perf", "probe-1", "b", "s", "stop-probe")
 
 
 def is_test_event(rec: dict) -> bool:

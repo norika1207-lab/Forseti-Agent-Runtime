@@ -95,6 +95,26 @@ async function main() {
   const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
 
+  // 階段 1：Stop 也要進 Event Ledger。
+  //
+  // 位置在 `if (!open.length) OK()` 之前，那一行很關鍵 ——
+  // 大多數的 Stop 都沒有未完成的宣告，會從那裡直接離開。
+  // 記在它後面的話，只有「被擋下來的那一輪」會留下紀錄，
+  // 正常收尾的每一輪都會消失。那樣的帳本只看得到異常看不到基準，
+  // 而異常沒有基準就失去了比較的對象。
+  //
+  // Stop 對到 v5.0 §6.2 的 MODEL_OUTPUT 是我的映射選擇不是規格明文，
+  // 理由寫在 hooks/event-ledger.mjs 的 classify()。
+  try {
+    const el = await import(join(HERE, 'event-ledger.mjs'));
+    const dir = process.env.FORSETI_EVENT_LEDGER_DIR
+      || join(root(input.cwd), '.forseti');
+    el.appendEvent(dir, input, {
+      sessionId: input.session_id || '',
+      projectId: REPO_ROOT.split(sep).pop() || '',
+    });
+  } catch { /* 記不下來就算了，下面每一步都不受影響 */ }
+
   const cwd = input.cwd;
   const led = load(cwd);
   const open = led.open ?? [];

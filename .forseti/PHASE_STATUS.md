@@ -302,17 +302,35 @@ hook 已經接上 Event Ledger（`hooks/event-ledger.mjs`）。實測數字：
 | 同一份帳本重播兩次，逐位元組相同 | **通過** | 62,342 bytes 兩次相同，換一個全新行程再算也相同 |
 | tool / 檔案 / 程序事件都進得來 | **部分** | 真實 hook 產生的只有 `PostToolUse`。下面說明 |
 
-**第三條只算部分通過，說清楚為什麼：**
+**第三條 2026-09-10 深夜更正：不是「部分通過」，是 0% 驗證。**
 
-正本現在有 36 筆，其中 23 筆是 `PostToolUse`（真實 hook 寫的）。
-`PreToolUse` 一筆都沒有 —— 因為 hook 的 `PreToolUse` 只註冊在
-`Write|Edit|MultiEdit|NotebookEdit`，而且那條路徑在拿不到 `file_path`
-時會提早 `OK()` 離開。程序事件（`SessionStart` / `Stop`）也沒有，
-因為 Stop hook 是另一個檔案（`forseti-stop-hook.mjs`），還沒接。
+先前寫的是「23 筆 PostToolUse 是真實 hook 寫的」。那句話誤導，
+現在查清楚了：**正本 36 筆裡沒有一筆來自真實工作。**
 
-**所以「三種事件都進得來」目前是用手寫樣本驗的，不是真實流量。**
-測試裡那條 `test_the_three_kinds_of_claude_code_events_fit` 證明的是
-資料結構容得下，不是它們真的流進來了。這個區別要記著。
+| 來源 | 筆數 |
+|---|---|
+| `test/hooks.e2e.test.mjs` 與效能測試直接呼叫 hook | 23 |
+| 我在這個 session 手寫進去的 | 13 |
+| **真實工作觸發 hook 產生的** | **0** |
+
+驗法很直接：我今天用 Write 建了 `tools/check-page-readable.py`、
+`test/event-ledger.test.mjs`、`docs/glossary.md`、`docs/reading/v5-13-14.md`，
+每一個在正本裡都是 0 筆。
+
+**原因是 hook 對這個 session 根本不生效。** hook 註冊在 repo 的
+`.claude/settings.json`，而這個 session 的 project 是 `/Users/norikaoda`，
+不會載入那份設定。Bash 工具裡 `cd` 進 repo 不改變這件事。
+
+**這繼承了 B-02 已經記過的事實**（那條已解除，但它記的現象還在）：
+掃全機 jsonl 找 cwd 在 repo 底下的 session，結果是零個。
+hook 註冊在那裡，一次都沒有機會跑。我把 Event Ledger 接上去，
+等於接在一個從來不會被觸發的地方。
+
+**所以「三種事件都進得來」目前是用手寫樣本驗的。**
+`test_the_three_kinds_of_claude_code_events_fit` 證明的是資料結構
+容得下，不是它們真的流進來了。這個區別是階段 1 現在最大的缺口。
+
+**驗它的唯一方法是從 repo 目錄開一個真的 session 工作。**
 
 ### 併發寫入（2026-09-10 實測）
 
@@ -349,3 +367,42 @@ hook 已經接上 Event Ledger（`hooks/event-ledger.mjs`）。實測數字：
 
 來源已修：hook 尊重 `FORSETI_EVENT_LEDGER_DIR`，測試導向沙箱。
 實測跑完 e2e 之後正本仍是 36 筆，沒有增加。
+
+### 第三條出口條件：從 0% 到 3/3（2026-09-10 深夜）
+
+更正上面那段之後，實際去驗了。方法是從 repo 目錄開一個真的 session
+工作（`claude -p`），因為 hook 只在那種 session 底下才會被載入。
+
+**派工前正本 36 筆，派工後 42 筆。多的 6 筆全部有真實 session id**
+（`021e0e9c-5e21-4b79-b42e-a5a55f881e37`，uuid 不是測試假名）：
+
+```
+PreToolUse   TOOL_CALL    .forseti/inbox/.../accepted.txt
+PostToolUse  FILE_WRITE   .forseti/inbox/.../accepted.txt
+PreToolUse   TOOL_CALL    hooks/README.md
+PostToolUse  FILE_WRITE   hooks/README.md
+PreToolUse   TOOL_CALL    .forseti/inbox/.../done.txt
+PostToolUse  FILE_WRITE   .forseti/inbox/.../done.txt
+```
+
+**更正一個我先前的判斷：** 我以為 `PreToolUse` 不會進來，
+理由是那條路徑拿不到 `file_path` 會提早 `OK()` 離開。
+實測進來了 3 筆 —— 因為 append 的位置在那個判斷之前。猜錯了。
+
+程序事件補上了：`forseti-stop-hook.mjs` 也接了，
+`Stop` → `MODEL_OUTPUT`，實測 42 → 43 筆。
+
+接的位置刻意在 `if (!open.length) OK()` **之前**。那一行很關鍵，
+大多數的 Stop 都沒有未完成宣告會從那裡直接離開；記在它後面的話，
+只有「被擋下來的那一輪」會留下紀錄，正常收尾的每一輪都會消失。
+**那樣的帳本只看得到異常看不到基準，而異常沒有基準就失去比較的對象。**
+
+| 出口條件 | 狀態 |
+|---|---|
+| 殺掉程序再開，事件不掉 | 通過（真的 SIGKILL） |
+| 重播兩次逐位元組相同 | 通過（62,342 bytes，跨行程也相同） |
+| tool / 檔案 / 程序事件都進得來 | **通過**（TOOL_CALL、FILE_WRITE 來自真實工作；MODEL_OUTPUT 實測） |
+
+**還沒做完的一項交付：** `docs/build-plan.md:323` 的
+「Evidence Receipt 在 PostToolUse 當下寫入，已經做了，要搬進帳本」。
+現在 evidence 仍寫在 `.forseti/state.json`，沒有搬。
