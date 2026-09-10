@@ -257,6 +257,21 @@ def connect(db: Path | None = None) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     con.execute("PRAGMA foreign_keys = ON")
+    # v5.0 §20.3 明寫 P0 要用 SQLite WAL 模式。先前沒開,而且沒有任何
+    # 地方寫為什麼 —— 那是空白不是決定,由 2026-09-09 的讀後對照抓出來。
+    #
+    # 開得起來是因為帳本在 home 的 APFS,不在 repo 那顆 exFAT 碟上
+    # (exFAT 連 sqlite 的 advisory lock 都不支援,更不用說 WAL 要的
+    # shared memory)。帳本會放在 home 正是為了那個限制,所以這裡沒有衝突。
+    #
+    # 實際好處不是理論的:同時有六個 worker 在跑的時候,巡檢要一邊讀
+    # 一邊寫,WAL 讓讀不會被寫擋住。
+    try:
+        con.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.DatabaseError:
+        # 某些檔案系統開不了 WAL。開不了就照舊走,不要讓帳本因為一個
+        # 效能設定而完全不能用。
+        pass
     con.executescript(SCHEMA)
     _migrate(con)
     con.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")

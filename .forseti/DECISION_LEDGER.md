@@ -236,7 +236,32 @@ Dialogue / Tool / Runtime / Artifact / Usage / Governance）。
 **風險：** 做 Phase 1 時直接往 `ledger.py` 的表裡塞 provider 事件；
 或接手的 session 以為 `ledger.py` 就是 Phase 1 的事件帳本而標記已做。
 
-**要決定的：** 分成不同資料庫，或至少不同表與不同文件名義。
+**2026-09-10 補充，v5.0 §6/§20 讀完之後，這條的選項本身變了。**
+
+v5.0 §6 的 event ledger 跟工程書 Phase 1 的是同一種東西（provider 行為
+事件），這點已經確認：175 行第一句就是「Every provider-native event is
+stored twice」，`RawEvent` 的必要欄位是 `provider, provider_event_type`
+（177-179 行），派工事件裝不進那個結構。所以撞名是真的。
+
+**但 v5.0 自己的設計不是分庫，是「單一帳本容納兩類，用分類與分表區隔」。**
+§6.2 的八大類裡有 Workflow 一類（194 行：`STEP_START`、`STEP_COMMIT`、
+`STEP_ROLLBACK`、`APPROVAL_REQUESTED`），那正是派工協調那一族；
+§20.2 又把 `workflows`、`workflow_steps` 與 `events`、`raw_events`
+列在同一個資料庫（558-559 行）。照 v5.0 走，派工步驟事件會以 Workflow
+分類進同一本 normalized 帳。
+
+**所以要決定的是這兩條路：**
+
+一，照 v5.0 合一。`ledger.py` 的 `tasks`/`steps` 大致對應 v5.0 的
+`workflows`/`workflow_steps`，但它的 `events` 表要改造成 §6.1 的
+NormalizedEvent 結構，現有欄位對不上，等於重寫加資料遷移。
+
+二，分開。與 §20.2 的單庫清單字面不符，但保住已實測過的派工帳本。
+而且實體上已經半分開了：派工帳本因 exFAT 限制在 `~/.forseti/ledgers/`，
+行為事件帳本照 ADR-003 會是 `.forseti/event_ledger.jsonl`，本來就不同地方。
+
+**不管選哪邊，「`events` 這個名字給誰」都要寫成 ADR**，沒有明文的話
+上面那兩個風險會一直在。
 
 ### 三　Pydantic 對零依賴
 
