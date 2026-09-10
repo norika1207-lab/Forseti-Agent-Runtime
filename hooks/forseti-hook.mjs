@@ -274,6 +274,23 @@ async function main() {
   const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
 
+  // 階段 1：把這一筆記進 Event Ledger 的正本。
+  //
+  // 位置刻意在邊界之後、載入 runtime 之前。邊界之後才動任何檔案；
+  // runtime 之前是因為採集不該等判斷 —— ADR-003 說 hook 只採集、
+  // daemon 才判斷，而一個要等分析模組載入才記得下來的事件，
+  // 在分析模組壞掉的那天就會消失，偏偏那天最需要它。
+  //
+  // 整段 try/catch 連 import 一起包。記錄失敗絕不能變成工作失敗，
+  // 那正是 2026-09-08 那次事故的形狀：hook 把自己的問題變成她的問題。
+  try {
+    const el = await import(join(HERE, 'event-ledger.mjs'));
+    el.appendEvent(join(projectRoot(input.cwd), '.forseti'), input, {
+      sessionId: input.session_id || '',
+      projectId: REPO_ROOT.split(sep).pop() || '',
+    });
+  } catch { /* 記不下來就算了，下面每一步都不受影響 */ }
+
   const { createRuntime } = await import(join(HERE, '..', 'src', 'runtime.js'));
   const rt = createRuntime();
   const path = stateFile(input.cwd);

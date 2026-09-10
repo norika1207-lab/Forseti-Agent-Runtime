@@ -478,3 +478,30 @@ stateDiagram-v2
 **做完的判準：** 開一個全新的 session，只給它這個 repo 路徑，
 不給任何口頭說明，它跑 `forseti doctor` 之後能講出北極星、
 當前階段、還缺什麼。講不出來就是這一階沒做完。
+
+### 跑全庫測試的正確寫法（2026-09-10，B-12 的教訓）
+
+```bash
+fail=0
+for f in tests/test_*.py test/[a-z]*.test.mjs; do
+  out=$(mktemp)
+  if [[ "$f" == *.py ]]; then python3 "$f" >"$out" 2>&1; else node "$f" >"$out" 2>&1; fi
+  [ $? -eq 0 ] || { echo "FAIL $f"; tail -20 "$out"; fail=1; }
+  rm -f "$out"
+done
+exit $fail
+```
+
+三個地方是踩過才知道的：
+
+`exit $fail` 不是 `echo "fail=$fail"`。echo 永遠成功，所以
+`... && git commit` 的 `&&` 完全擋不住 —— 2026-09-10 有一個 commit
+就是在測試失敗的狀態下推上去的。
+
+**失敗的輸出要留著。** 原本寫的是 `>/dev/null 2>&1 || echo "FAIL $f"`，
+丟掉 stderr。那天 `test_f05.py` 出現一次間歇性失敗，之後八次重現不了，
+而唯一一次的證據就這樣沒了（B-12）。
+
+更早之前還踩過 `cmd | tail -1`，那會讓 exit code 變成 `tail` 的，
+永遠是 0。
+
