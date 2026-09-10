@@ -291,3 +291,61 @@ hook 已經接上 Event Ledger（`hooks/event-ledger.mjs`）。實測數字：
 
 **在有決定之前不動架構。** 記在這裡是因為這個數字會決定階段 1
 剩下的部分怎麼做，而且它推翻了原本寫預算時的假設。
+
+### 階段 1 出口條件的驗證狀態（2026-09-10 晚間，用真實 hook 事件）
+
+`docs/build-plan.md:327` 那三條：
+
+| 出口條件 | 狀態 | 怎麼驗的 |
+|---|---|---|
+| 殺掉程序再開，事件不掉 | **通過** | 子程序寫五筆後真的 `os.kill(SIGKILL)`，不是模擬 |
+| 同一份帳本重播兩次，逐位元組相同 | **通過** | 62,342 bytes 兩次相同，換一個全新行程再算也相同 |
+| tool / 檔案 / 程序事件都進得來 | **部分** | 真實 hook 產生的只有 `PostToolUse`。下面說明 |
+
+**第三條只算部分通過，說清楚為什麼：**
+
+正本現在有 36 筆，其中 23 筆是 `PostToolUse`（真實 hook 寫的）。
+`PreToolUse` 一筆都沒有 —— 因為 hook 的 `PreToolUse` 只註冊在
+`Write|Edit|MultiEdit|NotebookEdit`，而且那條路徑在拿不到 `file_path`
+時會提早 `OK()` 離開。程序事件（`SessionStart` / `Stop`）也沒有，
+因為 Stop hook 是另一個檔案（`forseti-stop-hook.mjs`），還沒接。
+
+**所以「三種事件都進得來」目前是用手寫樣本驗的，不是真實流量。**
+測試裡那條 `test_the_three_kinds_of_claude_code_events_fit` 證明的是
+資料結構容得下，不是它們真的流進來了。這個區別要記著。
+
+### 併發寫入（2026-09-10 實測）
+
+8 個 node 行程同時對同一個正本 append，每個 40 筆：
+
+| 每行大小 | 結果 |
+|---|---|
+| 平均 3,589 bytes（未超過 PIPE_BUF） | 320 行完整，0 行壞掉 |
+| 平均 20,589 bytes（**確實超過 PIPE_BUF 4,096**） | 320 行完整，0 行壞掉 |
+
+第一次測完我差點寫「超過 PIPE_BUF 也沒問題」，但那次的平均是 3,589，
+**根本沒超過**。用 20KB 的 payload 重測才真的測到。
+記在這裡是因為那是一個很容易發生的錯：**用一個沒有觸及風險的樣本，
+去宣稱風險不存在。**
+
+`O_APPEND` 在同一台機器的本地檔案系統上對這個大小是安全的。
+跨 NFS 或多機共用時不成立，那時要另外設計。
+
+### 測試污染正本，以及為什麼不刪
+
+接上 hook 之後才發現 `test/hooks.e2e.test.mjs` 的 AT-HOOK-B3 刻意用
+真實 repo 當 cwd（那正是它要驗的：邊界不能把功能關掉），
+所以它寫進了真正的 `.forseti/event_ledger.jsonl`，
+23 筆 `session_id` 是 `insider` / `perf` 之類的測試假料。
+
+**已經寫進去的不刪。** 正本是 append-only，那個性質存在的意義就是
+沒有人能刪它，包括發現自己寫錯的人。改成可被識別：
+`event_ledger.py` 的 `KNOWN_TEST_SESSIONS` 與 `is_test_event()`，
+`forseti events` 會標示出來。
+
+要講清楚它們不是「髒資料」：hook 真的執行了、事件真的發生了，
+假的是 input（餵的 `file_path` 指向 `src/drift.js`，而那個檔案從頭到尾
+沒被改過）。**分析時該排除，取證時不該假裝沒發生過。**
+
+來源已修：hook 尊重 `FORSETI_EVENT_LEDGER_DIR`，測試導向沙箱。
+實測跑完 e2e 之後正本仍是 36 筆，沒有增加。

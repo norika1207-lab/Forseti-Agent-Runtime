@@ -1107,6 +1107,11 @@ def cmd_events(args: list[str]) -> int:
         no_norm = sum(1 for r in recs if not r.get("norm"))
         if no_norm:
             print(f"    （另有 {no_norm} 筆只有 raw 沒有 normalized）")
+        n_test = sum(1 for r in recs if el.is_test_event(r))
+        if n_test:
+            print()
+            print(f"  其中 {n_test} 筆是測試產生的（session 在 KNOWN_TEST_SESSIONS 裡）")
+            print("  不刪，因為正本是 append-only。分析時排除，取證時不當它沒發生。")
         print()
         return 0
     finally:

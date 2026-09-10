@@ -285,7 +285,18 @@ async function main() {
   // 那正是 2026-09-08 那次事故的形狀：hook 把自己的問題變成她的問題。
   try {
     const el = await import(join(HERE, 'event-ledger.mjs'));
-    el.appendEvent(join(projectRoot(input.cwd), '.forseti'), input, {
+    // FORSETI_EVENT_LEDGER_DIR 是給測試用的出口。
+    //
+    // 2026-09-10 接上之後才發現：`test/hooks.e2e.test.mjs` 的 AT-HOOK-B3
+    // 刻意用真實 repo 當 cwd（那正是它要驗的 —— 邊界不能把功能關掉），
+    // 所以 hook 真的執行、真的寫進正本。**測試把假事件寫進了真帳本。**
+    // 那個測試會清掉自己造的 state.json，但它不知道有 Event Ledger。
+    //
+    // 修法是給一個出口而不是讓測試去清理：清理意味著要從 append-only
+    // 的正本裡刪東西，而那個檔案存在的意義就是沒有人能刪它。
+    const dir = process.env.FORSETI_EVENT_LEDGER_DIR
+      || join(projectRoot(input.cwd), '.forseti');
+    el.appendEvent(dir, input, {
       sessionId: input.session_id || '',
       projectId: REPO_ROOT.split(sep).pop() || '',
     });

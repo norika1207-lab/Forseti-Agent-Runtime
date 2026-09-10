@@ -37,10 +37,28 @@ function t(name, fn) {
  */
 const EMPTY_HOME = mkdtempSync(join(tmpdir(), 'forseti-home-'));
 
+const EL_SANDBOX = mkdtempSync(join(tmpdir(), 'forseti-el-'));
+
 function runHook(script, payload, env = {}) {
   const r = spawnSync('node', [script], {
     input: JSON.stringify(payload), encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: '', HOME: EMPTY_HOME, USERPROFILE: EMPTY_HOME, ...env },
+    env: {
+      ...process.env,
+      CLAUDE_PROJECT_DIR: '',
+      HOME: EMPTY_HOME,
+      USERPROFILE: EMPTY_HOME,
+      // Event Ledger 的正本導向沙箱。
+      //
+      // AT-HOOK-B3 刻意用真實 repo 當 cwd —— 那正是它要驗的東西,
+      // 邊界不能把功能關掉。代價是 hook 會真的執行,而 2026-09-10
+      // 接上 Event Ledger 之後,它就開始把 session_id='insider'
+      // 這種測試假料寫進真正的 .forseti/event_ledger.jsonl。
+      //
+      // 導向而不是事後清理:清理意味著要從 append-only 的正本裡刪東西,
+      // 而那個檔案存在的意義就是沒有人能刪它。
+      FORSETI_EVENT_LEDGER_DIR: EL_SANDBOX,
+      ...env,
+    },
   });
   return { code: r.status, stderr: r.stderr ?? '', stdout: r.stdout ?? '' };
 }

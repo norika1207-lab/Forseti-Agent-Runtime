@@ -107,6 +107,26 @@ SPEC_DEVIATIONS = (
 )
 
 
+# 2026-09-10 之前寫進正本的測試假料,用 session_id 認。
+#
+# **它們不會被刪掉。** 正本是 append-only,而那個性質存在的意義就是
+# 沒有人能刪它 —— 包括發現自己寫錯的人。所以改成讓它們可被識別。
+#
+# 要講清楚的是它們不是「髒資料」:hook 真的執行了、事件真的發生了,
+# 假的是 input(test/hooks.e2e.test.mjs 餵的 file_path 指向 src/drift.js,
+# 而那個檔案從頭到尾沒被改過)。所以它們是「測試產生的真實事件」,
+# 分析的時候該排除,取證的時候不該假裝沒發生過。
+#
+# 來源已經修掉:hook 現在尊重 FORSETI_EVENT_LEDGER_DIR,測試導向沙箱。
+KNOWN_TEST_SESSIONS = ("insider", "perf", "probe-1", "b", "s")
+
+
+def is_test_event(rec: dict) -> bool:
+    """這一筆是不是測試產生的。"""
+    n = rec.get("norm") or {}
+    return (n.get("session_id") or n.get("agent_id") or "") in KNOWN_TEST_SESSIONS
+
+
 class LedgerError(Exception):
     """事件不合規格。拒收而不是修正 —— 一個被默默改過的事件比被拒絕的危險。"""
 
