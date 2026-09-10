@@ -45,6 +45,43 @@ COVERAGE = ("NONE", "TITLE_ONLY", "HEADER_SCAN", "SAMPLED",
 FULL_ENOUGH = ("FULL_READ", "VERIFIED_UNDERSTANDING")
 
 
+def coverage_report(*, read_ranges: list[tuple[int, int]], total_lines: int,
+                    challenged_ok: bool = False) -> dict:
+    """coverage 加上「這是上界」這個標記。標記不可關閉。
+
+    這個做法 2026-09-10 從隔壁 Moirai 的 `src/forseti/coverage.js` 學的。
+    它的 SessionCoverage 每一筆都帶 `is_upper_bound = true`，沒有參數
+    可以關掉，檔頭寫的理由是：
+
+        session 內部的壓縮會讓它實際「記得」的比「讀過」的少，
+        本模組無從得知。
+
+    那句話對這個檔案一樣成立，而我原本沒有寫。`coverage_of()` 算的是
+    read_ranges，也就是「讀過的範圍」；一個被壓縮過的 session 記得的
+    比那個少，而從外面量不出來少了多少。
+
+    這不是理論問題。2026-09-10 這一場對話本身就被壓縮過一次，
+    而我在那之後說過「v5.0 §6 與 §20 我逐行讀過」—— 那句話是真的，
+    但它是上界，不是「我現在還記得每一行」。
+
+    刻意讓標記待在回傳值裡而不是只寫在註解：註解會被忽略，
+    欄位會一路跟著資料走。
+    """
+    level = coverage_of(read_ranges=read_ranges, total_lines=total_lines,
+                        challenged_ok=challenged_ok)
+    covered = sum(max(0, b - a + 1) for a, b in read_ranges)
+    return {
+        "level": level,
+        # 不可關閉。沒有任何參數能把它變成 False。
+        "is_upper_bound": True,
+        "why_upper_bound": "read_ranges 記的是讀過的範圍。被壓縮過的 session "
+                           "記得的比讀過的少，那個差從外面量不出來",
+        "lines_read": covered,
+        "total_lines": total_lines,
+        "challenged": bool(challenged_ok),
+    }
+
+
 def coverage_of(*, read_ranges: list[tuple[int, int]], total_lines: int,
                 challenged_ok: bool = False) -> str:
     """從實際讀過的範圍算 coverage，不從宣稱算。
@@ -55,6 +92,9 @@ def coverage_of(*, read_ranges: list[tuple[int, int]], total_lines: int,
     VERIFIED_UNDERSTANDING 需要 challenged_ok,也就是有人考過。
     自己說自己懂最多只能到 FULL_READ —— 這正是 level 5 與 6 的差別,
     也是 gate takeover 現在做不到 6 的原因(B-08)。
+
+    【回傳的 level 是上界】要讓那個事實跟著資料走的話用
+    `coverage_report()`,它的 is_upper_bound 關不掉。
     """
     if not read_ranges or total_lines <= 0:
         return "NONE"

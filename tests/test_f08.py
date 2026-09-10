@@ -171,5 +171,46 @@ class TestBudgetPriority(unittest.TestCase):
         self.assertGreater(p.dropped_for_budget, 0)
 
 
+
+class TestUpperBoundIsNotOptional(unittest.TestCase):
+    """coverage 是上界，而那個事實要跟著資料走。
+
+    這個做法 2026-09-10 從隔壁 Moirai 的 `src/forseti/coverage.js` 學的：
+    它的 SessionCoverage 每一筆都帶 is_upper_bound = true，沒有參數能關掉。
+
+    為什麼是這裡最該有：read_ranges 記的是「讀過的範圍」，
+    而一個被壓縮過的 session 記得的比讀過的少，那個差從外面量不出來。
+    這一整個檔案就是在處理壓縮，卻沒有標記自己算出來的東西是上界。
+    """
+
+    def test_the_flag_is_always_true(self):
+        for ranges, total in [([], 100), ([(1, 50)], 100), ([(1, 100)], 100)]:
+            r = R.coverage_report(read_ranges=ranges, total_lines=total)
+            self.assertIs(r["is_upper_bound"], True,
+                          "沒有任何輸入能讓它變成 False")
+
+    def test_even_a_challenged_full_read_is_still_an_upper_bound(self):
+        """考過也一樣。
+
+        通過 challenge 證明的是「當時答得出來」，不是「之後還記得」。
+        VERIFIED_UNDERSTANDING 是七級裡最高的，它仍然是上界。
+        """
+        r = R.coverage_report(read_ranges=[(1, 100)], total_lines=100,
+                              challenged_ok=True)
+        self.assertEqual(r["level"], "VERIFIED_UNDERSTANDING")
+        self.assertIs(r["is_upper_bound"], True)
+
+    def test_it_says_why(self):
+        """標記要帶理由，不然下一個人會以為那是可以拿掉的樣板欄位。"""
+        r = R.coverage_report(read_ranges=[(1, 10)], total_lines=100)
+        self.assertIn("壓縮", r["why_upper_bound"])
+
+    def test_level_matches_the_plain_function(self):
+        """兩個入口算出來的 level 要一樣，不然會長出第二套判準。"""
+        for ranges in ([], [(1, 5)], [(1, 70)], [(1, 100)]):
+            self.assertEqual(
+                R.coverage_report(read_ranges=ranges, total_lines=100)["level"],
+                R.coverage_of(read_ranges=ranges, total_lines=100))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
