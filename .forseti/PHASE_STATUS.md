@@ -228,3 +228,28 @@ C3 到 C5 仍然有效，見 `docs/context-continuity.md`。
    而且沒有事件帳本就沒有正確的輸入。
 2. **不要做任何 UI。** 工程書 Phase 0 明令禁止。
 3. **不要重寫照妖鏡與 Token Monitor。** 它們在 Code Duo，要接不要重寫。
+
+---
+
+## 階段 1 熱路徑實測（2026-09-10）
+
+`docs/build-plan.md:330` 要求「hook 端 p95 < 50ms，量出來寫進 PHASE_STATUS」。
+
+| 量的是什麼 | p50 | p95 | 結論 |
+|---|---|---|---|
+| `EventLedger.append()` 本身，500 筆 | 0.097 ms | **0.173 ms** | 遠低於預算 |
+| 端到端：啟動 python + import + append，20 次 | 103.4 ms | **140.8 ms** | **超預算約 3 倍** |
+
+**大頭是 Python 直譯器啟動，不是寫檔。** 這個數字直接決定 hook 怎麼接：
+
+不能讓 hook 每次去起一個 Python。既有的 `hooks/forseti-hook.mjs` 是 JS，
+node 的啟動成本它已經付了，所以正本要由 **JS 直接 append**，
+Python 只負責讀與索引。
+
+那條路的前提已經驗過：JS 的 canonical JSON 與 Python 的
+`event_ledger.canonical_json()` 產生**逐位元組相同**的輸出
+（欄位排序、無空白、非 ASCII 不跳脫三者都一致）。
+
+**這正是「正本是檔案」這個設計換來的東西** —— 寫入端不必跟讀取端同語言。
+如果當初照 v5.0 §20.3 讓 SQLite 當正本，JS hook 就得帶一個 sqlite 綁定，
+或者每次去起 Python，而後者剛剛量出來是 140.8 ms。

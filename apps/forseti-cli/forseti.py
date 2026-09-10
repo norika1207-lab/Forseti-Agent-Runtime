@@ -40,6 +40,15 @@
     python3 apps/forseti-cli/forseti.py handoff --no-shell ...   worker 只能寫檔案
     python3 apps/forseti-cli/forseti.py watch
 
+事件帳本（階段 1，Event Ledger，跟上面的 tasks 是兩本不同的帳）：
+    python3 apps/forseti-cli/forseti.py events
+    python3 apps/forseti-cli/forseti.py replay [session]
+    python3 apps/forseti-cli/forseti.py reindex
+
+ADR-008 定案兩本分開。Task Ledger 記「誰接了什麼、還欠什麼」,
+Event Ledger 記「AI 與 runtime 實際發生了什麼」。兩邊都有 events,
+講的時候一律說是哪一本的。
+
 handoff 先把步驟登記進帳本再產出要送的訊息，watch 一次掃完所有
 進行中的步驟。原本的做法是直接送 SendMessage，那條路徑在帳本外面，
 於是 worker 對 watchdog 而言不存在，死了十七小時沒有人知道。
@@ -1068,6 +1077,80 @@ def cmd_handoff(args: list[str]) -> int:
         led.close()
 
 
+def cmd_events(args: list[str]) -> int:
+    """Event Ledger 的現況。跟 tasks 是兩本不同的帳（ADR-008）。"""
+    el = _sibling("event_ledger")
+    led = el.EventLedger()
+    try:
+        recs = led.read_all()
+        print()
+        print(f"  正本　{led.jsonl}")
+        print(f"  索引　{led.index_path}")
+        print()
+        if not recs:
+            print("  還沒有事件。")
+            print("  這本記的是 provider 行為事件（AI 與 runtime 實際做了什麼），")
+            print("  不是派工協調 —— 那本是 `forseti tasks`。")
+            print()
+            return 0
+        by_cat: dict[str, int] = {}
+        for r in recs:
+            n = r.get("norm")
+            if n:
+                c = el.TYPE_TO_CATEGORY.get(n.get("type"), "?")
+                by_cat[c] = by_cat.get(c, 0) + 1
+        print(f"  {len(recs)} 筆　指紋 {led.digest()[:16]}")
+        print()
+        for c in el.CATEGORIES:
+            if by_cat.get(c):
+                print(f"    {c:<12}{by_cat[c]}")
+        no_norm = sum(1 for r in recs if not r.get("norm"))
+        if no_norm:
+            print(f"    （另有 {no_norm} 筆只有 raw 沒有 normalized）")
+        print()
+        return 0
+    finally:
+        led.close()
+
+
+def cmd_replay(args: list[str]) -> int:
+    """重播帳本。出口條件：同一份帳本重播兩次，結果逐位元組相同。
+
+    給 session id 就只重播那一個。不給就全部。
+    """
+    el = _sibling("event_ledger")
+    led = el.EventLedger()
+    try:
+        recs = led.read_all()
+        if args:
+            want = args[0]
+            recs = [r for r in recs
+                    if (r.get("norm") or {}).get("session_id") == want]
+            if not recs:
+                print(f"  沒有 session {want} 的事件。")
+                return 1
+        for r in recs:
+            print(el.canonical_json(r))
+        return 0
+    finally:
+        led.close()
+
+
+def cmd_reindex(args: list[str]) -> int:
+    """從正本重建索引。整個砍掉重來，正本一個位元組都不動。"""
+    el = _sibling("event_ledger")
+    led = el.EventLedger()
+    try:
+        stat = led.reindex()
+        print()
+        print(f"  重建完成　raw {stat['raw']} 筆　normalized {stat['normalized']} 筆")
+        print(f"  {stat['index']}")
+        print()
+        return 0
+    finally:
+        led.close()
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -1107,6 +1190,12 @@ def main(argv: list[str]) -> int:
         return cmd_watch(argv[2:])
     if cmd == "handoff":
         return cmd_handoff(argv[2:])
+    if cmd == "events":
+        return cmd_events(argv[2:])
+    if cmd == "replay":
+        return cmd_replay(argv[2:])
+    if cmd == "reindex":
+        return cmd_reindex(argv[2:])
 
     print(__doc__)
     return 2
