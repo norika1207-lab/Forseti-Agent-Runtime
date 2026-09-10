@@ -279,9 +279,66 @@ Lineage Ledger」。撞的只有表名。
 
 ---
 
+## ADR-009　Python 主線維持零依賴，不引入 Pydantic
+
+**日期** 2026-09-10　**狀態** 已接受（owner 裁決）
+
+**決策：** `apps/forseti-cli/` 只用標準庫。工程書 389 行的
+「Implement initial Pydantic domain models with schema_version」不採用。
+
+**背景：** 工程書明定 Pydantic v2，而現行 Python 模組的設計約束是零依賴，
+寫在 `ledger.py:31`（「零依賴。sqlite3 是標準庫。」）與 `forseti.py` 檔頭。
+六條既有 ADR 沒有一條裁過依賴政策 —— ADR-001 只裁了 Python 對 JS。
+
+**理由，最重的一條是 doctor 必須一定跑得起來。**
+
+`forseti.py` 存在的理由是讓一個接手的 session 在兩分鐘內知道現況。
+如果它要先 `pip install` 才能跑，那個承諾就破了 —— 而破掉的時機
+偏偏是最糟的：接手的人通常是在別人卡住之後才來的。
+
+第二條理由是實測出來的。2026-09-09 到 09-10 派了十一個跨 session
+worker，它們在各種權限限制下跑（`--permission-mode acceptEdits`、
+Bash 被擋、沙盒只准存取 repo），能執行的一律是
+`python3 <repo>/apps/forseti-cli/forseti.py ...`。零依賴讓那條路
+一次都沒有因為環境而斷過。
+
+第三條：這個 repo 在 exFAT 外接碟上，而 venv 與套件安裝在那顆碟上
+本來就多一層風險（`ledger.py:236` 起記過 exFAT 已經害帳本搬家一次）。
+
+**否決的替代方案：** 照工程書引入 Pydantic v2。它的價值是真的 ——
+domain model 驗證、`schema_version`、序列化，那些現在都要手寫。
+否決理由是上面三條，尤其第一條。
+
+**代價，要講清楚：**
+
+一，schema 驗證要自己寫。現在 `ledger.py` 的驗證散在各個方法裡
+（`WORKER_EVENTS` 白名單、`CAN_REPORT` 白名單、狀態機的 `ALLOWED` 表），
+沒有集中的 domain model。加欄位時的相容性靠 `_migrate()` 手工顧。
+
+二，`schema_version` 目前只有 `PRAGMA user_version`（`SCHEMA_VERSION = 3`），
+那管得到資料庫，管不到 JSON payload 的結構。做 Event Ledger 的
+NormalizedEvent 時這個缺口會變明顯。
+
+三，與工程書字面不符。做階段 1 的人讀到 389 行會以為要裝 Pydantic。
+
+**緩解：** 前兩條的實際做法是把驗證集中成明確的白名單與轉換表
+（現在已經是這個形狀），並在每個資料結構旁邊寫清楚它的欄位契約。
+第三條靠這條 ADR 與 `docs/reading/book-00-08.md` 第三節第 4 條互相指向。
+
+**推翻條件：**
+
+要對外發布、或有多人同時寫這個 codebase 的時候。那時候手寫驗證的
+出錯成本會超過安裝一個套件的成本。
+
+或者 domain model 長到手寫驗證開始漏 —— 具體的訊號是「加一個欄位
+要改三個以上的地方」。現在加 `worker_can_report` 改了三處
+（SCHEMA、`_migrate`、`dispatch`），已經在邊緣上。
+
+---
+
 ## 待裁決　工程書與現行實作的分歧（2026-09-09）
 
-**原本六條，2026-09-10 裁決掉兩條（第一、第二），剩四條。**
+**原本六條，2026-09-10 裁決掉三條（第一、第二、第三），剩三條。**
 已裁決的保留全文並劃掉標題，因為「當初為什麼難決定」比結論有用。
 
 來源是六份讀後對照（`docs/reading/`），由六個 worker 分段讀 AI-First
@@ -340,7 +397,7 @@ NormalizedEvent 結構，現有欄位對不上，等於重寫加資料遷移。
 **不管選哪邊，「`events` 這個名字給誰」都要寫成 ADR**，沒有明文的話
 上面那兩個風險會一直在。
 
-### 三　Pydantic 對零依賴
+### ~~三　Pydantic 對零依賴~~　已裁決（零依賴），見 ADR-009
 
 書 389 行明定用 Pydantic domain models。現行 Python 模組的設計約束是
 零依賴，寫在 `ledger.py:31` 與 `forseti.py` 檔頭。六條 ADR 沒有任何

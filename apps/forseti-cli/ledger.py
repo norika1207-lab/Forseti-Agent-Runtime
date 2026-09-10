@@ -28,7 +28,9 @@
   report 不改變狀態（CT-F01-05、CT-F04-04）。報告是觀察通道不是流程關卡。
   這一條是那 8 次的直接修正。
 
-零依賴。sqlite3 是標準庫。
+零依賴。sqlite3 是標準庫。這條是 ADR-009 定案的長期政策,不是暫時的 ——
+工程書 389 行要 Pydantic,本專案不採用,代價(schema 驗證要手寫、
+schema_version 只管得到 db 不管得到 JSON payload)與推翻條件都寫在那條 ADR 裡。
 """
 
 from __future__ import annotations
