@@ -69,9 +69,37 @@ class TestControlFileParsing(unittest.TestCase):
         """REQUIRED_READING.md 有兩張表，混在一起會把「階段 1」當成一份文件。
 
         這是第一版真的犯過的錯。
+
+        2026-09-10 這條測試自己壞過一次，值得記：它原本斷言
+        `rep.gates` 非空，而那天所有補讀門檻都達標了，空清單讓它失敗。
+        **測試把「當時的資料狀態」寫成了「結構要求」。** 兩張表分不分得開
+        是結構問題，跟現在有幾項未達標無關，所以改用自備 fixture 驗結構，
+        真實檔案只驗兩邊沒有互相污染。
         """
-        self.assertTrue(self.rep.unread)
-        self.assertTrue(self.rep.gates)
+        two_tables = (
+            "## 源頭文件\n\n"
+            "| 文件 | 字數 | Level | 讀取狀態 | 什麼時候必須補完 |\n"
+            "|---|---|---|---|---|\n"
+            "| 甲文件 | 100 | 2 | 約兩成 | 動階段 9 之前 |\n"
+            "| 乙文件 | 200 | 5 | 逐段完整 | — |\n\n"
+            "## 各階段動工前的補讀門檻\n\n"
+            "| 要動哪一階 | 必須先讀完 | 現況 |\n"
+            "|---|---|---|\n"
+            "| 階段 9 甲線 | 甲文件 | **未達標** |\n"
+            "| 階段 8 乙線 | 乙文件 | 已達標 |\n"
+        )
+        unread = forseti.extract_unread(two_tables)
+        gates = forseti.extract_gates(two_tables)
+
+        self.assertEqual(len(unread), 1, "只有 level 2 那份算未讀")
+        self.assertIn("甲文件", unread[0])
+        self.assertEqual(len(gates), 1, "只有未達標那階算門檻")
+        self.assertIn("階段 9", gates[0])
+        self.assertFalse(unread[0].startswith("階段"), "文件表混進了階段")
+        self.assertTrue(gates[0].startswith("階段"), "門檻表混進了文件")
+
+        # 真實檔案只驗「兩邊沒有互相污染」，不驗數量 ——
+        # 數量會隨補讀進度變動，那是進度不是結構。
         for u in self.rep.unread:
             self.assertFalse(u.startswith("階段"), f"文件表混進了階段：{u}")
         for g in self.rep.gates:
