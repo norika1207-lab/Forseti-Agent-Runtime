@@ -8,6 +8,11 @@
 
 **階段 0：控制檔與接管閘門**　狀態 `VERIFIED`
 
+這個 VERIFIED 是照 `docs/build-plan.md` 第五節的定義驗的，
+**不是** AI-First 工程書 §9.2 那七條。兩套定義的落差與裁決理由見
+`DECISION_LEDGER.md` 的 ADR-007。工程書 401 行看到「Phase 0 VERIFIED」
+的人請先讀那條 ADR，不要拿這裡的章去蓋書那邊的驗收。
+
 ---
 
 ## 這一階的出口條件

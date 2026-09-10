@@ -205,7 +205,84 @@ memory 的 `code_matrix_repo_split_trap` 早就記了這件事：
 
 ---
 
-## 待裁決　工程書與現行實作的六條分歧（2026-09-09）
+## ADR-007　Phase 0 的驗收以本專案的定義為準，不是工程書的
+
+**日期** 2026-09-10　**狀態** 已接受（owner 裁決）
+
+**決策：** `PHASE_STATUS.md` 的「階段 0 VERIFIED」以 `docs/build-plan.md`
+第五節的定義為準。工程書 §9.2 那七條不是本專案階段 0 的出口條件。
+
+**背景：** 同一個詞指了兩套驗收標準。本專案的階段 0 是控制檔加 doctor
+加接管閘門，2026-09-09 真的用一個全新 session 驗過出口（記錄在
+`docs/cases/doctor-handover-2026-09-09.md`）。工程書 401 行要求的
+「PHASE_STATUS showing Phase 0 VERIFIED」指的是它第 9.2 節那七條，
+而七條裡有四條半沒做：HANDOFF.md、policies.yaml、Pydantic models、
+fixture manifest，加上測試不是 pytest。
+
+**理由：** 那七條裡有幾項（policies.yaml、fixture manifest）本來就是
+後面階段才需要的東西。為了蓋一個章去補它們，是被文件牽著走，
+而不是被需求牽著走。本專案的階段 0 定義有實測過的出口驗證，
+工程書的沒有。
+
+**否決的替代方案：** 以書為準補齊那四條半。否決理由見上。
+
+**代價：** 讀工程書的人看到 401 行會以為要照它那七條驗。緩解方式是
+`PHASE_STATUS.md` 與這條 ADR 互相指向，而且 `docs/reading/book-phase-0-2.md`
+第三節第 1 條已經把這個落差寫清楚了。
+
+**推翻條件：** 要對外宣稱「照 AI-First 工程書實作」的時候。那時候
+兩套定義的落差會變成誠信問題，不是內部取捨。
+
+---
+
+## ADR-008　兩本帳本分開：Task Ledger 與 Event Ledger
+
+**日期** 2026-09-10　**狀態** 已接受（owner 裁決）
+
+**決策：** 派工協調與 provider 行為事件用兩本獨立的帳本，不合併。
+
+| | Task Ledger | Event Ledger |
+|---|---|---|
+| 記什麼 | 誰接了什麼、還欠什麼、驗過沒 | AI 與 runtime 實際發生了什麼 |
+| 事件種類 | `WORKER_*` 八種加控制端事件 | v5.0 §6.2 的八大類 canonical types |
+| 位置 | `~/.forseti/ledgers/<專案>-<hash>.db` | `.forseti/event_ledger.jsonl`（加未來的 db） |
+| 為什麼在那 | exFAT 沒有 sqlite 要的 advisory lock | JSONL 是普通檔案，exFAT 寫得進去 |
+| 規格來源 | F01、F02 | v5.0 §6、§20，工程書 Phase 1 |
+| 現況 | 已實作並在用 | 未開始 |
+
+**`events` 這個名字：** 兩邊各自的庫裡都可以叫 `events`，因為它們在
+不同的資料庫。**但文件與口語一律用完整限定名**：講「Task Ledger 的
+events」或「Event Ledger 的 events」，不准只講「events 表」。
+
+兩本帳本本身的名字本來就已經分開了 —— `ledger.py` 檔頭第一行寫的是
+「Task Ledger：外部任務真相」，v5.0 §6 的標題是「Event Ledger and
+Lineage Ledger」。撞的只有表名。
+
+**理由：**
+- 實體上已經半分開了：一本因 exFAT 限制在 home，一本照 ADR-003 在 repo
+- Task Ledger 有 F01/F02 的完整測試與真實資料，改造成 §6.1 的
+  NormalizedEvent 結構等於重寫加資料遷移
+- 兩者的生命週期不同：任務可以跨很多 session，provider 事件是流水
+
+**否決的替代方案：** 照 v5.0 合一。v5.0 §6.2 的八大類裡有 Workflow
+一類（`STEP_START`、`STEP_COMMIT`、`STEP_ROLLBACK`、`APPROVAL_REQUESTED`），
+§20.2 又把 `workflows`、`workflow_steps` 與 `events`、`raw_events` 列在
+同一個庫，所以照書走是可以合一的。否決理由是重寫成本，以及那條路會
+讓一本已經在用、有測試、有資料的帳本停下來等改造。
+
+**代價：** 與 v5.0 §20.2 的單庫清單字面不符。做 Event Ledger 的時候
+要在它自己的文件裡寫明這個偏離，以及為什麼。
+
+**推翻條件：** 需要跨兩本帳本做 join 查詢的時候。例如要問「這個派工
+步驟期間，provider 到底做了哪些工具呼叫」，兩本分開就得在應用層拼。
+如果那種查詢變成常態，合一的成本就值得付了。
+
+---
+
+## 待裁決　工程書與現行實作的分歧（2026-09-09）
+
+**原本六條，2026-09-10 裁決掉兩條（第一、第二），剩四條。**
+已裁決的保留全文並劃掉標題，因為「當初為什麼難決定」比結論有用。
 
 來源是六份讀後對照（`docs/reading/`），由六個 worker 分段讀 AI-First
 工程書並逐條對照 repo，主 session 抽驗 19 條，全部屬實。
@@ -214,7 +291,7 @@ memory 的 `code_matrix_repo_split_trap` 早就記了這件事：
 拖延，是因為每一條選哪邊都會影響後面很久，而且兩邊各自都有道理。
 在有裁決之前，動到那一塊的人請先回來看這一節。
 
-### 一　Phase 0 VERIFIED 同名不同義
+### ~~一　Phase 0 VERIFIED 同名不同義~~　已裁決，見 ADR-007
 
 `PHASE_STATUS.md:9` 的 VERIFIED 是照 `docs/build-plan.md` 第五節驗的，
 2026-09-09 真的用新 session 驗過出口。書 401 行要求的 VERIFIED 是它
@@ -226,7 +303,7 @@ policies.yaml、Pydantic models、fixture manifest，加上不是 pytest）。
 **兩條路：** 以書為準補齊缺項；或記一條 ADR 說明本專案的 Phase 0
 定義取代書的定義。
 
-### 二　「事件帳本」即將撞名
+### ~~二　「事件帳本」即將撞名~~　已裁決（分開），見 ADR-008
 
 書 Phase 1 的 event ledger 是 provider 行為事件（445-450 行六類：
 Dialogue / Tool / Runtime / Artifact / Usage / Governance）。

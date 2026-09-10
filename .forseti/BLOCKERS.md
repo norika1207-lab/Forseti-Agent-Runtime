@@ -189,13 +189,17 @@ B-07 的實測給了證據：那個 session 只拿到一句「接手這個專案
 
 | 名字 | 一邊是 | 另一邊是 | 接錯的後果 |
 |---|---|---|---|
-| `events` | v5.0 §6 與工程書 Phase 1：provider 行為事件 | `ledger.py` 的 events 表：派工協調事件 | 往同一張表塞，或以為已經做了。這一條大到自己成為待裁決第二條 |
+| ~~`events`~~ | v5.0 §6 與工程書 Phase 1：provider 行為事件 | `ledger.py` 的 events 表：派工協調事件 | **2026-09-10 已由 ADR-008 定名**：兩本帳本分開，文件與口語一律講「Task Ledger 的 events」或「Event Ledger 的 events」 |
 | `temperature` | `src/signals.js`：session 健康溫度 | `src/thermometer.js`：查過的對自己生出來的比例 | 接書 Phase 8 的 UI 時把事實比例當健康度顯示 |
 | `rescue` | `src/rescue.js`：spec v0.1 §7 的中斷前快照 | 書 Phase 7 的 Rescue Mode，對應物其實在 `src/recovery.js` | 用檔名對照書的人會對錯位 |
 | lineage 邊型 | v5.0 §6.3 十種 | `src/topology.js:40` 自己一組九種 | 只有三個名字重疊，混用會產生對不上的圖 |
 | `heartbeat` | `src/heartbeat.js`：主動報告機制 | v5.0 §14 `runtime_node_heartbeat`：節點存活訊號 | 把「有沒有主動報告」當成「節點活著沒」 |
 
 **五個撞名不是巧合，是缺一份名詞表的症狀。**
+
+第一個（`events`）已經在 ADR-008 定名，剩四個。**但那反而更說明問題：**
+它是靠一次 owner 裁決解掉的，而不是靠一份任何人都查得到的名詞表。
+剩下四個如果也要各自等一次裁決，成本會比寫一份 glossary 高很多。
 
 每一個單獨看都像小事，合起來是同一個結構問題：這個專案有四份規範來源
 （工程書、v5.0、spec v2.0、spec v0.1）加上一套自己長出來的實作，
