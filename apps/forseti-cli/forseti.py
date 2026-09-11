@@ -1156,6 +1156,98 @@ def cmd_reindex(args: list[str]) -> int:
         led.close()
 
 
+def cmd_claims(args: list[str]) -> int:
+    """從一份 transcript 抽出宣稱，逐一對現實驗證。階段 2 的出口條件。
+
+    只看 assistant 的 `text` block，不看 `thinking`。理由是 thinking
+    不是對使用者說的話 —— 拿它當宣稱去驗，等於把思考過程當成承諾，
+    而人在想的時候本來就會講出還沒確定的東西。
+    """
+    cl = _sibling("claims")
+    if not args:
+        print("用法：forseti.py claims <transcript.jsonl> [--limit N]",
+              file=sys.stderr)
+        return 2
+    path = Path(args[0]).expanduser()
+    if not path.exists():
+        print(f"  找不到：{path}")
+        return 1
+    limit = 0
+    if "--limit" in args:
+        i = args.index("--limit")
+        if i + 1 < len(args):
+            limit = int(args[i + 1])
+
+    texts: list[str] = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") != "assistant":
+                continue
+            c = (d.get("message") or {}).get("content")
+            if not isinstance(c, list):
+                continue
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    t = b.get("text") or ""
+                    if t.strip():
+                        texts.append(t)
+    if limit:
+        texts = texts[-limit:]
+
+    root = find_repo_root(Path(__file__).resolve().parent)
+    tally: dict[str, int] = {}
+    strength: dict[str, int] = {}
+    samples: list = []
+    n_claims = 0
+    for t in texts:
+        for got in cl.extract(t):
+            n_claims += 1
+            c = cl.Claim(text=t[:160], kind=got["kind"],
+                         subject=got.get("subject", ""))
+            if got["kind"] == "unextractable":
+                tally["UNEXTRACTABLE"] = tally.get("UNEXTRACTABLE", 0) + 1
+                continue
+            try:
+                cl.verify(c, cwd=root)
+            except Exception as e:  # noqa: BLE001
+                tally["ERROR"] = tally.get("ERROR", 0) + 1
+                continue
+            tally[c.state] = tally.get(c.state, 0) + 1
+            strength[c.strength] = strength.get(c.strength, 0) + 1
+            if len(samples) < 8 and c.state in ("REFUTED", "VERIFIED"):
+                samples.append(c)
+
+    print()
+    print(f"  {path.name}")
+    print(f"  assistant 的 text block　{len(texts):,} 則")
+    print(f"  抽出宣稱　{n_claims:,} 個")
+    print()
+    for st in ("VERIFIED", "REFUTED", "UNKNOWN", "UNEXTRACTABLE", "ERROR"):
+        if tally.get(st):
+            print(f"    {st:<16}{tally[st]:>6}")
+    if strength:
+        print()
+        print("  證據強度（v5.0 §7.2）")
+        for e in cl.STRENGTH:
+            if strength.get(e):
+                print(f"    {e}  {strength[e]:>6}   {cl.STRENGTH_MEANING[e][:34]}")
+    if samples:
+        print()
+        print("  幾個例子")
+        for c in samples:
+            print(f"    {c.state:<10}{c.subject[:44]}")
+            print(f"      {c.why_state[:70]}")
+    print()
+    print("  UNEXTRACTABLE 不是失敗。它是「有過去式動詞但找不到可查核的東西」，")
+    print("  而猜一個出來的代價比漏掉高。")
+    print()
+    return 0
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -1201,6 +1293,8 @@ def main(argv: list[str]) -> int:
         return cmd_replay(argv[2:])
     if cmd == "reindex":
         return cmd_reindex(argv[2:])
+    if cmd == "claims":
+        return cmd_claims(argv[2:])
 
     print(__doc__)
     return 2
