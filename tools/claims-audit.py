@@ -46,7 +46,33 @@ sys.path.insert(0, str(REPO / "apps" / "forseti-cli"))
 
 import claims as C  # noqa: E402
 
-DEFAULT_DIR = Path.home() / ".claude" / "projects" / "-Users-norikaoda"
+# 語料目錄 = 被觀測的那個專案，不是使用者的家目錄。
+#
+# ────────────────────────────────────────────────────
+# **2026-09-11 被 owner 抓到的一個取樣錯誤，值得完整寫下來。**
+#
+# 這裡原本寫死 `-Users-norikaoda`。那個目錄名就是 cwd 的編碼 ——
+# 它底下只會有 cwd = /Users/norikaoda 的 session。
+#
+# 我從那裡抓六個 session，然後宣布「沒有任何 session 的 cwd 是
+# Forseti repo」，還拿那個結論去推翻驗證基準、去把 B-13 升級成前提、
+# 寫進 BLOCKERS.md 與 PHASE_STATUS.md。
+#
+# 那不是發現，是同義反覆:我在一個按 cwd 分類的抽屜裡找別的 cwd。
+#
+# 反證一直在我讀過的東西裡 —— 帳本中有
+# `/Volumes/NewDrive/AI Project/Forseti/src/drift.js` 這類真實採集事件。
+# 我印出來過，沒有把它跟結論對上。
+#
+# 實際上 `~/.claude/projects/-Volumes-NewDrive-AI-Project-Forseti`
+# 有 21 個 session。那才是這套系統該看的資料:它們是在被觀測的專案裡
+# 發生的，cwd 就是 repo，相對路徑有明確的基準。
+#
+# 教訓不是「換一個目錄」。是**取樣的範圍本身會決定結論，
+# 而一個按條件分類的資料夾，不能拿來檢驗那個條件**。
+# ────────────────────────────────────────────────────
+DEFAULT_DIR = (Path.home() / ".claude" / "projects"
+               / "-Volumes-NewDrive-AI-Project-Forseti")
 
 # 一段話太長的話只印前後，中間省略。要看得到句子的形狀，
 # 不是要看完整篇 —— 完整篇會讓人放棄看。
@@ -65,10 +91,14 @@ def snippet(text: str, subject: str) -> str:
 
 
 def assistant_texts(path: Path):
-    """從一個 transcript 撈出所有 assistant 講的文字。
+    """從一個 transcript 撈出 (文字, cwd)。
 
     只撈 assistant 的。使用者講的話不是宣稱 —— 她說「你改好了嗎」
     不是在宣稱任何事，把它抽成 claim 然後判 REFUTED 是荒謬的。
+
+    **cwd 要跟著每一行走。** 硬拿這個 repo 當所有宣稱的基準,
+    等於假設每一句話都是在這裡講的。2026-09-11 在 risky.py 修過同一件事,
+    當時沒回頭改這支。
     """
     try:
         with path.open(encoding="utf-8", errors="replace") as fh:
@@ -87,7 +117,7 @@ def assistant_texts(path: Path):
                     if isinstance(block, dict) and block.get("type") == "text":
                         t = block.get("text") or ""
                         if t.strip():
-                            yield t
+                            yield t, (rec.get("cwd") or "")
     except OSError:
         return
 
@@ -132,8 +162,9 @@ def main(argv: list[str]) -> int:
 
     try:
         for f in files:
-            for text in assistant_texts(f):
+            for text, cwd in assistant_texts(f):
                 turns += 1
+                base = Path(cwd) if cwd else REPO
                 for raw in C.extract(text):
                     kinds[raw["kind"]] += 1
                     if raw["kind"] == "unextractable":
@@ -144,7 +175,7 @@ def main(argv: list[str]) -> int:
                     cl = C.Claim(text=text, kind=raw["kind"],
                                  subject=raw["subject"])
                     try:
-                        C.verify(cl, cwd=REPO, led=led)
+                        C.verify(cl, cwd=base, led=led)
                     except C.ClaimError as e:
                         states["ERROR"] += 1
                         buckets.setdefault("ERROR", []).append(

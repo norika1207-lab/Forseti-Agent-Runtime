@@ -58,7 +58,10 @@ import claims as C  # noqa: E402
 import overclaim as OC  # noqa: E402
 import owner as O  # noqa: E402
 
-DEFAULT_DIR = Path.home() / ".claude" / "projects" / "-Users-norikaoda"
+# 語料目錄 = 被觀測的那個專案。**理由與踩過的坑寫在
+# `tools/claims-audit.py` 的同一個常數上面**，那是 2026-09-11 的取樣錯誤。
+DEFAULT_DIR = (Path.home() / ".claude" / "projects"
+               / "-Volumes-NewDrive-AI-Project-Forseti")
 
 
 def assistant_blocks(path: Path) -> list[tuple[int, str, str]]:
