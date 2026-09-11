@@ -321,5 +321,79 @@ class TestSilence(unittest.TestCase):
         self.assertEqual(len(O.SILENCE), 4)
         self.assertEqual(set(O.SILENCE_MEANING), set(O.SILENCE))
 
+
+class TestFullCorpusCalibration(unittest.TestCase):
+    """2026-09-11 全量跑 30 個 session、4,139 則訊息之後補的。
+
+    每一條都附當時抓到的實際句子。**沒有出處的規則不該存在** ——
+    這張表是結構規則不是語意理解,漏掉的會落到 UNKNOWN(無害),
+    誤判的要靠實測發現再補,不預先想像。
+    """
+
+    def test_full_width_ok_is_an_acknowledgement(self):
+        """「ＯＫ」跟「OK」是同一個字,差別只在輸入法切到哪一邊。
+
+        全量跑抓到的:UNKNOWN 裡有全形的 ＯＫ,而半形的在清單裡好好的。
+        """
+        m = O.classify("ＯＫ")
+        self.assertEqual(m.kind, "ACKNOWLEDGEMENT")
+
+    def test_normalisation_keeps_the_original_text(self):
+        """正規化只用於比對。存進去的要是她真正打出來的字。
+
+        證據不能被自己的前處理改寫。
+        """
+        m = O.classify("ＯＫ")
+        self.assertEqual(m.text, "ＯＫ")
+
+    def test_a_preventive_instruction_is_not_a_correction(self):
+        """「邏輯要清楚不要搞錯」是在交代要求,不是在指出失誤。
+
+        判準是位置不是語意:錯字詞緊接在否定祈使後面。
+        """
+        m = O.classify("將這幾頁做個總結，邏輯要清楚不要搞錯")
+        self.assertNotEqual(m.kind, "CORRECTION")
+
+    def test_a_real_correction_still_lands(self):
+        """放寬不能把真的糾正一起殺掉。"""
+        m = O.classify("那台是公司同事的機器，你搞錯了 IP")
+        self.assertEqual(m.kind, "CORRECTION")
+
+    def test_do_it_again_is_not_a_correction(self):
+        """「再做一次同步吧」是新要求。
+
+        單獨一句分不出「重來(因為你做壞了)」還是「再執行一次
+        (因為時間到了)」,要分辨得知道上一輪發生什麼,
+        而這個分類器是無狀態的。跟「先做」被拿掉是同一個理由。
+        """
+        m = O.classify("再做一次同步吧，快要到終點了")
+        self.assertNotEqual(m.kind, "CORRECTION")
+
+
+class TestSummaryDeclaresItsOwnUncertainty(unittest.TestCase):
+    """統計要講出自己有多少是無知。
+
+    全量跑量到:MOVED_ON 2,638 輪裡有 2,241 輪(85%)底下是 UNKNOWN。
+    這張地圖現在主要在量「分類器分不出她在說什麼」,不是「她跳過了」。
+    """
+
+    def test_the_summary_says_how_much_is_ignorance(self):
+        items = [
+            O.Silence("MOVED_ON", 1, 2, "UNKNOWN"),
+            O.Silence("MOVED_ON", 3, 4, "UNKNOWN"),
+            O.Silence("MOVED_ON", 5, 6, "NEW_REQUEST"),
+            O.Silence("EXPLICIT_OK", 7, 8, "ACKNOWLEDGEMENT"),
+        ]
+        out = O.silence_summary(items)
+        self.assertEqual(out["moved_on_from_unknown"], 2)
+        self.assertAlmostEqual(out["moved_on_unknown_share"], 0.667, places=2)
+        self.assertIn("當線索看不是當結論", out["caveat"])
+
+    def test_no_moved_on_means_no_division_by_zero(self):
+        out = O.silence_summary([O.Silence("EXPLICIT_OK", 1, 2, "ACKNOWLEDGEMENT")])
+        self.assertEqual(out["moved_on_unknown_share"], 0.0)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

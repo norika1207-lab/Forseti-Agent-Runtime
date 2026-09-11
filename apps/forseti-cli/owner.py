@@ -55,6 +55,7 @@ UNKNOWN，其中大部分是這種。**那個比例看起來很糟，但它是�
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 
 # `build-plan.md:359` 的五類，加一個誠實的第六類。
@@ -89,9 +90,20 @@ _NOT_BLAME = r"必要|關係|差|問題|想|打算"
 _CORRECTION = (
     re.compile(r"我說過|我講過|跟你說過|不是叫你|不是說了"),
     re.compile(r"你沒做|你漏了|你忘了|還沒做|沒有做到|沒照"),
-    re.compile(r"重來|重做|再做一次|退回|改回去"),
+    # 【拿掉「再做一次」,2026-09-11 全量實測】
+    # 「再做一次同步吧，快要到終點了」被判成糾正 —— 那是新要求。
+    # 跟下面「先做」被拿掉的理由一模一樣:單獨一句分不出
+    # 「重來(因為你做壞了)」還是「再執行一次(因為時間到了)」,
+    # 要分辨得知道上一輪發生什麼,而這個分類器是無狀態的。
+    re.compile(r"重來|重做|退回|改回去"),
     re.compile(r"你(?:又|還|怎麼).{0,6}(?:錯|沒|漏|忘)"),
-    re.compile(r"不是這樣|搞錯|弄錯|寫錯|做錯"),
+    # 【否定祈使擋在前面,2026-09-11 全量實測】
+    # 「邏輯要清楚不要搞錯」是預防性指示,「因為弄錯了會出人命」是在講
+    # 後果。兩句都不是在說 AI 做錯了什麼,但都命中了「搞錯」「弄錯」。
+    #
+    # 結構判準是位置:錯字詞前面 8 個字內出現否定祈使(不要/別/避免/
+    # 不能/不可)的話,那是在交代要求不是在指出失誤。
+    re.compile(r"不是這樣|(?<!不要)(?<!別)(?<!避免)(?:搞錯|弄錯|寫錯|做錯)"),
     # 「你沒(有) X」的一般形式。負向前瞻排掉幾個不是指責的接續：
     # 「你沒有必要做」是允許不是糾正,「你沒關係」根本不是在講工作。
     #
@@ -201,45 +213,57 @@ def classify(text: str) -> OwnerMessage:
     「我的意思是」—— **那個詞組本身就在說「我沒有改變，是你誤解了」。**
     把它記成改變想法，等於把一次澄清算成一次方向變更。
     """
-    t = (text or "").strip()
-    if not t:
-        return OwnerMessage("UNKNOWN", "空訊息", t)
+    original = (text or "").strip()
+    if not original:
+        return OwnerMessage("UNKNOWN", "空訊息", original)
+
+    # 全形轉半形再比對。**這是正規化不是語意判斷** ——
+    # 「Ｏ」跟「O」是同一個字,差別只在輸入法當下切到哪一邊。
+    #
+    # 2026-09-11 全量實測抓到:30 個 session 的 UNKNOWN 裡有「ＯＫ」,
+    # 而半形的「OK」在 _ACK 清單裡好好的。一則明確的確認因為輸入法
+    # 沒切換就落進了「分不出來」。
+    #
+    # 存進 OwnerMessage 的仍然是原文 —— 正規化只用於比對,
+    # 證據要留她真正打出來的字。
+    t = unicodedata.normalize("NFKC", original)
 
     if len(t) <= ACK_MAX_CHARS and _ACK.match(t):
         return OwnerMessage("ACKNOWLEDGEMENT",
-                            f"短（{len(t)} 字）而且整句都是正面回應", t, t)
+                            f"短（{len(t)} 字）而且整句都是正面回應",
+                            original, t)
 
     hit = _first_hit(t, _CORRECTION)
     if hit:
         return OwnerMessage("CORRECTION",
-                            f"指向 AI 做了或沒做什麼：「{hit}」", t, hit)
+                            f"指向 AI 做了或沒做什麼：「{hit}」", original, hit)
 
     hit = _first_hit(t, _CLARIFY)
     if hit:
         return OwnerMessage("CLARIFICATION",
-                            f"在補充或改寫自己的說法：「{hit}」", t, hit)
+                            f"在補充或改寫自己的說法：「{hit}」", original, hit)
 
     hit = _first_hit(t, _MIND_CHANGE)
     if hit:
         return OwnerMessage("MIND_CHANGE",
-                            f"方向變了而且沒有指向 AI 的失誤：「{hit}」", t, hit)
+                            f"方向變了而且沒有指向 AI 的失誤：「{hit}」", original, hit)
 
     m = _IMPERATIVE.search(t)
     if m:
         if _QUESTION.search(t):
             return OwnerMessage("CLARIFICATION",
-                                "是問句，偏向釐清而不是指派新工作", t, m.group(0))
+                                "是問句，偏向釐清而不是指派新工作", original, m.group(0))
         return OwnerMessage("NEW_REQUEST",
-                            f"祈使或要求的形狀：「{m.group(0)}」", t, m.group(0))
+                            f"祈使或要求的形狀：「{m.group(0)}」", original, m.group(0))
 
     if _QUESTION.search(t):
-        return OwnerMessage("CLARIFICATION", "問句", t)
+        return OwnerMessage("CLARIFICATION", "問句", original)
 
     # 結構規則分不出來。**不猜。**
     return OwnerMessage(
         "UNKNOWN",
         "沒有命中任何一條結構規則。分不出來比猜錯好 —— "
-        "猜錯會把她行使擁有者的權力記成 AI 的失誤，或者相反", t)
+        "猜錯會把她行使擁有者的權力記成 AI 的失誤，或者相反", original)
 
 
 # ---------------------------------------------------------------------------
@@ -560,12 +584,35 @@ def silence_summary(items: list[Silence]) -> dict:
     for s in items:
         tally[s.kind] = tally.get(s.kind, 0) + 1
     risky = [s for s in items if s.risky]
+
+    # **這個數字要跟結果一起端出來,不准藏。**
+    #
+    # 2026-09-11 全量跑 30 個 session:MOVED_ON 有 2,638 輪,
+    # 其中 2,241 輪(85%)底下的 owner_kind 是 UNKNOWN。
+    #
+    # 也就是說,這張沉默地圖現在主要在量的是「分類器分不出她在說什麼」,
+    # 不是「她跳過了那一段」。方向是保守的(UNKNOWN 永遠不會變成
+    # EXPLICIT_OK,所以不會製造假的同意),但它會讓 risky 清單充滿噪音,
+    # 而 risky 正是這一層要給人看的東西。
+    #
+    # 把它算成一個欄位而不是寫在註解裡,是因為看結果的人需要知道
+    # 手上這個數字有多少是系統的無知。一個不講自己不確定度的指標,
+    # 比沒有指標更危險。
+    moved = [s for s in items if s.kind == "MOVED_ON"]
+    from_unknown = sum(1 for s in moved if s.owner_kind == "UNKNOWN")
+    share = (from_unknown / len(moved)) if moved else 0.0
+
     return {
         "total": len(items),
         "by_kind": tally,
         "risky": len(risky),
         "risky_lines": [s.ai_line for s in risky][:20],
+        "moved_on_from_unknown": from_unknown,
+        "moved_on_unknown_share": round(share, 3),
         "note": ("MOVED_ON 不等於同意。它的意思是「她沒有針對那段說話」，"
                  "而那可能是看過覺得沒問題，也可能是根本沒看到。"
                  "要當成同意只有一條路：她自己說出口（EXPLICIT_OK）"),
+        "caveat": (f"MOVED_ON 裡有 {round(share * 100)}% 底下是分類器的 UNKNOWN。"
+                   "那部分量的是「分不出她在說什麼」而不是「她跳過了」。"
+                   "分子含這種噪音的時候，risky 清單要當線索看不是當結論"),
     }
