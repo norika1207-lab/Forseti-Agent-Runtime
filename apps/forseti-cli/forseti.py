@@ -1248,6 +1248,100 @@ def cmd_claims(args: list[str]) -> int:
     return 0
 
 
+def cmd_overclaim(args: list[str]) -> int:
+    """三個 overclaim primitive 跑一份 transcript。
+
+    **FP-03 是這裡唯一算得出真答案的一個**，因為 Event Ledger 有 receipt：
+    一句「我親自驗過了」對得上那個 session 在帳本裡到底留下幾筆觀測。
+
+    FP-02 需要結構化的 scope、FP-07 需要宣稱數與驗證數，
+    兩者 transcript 裡都沒有，所以會是 INDETERMINATE。
+    **那不是失敗，那是這兩條判準的前提還沒備齊。**
+    """
+    oc = _sibling("overclaim")
+    el = _sibling("event_ledger")
+    if not args:
+        print("用法：forseti.py overclaim <transcript.jsonl> [--limit N]",
+              file=sys.stderr)
+        return 2
+    path = Path(args[0]).expanduser()
+    if not path.exists():
+        print(f"  找不到：{path}")
+        return 1
+    limit = 0
+    if "--limit" in args:
+        i = args.index("--limit")
+        if i + 1 < len(args):
+            limit = int(args[i + 1])
+
+    # 帳本裡每個 session 留下幾筆觀測。這就是「自己的 receipt」。
+    receipts: dict[str, int] = {}
+    try:
+        led = el.EventLedger()
+        try:
+            for rec in led.read_all():
+                n = rec.get("norm") or {}
+                sid = n.get("session_id") or n.get("agent_id") or ""
+                if sid:
+                    receipts[sid] = receipts.get(sid, 0) + 1
+        finally:
+            led.close()
+    except Exception:
+        pass
+
+    rows: list = []
+    with path.open(encoding="utf-8") as f:
+        for line in f:
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") != "assistant":
+                continue
+            c = (d.get("message") or {}).get("content")
+            if not isinstance(c, list):
+                continue
+            sid = d.get("sessionId") or ""
+            for b in c:
+                if isinstance(b, dict) and b.get("type") == "text":
+                    t = (b.get("text") or "").strip()
+                    if t:
+                        rows.append((sid, t))
+    if limit:
+        rows = rows[-limit:]
+
+    tally: dict[str, dict[str, int]] = {}
+    hits: list = []
+    for sid, text in rows:
+        own = receipts.get(sid)
+        for f in oc.inspect(text, own_receipts=own):
+            d = tally.setdefault(f.primitive_id, {})
+            d[f.verdict] = d.get(f.verdict, 0) + 1
+            if f.verdict == "POSITIVE" and len(hits) < 6:
+                hits.append((text[:60], f))
+
+    print()
+    print(f"  {path.name}　{len(rows):,} 則 assistant 文字")
+    print(f"  帳本裡有 receipt 的 session　{len(receipts)} 個")
+    print()
+    for pid in ("FP-02", "FP-03", "FP-07"):
+        d = tally.get(pid, {})
+        parts = "　".join(f"{v} {d.get(v, 0)}" for v in oc.VERDICTS)
+        print(f"    {pid}　{parts}")
+    if hits:
+        print()
+        print("  命中")
+        for text, f in hits:
+            print(f"    {f.primitive_id}　{text}…")
+            print(f"      {f.why[:76]}")
+    print()
+    print("  INDETERMINATE 多是預期的：FP-02 要結構化的 scope、")
+    print("  FP-07 要宣稱數與驗證數，transcript 裡兩者都沒有。")
+    print("  那不是判準失效，是它的前提還沒備齊。")
+    print()
+    return 0
+
+
 def main(argv: list[str]) -> int:
     root = find_repo_root(Path(__file__).resolve().parent)
     if root is None:
@@ -1295,6 +1389,8 @@ def main(argv: list[str]) -> int:
         return cmd_reindex(argv[2:])
     if cmd == "claims":
         return cmd_claims(argv[2:])
+    if cmd == "overclaim":
+        return cmd_overclaim(argv[2:])
 
     print(__doc__)
     return 2

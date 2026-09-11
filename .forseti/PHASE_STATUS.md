@@ -437,3 +437,36 @@ evidence  byteSize 13, contentHash a1c372016c6ccf88, existence true
 而那是冤枉它。
 
 **階段 1 的五項交付到此全部完成。**
+
+### 階段 2 完成，以及它第一次跑出來的那個答案（2026-09-11）
+
+五項交付全做完，最後一項是從 `src/claims.js` 移植三個 primitive
+（`apps/forseti-cli/overclaim.py`）。
+
+**第一次拿真實 transcript 跑 FP-03，結果值得留下來：**
+
+```
+FP-02   POSITIVE 0   NEGATIVE 0     INDETERMINATE 300
+FP-03   POSITIVE 0   NEGATIVE 295   INDETERMINATE 5
+FP-07   POSITIVE 0   NEGATIVE 0     INDETERMINATE 300
+```
+
+那 5 個 INDETERMINATE 全部是同一句話：**「我親自」**。
+全部是主 session 自己說的，而判準的理由是「查不到這個 session 的 receipt」。
+
+**查不到的原因是 hook 對主 session 不生效**（它的 project 是
+`/Users/norikaoda`，載不到 repo 的 settings）。
+
+所以這個結果同時是三件事：
+
+一，判準做對了。它沒有冤枉（那幾次是真的親自讀的），也沒有背書
+（它確實沒有證據）。**如果判準預設「說親自驗但沒證據等於誇大」，
+主 session 剛剛會被冤枉六次。** bible Q-07 那條原則在這裡直接兌現。
+
+二，它指出一個真實的缺口：主 session 的活動沒有被採集，
+所以關於主 session 的任何宣稱，這套系統目前都只能答「我不知道」。
+
+三，FP-02 與 FP-07 全部 INDETERMINATE 是預期的 ——
+它們要結構化的 scope 與宣稱／驗證計數，transcript 裡都沒有。
+**那不是判準失效，是它們的前提還沒備齊。** 記在這裡是為了讓下一個人
+不要看到一整欄 INDETERMINATE 就以為模組壞了。
