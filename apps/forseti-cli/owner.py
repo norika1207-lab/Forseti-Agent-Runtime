@@ -475,6 +475,14 @@ class Silence:
     owner_kind: str | None
     ai_excerpt: str = ""
     flagged: bool = False
+    # 這一輪涵蓋了哪幾行。
+    #
+    # **接線的時候才發現非有不可。** 呼叫端標記的是個別文字塊的行號,
+    # 而一輪有很多塊;拿回結果之後要說出「這一輪到底哪裡有問題」,
+    # 就得知道該輪的範圍。沒有這個欄位的話,呼叫端只能把整個 session
+    # 的理由全部攤平 —— 2026-09-11 第一次跑 tools/risky.py 就是這樣,
+    # 每一筆的理由長得一模一樣,清單等於廢了。
+    lines: frozenset = frozenset()
 
     def __post_init__(self):
         if self.kind not in SILENCE:
@@ -539,26 +547,41 @@ def silence_map(transcript_path, flagged_lines: set[int] | None = None
     #
     # 一輪 = 兩則 owner 訊息之間的所有 AI 輸出。代表那一輪的是**最後一塊**，
     # 因為那通常是報告，也是她最可能讀的那一段。
-    rounds: list[tuple[int, str]] = []
+    # 每一輪除了代表行號，還要記住它涵蓋了哪些行。
+    #
+    # **這是 2026-09-11 把四個模組接起來的時候才撞到的。**
+    #
+    # `flagged_lines` 是呼叫端給的「那幾行有未解的東西」，而呼叫端
+    # 拿到的行號是個別文字塊的 —— 一輪回應有很多塊，驗不過的宣稱
+    # 可能出現在中間任何一塊。而這裡原本只拿最後一塊的行號去比對，
+    # 於是兩邊幾乎永遠對不上，`risky` 會恆為 0。
+    #
+    # 一個永遠回 0 的風險清單，比沒有清單更糟：它看起來像「沒事」。
+    rounds: list[tuple[int, str, set[int]]] = []
     bounds = [ln for ln, _ in owner_turns]
     cur: tuple[int, str] | None = None
+    span: set[int] = set()
     bi = 0
     for ai_line, ai_text in ai_turns:
         while bi < len(bounds) and bounds[bi] < ai_line:
             if cur is not None:
-                rounds.append(cur)
+                rounds.append((cur[0], cur[1], span))
                 cur = None
+                span = set()
             bi += 1
         cur = (ai_line, ai_text)
+        span.add(ai_line)
     if cur is not None:
-        rounds.append(cur)
+        rounds.append((cur[0], cur[1], span))
 
     out: list[Silence] = []
-    for ai_line, ai_text in rounds:
+    for ai_line, ai_text, lines in rounds:
+        # 這一輪裡任何一塊被標記，整輪就算被標記。她讀的是整輪。
+        hit = bool(lines & flagged)
         nxt = next(((ln, tx) for ln, tx in owner_turns if ln > ai_line), None)
         if nxt is None:
             out.append(Silence("UNOBSERVED", ai_line, None, None,
-                               ai_text[:80], ai_line in flagged))
+                               ai_text[:80], hit, frozenset(lines)))
             continue
         owner_line, owner_text = nxt
         k = classify(owner_text).kind
@@ -570,8 +593,8 @@ def silence_map(transcript_path, flagged_lines: set[int] | None = None
             # NEW_REQUEST 或 UNKNOWN：她講了別的事。
             # **不當成同意。** 見 SILENCE 的註解。
             kind = "MOVED_ON"
-        out.append(Silence(kind, ai_line, owner_line, k,
-                           ai_text[:80], ai_line in flagged))
+        out.append(Silence(kind, ai_line, owner_line, k, ai_text[:80],
+                           hit, frozenset(lines)))
     return out
 
 

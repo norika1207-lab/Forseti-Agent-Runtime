@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import sys
+import json
 import unittest
 from pathlib import Path
 
@@ -392,6 +393,72 @@ class TestSummaryDeclaresItsOwnUncertainty(unittest.TestCase):
     def test_no_moved_on_means_no_division_by_zero(self):
         out = O.silence_summary([O.Silence("EXPLICIT_OK", 1, 2, "ACKNOWLEDGEMENT")])
         self.assertEqual(out["moved_on_unknown_share"], 0.0)
+
+
+
+
+class TestFlaggedLinesReachTheRound(unittest.TestCase):
+    """呼叫端標記的是文字塊的行號，而這裡以輪為單位。
+
+    **2026-09-11 把四個模組接起來的時候才撞到。** 一輪回應有很多塊，
+    驗不過的宣稱可能在中間任何一塊，而原本只拿最後一塊的行號去比對，
+    於是兩邊幾乎永遠對不上。
+
+    一個永遠回 0 的風險清單，比沒有清單更糟:它看起來像「沒事」。
+    """
+
+    def _write(self, rows):
+        import tempfile
+        fh = tempfile.NamedTemporaryFile("w", suffix=".jsonl",
+                                         delete=False, encoding="utf-8")
+        for r in rows:
+            fh.write(json.dumps(r, ensure_ascii=False) + "\n")
+        fh.close()
+        self.addCleanup(lambda: Path(fh.name).unlink(missing_ok=True))
+        return fh.name
+
+    def _ai(self, text):
+        return {"type": "assistant",
+                "message": {"content": [{"type": "text", "text": text}]}}
+
+    def _owner(self, text):
+        return {"type": "user", "message": {"content": text}}
+
+    def test_a_flag_in_the_middle_of_a_round_counts(self):
+        """第 2 行被標記，代表那一輪的是第 3 行。整輪要算被標記。"""
+        path = self._write([
+            self._owner("開始"),          # 1
+            self._ai("中間這塊有問題"),    # 2  ← 標記這裡
+            self._ai("最後這塊是報告"),    # 3  ← 代表這一輪
+            self._owner("下一件事"),       # 4
+        ])
+        items = O.silence_map(path, {2})
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0].flagged,
+                        "輪內任一塊被標記，整輪就該算被標記")
+
+    def test_the_round_exposes_which_lines_it_covers(self):
+        """呼叫端要說得出「這一輪哪裡有問題」，就得知道該輪的範圍。
+
+        沒有這個欄位的話只能把整個 session 的理由全部攤平 ——
+        每一筆理由長得一模一樣，清單等於廢了。
+        """
+        path = self._write([
+            self._owner("開始"),
+            self._ai("A"),
+            self._ai("B"),
+            self._owner("下一件"),
+        ])
+        items = O.silence_map(path)
+        self.assertEqual(items[0].lines, frozenset({2, 3}))
+
+    def test_an_unflagged_round_stays_unflagged(self):
+        path = self._write([
+            self._owner("開始"),
+            self._ai("沒問題"),
+            self._owner("下一件"),
+        ])
+        self.assertFalse(O.silence_map(path, {99})[0].flagged)
 
 
 

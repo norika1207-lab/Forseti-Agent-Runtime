@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import os
 import re
 import sys
 import time
@@ -368,6 +369,26 @@ class Claim:
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".forseti", "docs/sources"}
 
 
+# 裸檔名的搜尋結果快取。
+#
+# **快取的是「哪個路徑」不是「存不存在」。** 那個區別重要:
+# 路徑解析在一次執行裡是穩定的(同一個 root 找同一個名字),
+# 而檔案存不存在隨時會變 —— 把後者快取起來會讓驗證器看到過期的現實。
+#
+# 沒有這個快取的話,批次跑幾千個宣稱會讓每一個都重掃一次目錄樹,
+# 2026-09-11 實測跑超過十分鐘沒跑完。
+_RESOLVE_CACHE: dict[tuple[str, str], tuple] = {}
+
+
+def _remember(key, path, why):
+    _RESOLVE_CACHE[key] = (path, why)
+    return path, why
+
+
+# 走幾個目錄之後放棄。挑這個數字沒有理論依據,它只要滿足兩件事:
+# 大到足以走完一個正常的專案目錄,小到不會讓人以為程式當掉了。
+_WALK_BUDGET = 3000
+
 # 全大寫、用斜線分隔的東西幾乎都是列舉不是路徑。
 # 2026-09-11 實測抓到:「OBSERVED/DECLARED/INFERRED/MISSING」與
 # 「VERIFIED/REFUTED/UNKNOWN」都被路徑正則抓成路徑,然後判 REFUTED。
@@ -406,21 +427,61 @@ def resolve_subject(subject: str, cwd: Path | None = None) -> tuple[Path | None,
         return ((cwd / p) if (cwd and not p.is_absolute()) else p), "路徑"
 
     root = cwd or Path.cwd()
-    hits = []
+    key = (str(root), subject)
+    if key in _RESOLVE_CACHE:
+        return _RESOLVE_CACHE[key]
+
+    # 自己走目錄樹，不用 rglob。
+    #
+    # **2026-09-11 我在這裡連錯兩次，兩次都是同一個形狀：
+    # 以為自己設了上限，其實沒有。**
+    #
+    # 第一次：`for f in root.rglob(subject)` 外面包一個計數器。
+    # 但 rglob 吐出來的只有「匹配的項目」—— 一個不存在的檔名在家目錄底下
+    # 會走完整棵樹然後吐出零個，計數器永遠是 0，上限永遠不會觸發。
+    # 限制了產出，沒有限制工作量。
+    #
+    # 第二次：加快取。快取擋得住重複的 key，擋不住第一次那幾千個不同的 key。
+    #
+    # 真正要限制的是遍歷本身，所以這裡自己走。
+    hits: list[Path] = []
+    walked = 0
     try:
-        for f in root.rglob(subject):
-            if any(part in _SKIP_DIRS or part.startswith(".") for part in f.parts):
+        stack = [root]
+        while stack:
+            d = stack.pop()
+            walked += 1
+            if walked > _WALK_BUDGET:
+                return _remember(key, None,
+                                 f"在 {root} 底下找「{subject}」走過 "
+                                 f"{_WALK_BUDGET:,} 個目錄還沒定案，範圍太大，停手。"
+                                 "這句話是關於我自己的，不是關於那個檔案")
+            try:
+                with os.scandir(d) as it:
+                    for e in it:
+                        name = e.name
+                        if name.startswith(".") or name in _SKIP_DIRS:
+                            continue
+                        if e.is_dir(follow_symlinks=False):
+                            stack.append(Path(e.path))
+                        elif name == subject:
+                            hits.append(Path(e.path))
+                            if len(hits) > 1:
+                                stack.clear()
+                                break
+            except OSError:
                 continue
-            hits.append(f)
-            if len(hits) > 1:
-                break
     except OSError:
-        return None, "搜尋失敗"
+        return _remember(key, None, "搜尋失敗")
+
     if len(hits) == 1:
-        return hits[0], f"裸檔名，在 repo 裡找到唯一一個：{hits[0]}"
+        return _remember(key, hits[0],
+                         f"裸檔名，在搜尋範圍裡找到唯一一個：{hits[0]}")
     if not hits:
-        return None, f"裸檔名「{subject}」在 repo 裡找不到，但也不知道它本來指哪裡"
-    return None, f"裸檔名「{subject}」對到多個檔案，不猜是哪一個"
+        return _remember(key, None,
+                         f"裸檔名「{subject}」在搜尋範圍裡找不到，"
+                         "但也不知道它本來指哪裡")
+    return _remember(key, None, f"裸檔名「{subject}」對到多個檔案，不猜是哪一個")
 
 
 def _disk(path: str, cwd: Path | None = None) -> dict:
@@ -617,6 +678,33 @@ def verify(claim: Claim, *, cwd: Path | None = None, led=None) -> Claim:
         claim.to("UNKNOWN", f"量不到 {claim.subject}（權限或路徑），不是不存在")
         return claim
     if not ev.get("existence"):
+        # 相對路徑，而且帳本裡沒有它的證據 —— **我不知道基準在哪裡。**
+        #
+        # ────────────────────────────────────────────
+        # 2026-09-11 把四個模組接起來之後才看清楚的一件事。
+        #
+        # 「dist/index.js」要相對於什麼才算數?我試過兩個答案,兩個都錯:
+        #
+        #   拿 Forseti repo 當基準   →  別的專案的檔案全被判成假的
+        #   拿 session 的 cwd 當基準 →  這個 repo 裡真的存在的檔案
+        #                               (docs/build-plan.md、ledger.py)
+        #                               全被判成假的
+        #
+        # 兩種誤判的方向剛好相反,而那正說明問題不在規則:**一個相對路徑
+        # 少了它的基準,本來就沒有真假可言。** cwd 也不是基準 ——
+        # 這些 session 的 cwd 是家目錄,而它們開發的專案在外接碟上。
+        #
+        # 那個基準只有一個地方有:帳本裡 hook 當時記下的 FILE_WRITE。
+        # 帳本沒有的話,誠實的答案是「我不知道」,不是「你說謊」。
+        #
+        # **這讓 B-13(hook 沒註冊、採集不到)從一個缺口變成前提。**
+        # 沒有採集,這一層永遠只能回答 UNKNOWN。
+        # ────────────────────────────────────────────
+        if not claim.subject.startswith(("/", "~")) and from_ledger is None:
+            claim.to("UNKNOWN",
+                     f"「{claim.subject}」是相對路徑，而帳本裡沒有它的證據。"
+                     "不知道它相對於哪裡，就沒有辦法說它不存在")
+            return claim
         # 量到它不存在。但「量到不存在」跟「有資格說這個人在說謊」
         # 是兩件事 —— 見 can_refute()。
         ok, why_not = can_refute(claim.subject, resolved, cwd)
@@ -626,7 +714,12 @@ def verify(claim: Claim, *, cwd: Path | None = None, led=None) -> Claim:
         # 措辭要精確:驗證器只看得到一個 repo。一個宣稱可能在講別的
         # 專案(2026-09-11 實測抓到:`src/forseti` 是隔壁 Moirai 的目錄)。
         # 寫「不存在」太絕對,寫「在這裡找不到」才是這個驗證器真正知道的。
-        claim.to("REFUTED", f"{claim.subject} 在這個 repo 裡找不到")
+        # 措辭要精確到「在哪裡找不到」。寫「在這個 repo 裡」是錯的 ——
+        # 基準是呼叫端給的 cwd,而它不一定是 repo(2026-09-11 接線之後
+        # 它變成 session 的工作目錄)。一句講錯自己座標的判定,
+        # 會讓讀的人以為系統查過了它其實沒查的地方。
+        where = str(resolved.parent) if resolved.parent != resolved else str(cwd or "")
+        claim.to("REFUTED", f"{claim.subject} 在 {where} 找不到")
         claim.raise_strength("E2", "stat 確定性檢查：檔案不存在")
         return claim
 

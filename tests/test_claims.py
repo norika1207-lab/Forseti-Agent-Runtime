@@ -361,6 +361,67 @@ class TestCanRefute(Case):
         self.assertEqual(c.state, "UNKNOWN")
 
 
+class TestRelativePathsNeedALedger(Case):
+    """相對路徑少了基準，本來就沒有真假可言。
+
+    2026-09-11 把四個模組接起來之後才看清楚的。兩個基準都試過,
+    兩種誤判方向剛好相反:
+
+        拿 Forseti repo 當基準   →  別的專案的檔案全被判成假的
+        拿 session 的 cwd 當基準 →  這個 repo 裡真的存在的檔案
+                                    (docs/build-plan.md、ledger.py)
+                                    全被判成假的
+
+    方向相反正說明問題不在規則。基準只有一個地方有:帳本裡 hook
+    當時記下的 FILE_WRITE。**這讓 B-13 從一個缺口變成前提。**
+    """
+
+    def test_a_relative_path_without_ledger_evidence_is_unknown(self):
+        c = C.Claim(text="x", kind="file", subject="dist/index.js")
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "UNKNOWN")
+        self.assertIn("不知道它相對於哪裡", c.why_state)
+
+    def test_an_absolute_path_still_gets_judged(self):
+        """這條放寬只針對相對路徑。絕對路徑自己帶著基準。"""
+        c = C.Claim(text="x", kind="file",
+                    subject=str(self.tmp / "nope.py"))
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "REFUTED")
+
+    def test_the_refutation_says_where_it_actually_looked(self):
+        """措辭不能寫「在這個 repo 裡」—— 基準是呼叫端給的,不一定是 repo。
+
+        一句講錯自己座標的判定,會讓讀的人以為系統查過了它其實沒查的地方。
+        """
+        c = C.Claim(text="x", kind="file", subject=str(self.tmp / "nope.py"))
+        C.verify(c, cwd=self.tmp)
+        self.assertIn(str(self.tmp), c.why_state)
+
+    def test_a_huge_search_scope_gives_up_and_says_so(self):
+        """走太多目錄就停手，而且說清楚那是關於自己的陳述。
+
+        2026-09-11 在這裡連錯兩次,兩次都是「以為設了上限其實沒有」:
+        先在 rglob 外面包計數器(它只數吐出來的匹配項,不數走過的目錄),
+        再加快取(擋得住重複的 key,擋不住第一次那幾千個不同的 key)。
+        真正要限制的是遍歷本身。
+        """
+        C._RESOLVE_CACHE.clear()
+        deep = self.tmp
+        for i in range(30):
+            deep = deep / f"d{i}"
+        deep.mkdir(parents=True)
+        old = C._WALK_BUDGET
+        try:
+            C._WALK_BUDGET = 5
+            path, why = C.resolve_subject("nowhere.py", cwd=self.tmp)
+            self.assertIsNone(path)
+            self.assertIn("範圍太大", why)
+        finally:
+            C._WALK_BUDGET = old
+            C._RESOLVE_CACHE.clear()
+
+
 class TestEvidenceFromLedger(Case):
     """階段 1 的成果直接用上：帳本裡當時的證據。"""
 
@@ -510,14 +571,18 @@ class TestUncertaintyFallsToUnknownNotRefuted(Case):
     def test_refutation_says_where_it_looked(self):
         """判 REFUTED 的時候要講清楚是在哪裡找不到。
 
-        驗證器只看得到一個 repo，而宣稱可能在講別的專案。
-        寫「不存在」太絕對，那不是這個驗證器真正知道的。
+        寫「不存在」太絕對,那不是這個驗證器真正知道的。
+        它只在一個地方找過,而那個地方要講出來。
+
+        2026-09-11 更新:原本寫死「在這個 repo 裡」,但基準是呼叫端給的
+        cwd,接線之後它變成 session 的工作目錄。**一句講錯自己座標的
+        判定,比不講更糟**,所以改成報實際找過的目錄。
         """
-        c = C.Claim(text="x", kind="file",
-                    subject=str(self.tmp / "sub" / "gone.py"))
+        target = self.tmp / "sub" / "gone.py"
+        c = C.Claim(text="x", kind="file", subject=str(target))
         C.verify(c)
         self.assertEqual(c.state, "REFUTED")
-        self.assertIn("在這個 repo 裡找不到", c.why_state)
+        self.assertIn(str(target.parent), c.why_state)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
