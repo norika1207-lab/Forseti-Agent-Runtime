@@ -450,5 +450,75 @@ class TestInboxReportingChannel(F05Case):
             self.led.dispatch(self.s1, "worker-b", "亂填", can_report="maybe")
 
 
+
+class TestB12Race(F05Case):
+    """B-12 的真正原因：一筆剛寫入的事件查不到自己。
+
+    兩次間歇性失敗（2026-09-10、09-11），斷言都是
+    `no_event_activity` 應該是 0.0 而實際是 1.0。
+
+    原因不是原本猜的 exFAT 寫入延遲（`tools/probe-stress.py` 兩個
+    檔案系統各跑 300 輪都沒漏抓，那個推論被推翻），是 `worker_event()`
+    裡用了兩次 `time.time()`：一次給事件的 at，一次給 last_progress_at。
+    而 `check_liveness()` 查的是 `at > last_progress_at - 0.001`。
+    """
+
+    def test_the_event_and_the_timestamp_use_the_same_clock_reading(self):
+        """一筆 WORKER_PROGRESS 之後，那筆事件要查得到自己。"""
+        (self.tmp / "build.log").write_text("start\n", encoding="utf-8")
+        self.led.check_liveness(self.s1)
+        self.age_step(7200)
+
+        self.led.worker_event("WORKER_PROGRESS", self.s1, "第 3 個模組",
+                              worker="worker-a")
+        row = self.led.con.execute(
+            "SELECT at FROM events WHERE step_id=? AND kind='WORKER_PROGRESS'"
+            " ORDER BY event_id DESC LIMIT 1", (self.s1,)).fetchone()
+        last = self.led.con.execute(
+            "SELECT last_progress_at FROM steps WHERE step_id=?",
+            (self.s1,)).fetchone()[0]
+        self.assertEqual(row[0], last,
+                         "事件的 at 與 last_progress_at 必須是同一個讀數")
+
+    def test_a_gap_between_the_two_reproduces_the_bug(self):
+        """人工把間隔拉開，確認那就是原因。
+
+        這條測試在修好之後仍然會過 —— 它測的是「如果兩個時間戳不一致
+        會怎樣」，而不是現在的程式碼會不會產生不一致。
+        留著是為了讓下一個人看得到那個因果，不用重新推一次。
+        """
+        import time as _t
+        (self.tmp / "build.log").write_text("start\n", encoding="utf-8")
+        self.age_step(7200)
+        now = _t.time()
+        self.led.con.execute(
+            "INSERT INTO events (at,task_id,step_id,kind,cause,actor)"
+            " VALUES (?,?,?,?,?,?)",
+            (now, self.t, self.s1, "WORKER_PROGRESS", "還在跑", "w"))
+        self.led.con.execute(
+            "UPDATE steps SET last_progress_at=? WHERE step_id=?",
+            (now + 0.010, self.s1))
+        self.led.con.commit()
+
+        a = self.led.check_liveness(self.s1)
+        self.assertEqual(a.factors["no_event_activity"], 1.0,
+                         "差 10ms 的話，那筆事件就查不到自己 —— 這就是 B-12")
+
+    def test_reported_progress_lowers_the_risk(self):
+        """修好之後的實際效果：回報過進度的 worker 不該被判停滯。
+
+        那是這個 bug 真正的傷害 —— 它讓一個正在做事而且有講話的 worker
+        看起來像死掉了。
+        """
+        (self.tmp / "build.log").write_text("start\n", encoding="utf-8")
+        self.led.check_liveness(self.s1)
+        self.age_step(7200)
+        self.assertTrue(self.led.check_liveness(self.s1).suspect)
+
+        self.led.worker_event("WORKER_PROGRESS", self.s1, "還在跑", worker="w")
+        after = self.led.check_liveness(self.s1)
+        self.assertFalse(after.suspect)
+        self.assertEqual(after.factors["no_event_activity"], 0.0)
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -377,7 +377,7 @@ class Ledger:
     def _event(self, kind: str, cause: str, actor: str = "system",
                task_id: str = "", step_id: str = "",
                from_state: str = "", to_state: str = "", payload=None,
-               idem_key: str | None = None) -> bool:
+               idem_key: str | None = None, at: float | None = None) -> bool:
         """記一筆事件。回傳 False 代表這個 idem_key 已經記過,這次是重複。
 
         F04 §4：Events are durable and idempotent. Duplicate completion
@@ -388,7 +388,8 @@ class Ledger:
             self.con.execute(
                 "INSERT INTO events (at,task_id,step_id,kind,from_state,to_state,"
                 "cause,actor,payload,idem_key) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                (time.time(), task_id, step_id, kind, from_state, to_state, cause, actor,
+                (at if at is not None else time.time(),
+                 task_id, step_id, kind, from_state, to_state, cause, actor,
                  json.dumps(payload, ensure_ascii=False) if payload is not None else None,
                  idem_key))
         except sqlite3.IntegrityError:
@@ -740,12 +741,29 @@ class Ledger:
                                (step_id,)).fetchone()
         if row is None:
             raise TransitionError(f"沒有這個步驟：{step_id}")
+        # 【一個時間戳,不是兩個】B-12 的真正原因。
+        #
+        # 原本這裡是兩次 time.time():一次給事件的 at,一次給
+        # last_progress_at。而 check_liveness() 查的是
+        # `at > last_progress_at - 0.001`(見那個方法裡的 SQL)。
+        #
+        # 那兩行之間只要超過 1 毫秒 —— I/O 慢、sqlite commit、GC 都會 ——
+        # **剛寫進去的那筆事件就查不到自己**,於是 no_event_activity
+        # 從 0.0 變成 1.0,一個剛回報過進度的 worker 被判成沒有事件活動。
+        #
+        # 症狀是間歇性的,因為那兩行通常很快。2026-09-10 與 09-11
+        # 各撞到一次,兩次都重現不了,直到 09-11 人工把間隔拉到 10ms
+        # 才確定(tools/probe-stress.py 順便推翻了原本「exFAT 寫入延遲」
+        # 那個猜測:兩個檔案系統各跑 300 輪都沒有漏抓)。
+        now = time.time()
         fresh = self._event(kind, cause, actor=worker or "worker", task_id=row[0],
-                            step_id=step_id, payload=payload, idem_key=idem_key)
+                            step_id=step_id, payload=payload, idem_key=idem_key,
+                            at=now)
         if fresh and kind == "WORKER_PROGRESS":
             # 進度訊號要留時間戳,F05 的停滯偵測靠它分辨「久」與「卡住」。
+            # 用同一個 now,不要再呼叫一次 time.time()。
             self.con.execute("UPDATE steps SET last_progress_at=? WHERE step_id=?",
-                             (time.time(), step_id))
+                             (now, step_id))
             self.con.commit()
         return fresh
 
