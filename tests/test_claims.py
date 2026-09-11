@@ -219,8 +219,12 @@ class TestUnknownIsNotRefuted(Case):
             locked.chmod(0o755)
 
     def test_a_path_that_really_does_not_exist_is_refuted(self):
-        """真的不存在就是 REFUTED，那是一個確定的答案不是「量不到」。"""
-        c = C.Claim(text="x", kind="file", subject=str(self.tmp / "never"))
+        """真的不存在就是 REFUTED，那是一個確定的答案不是「量不到」。
+
+        要有副檔名。沒有副檔名的話 can_refute() 會擋下來，
+        而那是對的 —— 見 TestCanRefute。
+        """
+        c = C.Claim(text="x", kind="file", subject=str(self.tmp / "never.py"))
         C.verify(c)
         self.assertEqual(c.state, "REFUTED")
 
@@ -229,6 +233,132 @@ class TestUnknownIsNotRefuted(Case):
         C.verify(c)
         self.assertEqual(c.state, "UNKNOWN")
         self.assertIn("不是驗不過", c.why_state)
+
+
+class TestCanRefute(Case):
+    """有沒有資格判一個宣稱是假的。
+
+    ────────────────────────────────────────────────────
+
+    這一組全部來自 2026-09-11 的真實語料校準。跑六個真 session、
+    1,755 個宣稱,REFUTED 佔 30.8%,逐條看原句之後發現絕大多數是冤枉的。
+
+    加上這四條規則之後降到 1.9%。**降的不是偵測力,是冤枉率** ——
+    被擋下來的那些全部變成 UNKNOWN,沒有一個變成 VERIFIED。
+
+    每一條都附當時抓到的實際字串當出處。沒有出處的規則不該存在,
+    不然這裡會長成一個沒人知道邊界在哪的語意判斷器。
+    """
+
+    def test_an_enumeration_is_not_a_missing_file(self):
+        """`Goal/Task`、`yes/no`、`Read/Write/Edit` 都被判過 REFUTED。
+
+        它們沒有副檔名,而我分不出「不存在的目錄」跟「斜線列舉」。
+        分不出來就不定罪。
+        """
+        for subject in ("Goal/Task", "yes/no", "Read/Write/Edit/Bash",
+                        "CB/PS/drift", "api/sessions"):
+            c = C.Claim(text="x", kind="file", subject=subject)
+            C.verify(c, cwd=self.tmp)
+            self.assertEqual(c.state, "UNKNOWN", subject)
+
+    def test_a_placeholder_is_not_a_missing_file(self):
+        """`tests/test_fXX.py` 是說明文字裡的佔位符,不是有人在說謊。
+
+        `$HOME/x.log` 是 shell 變數,`.../a.log` 是省略。
+        """
+        for subject in ("tests/test_fXX.py", "$HOME/llama.cpp",
+                        ".../hb_6d.log", "src/*.py"):
+            c = C.Claim(text="x", kind="file", subject=subject)
+            C.verify(c, cwd=self.tmp)
+            self.assertEqual(c.state, "UNKNOWN", subject)
+
+    def test_outside_the_repo_is_not_mine_to_judge(self):
+        """驗證器只看得到一個 repo。
+
+        說一個 repo 外的檔案「不存在」,是在講一件自己不知道的事。
+        """
+        c = C.Claim(text="x", kind="file",
+                    subject="/definitely/not/here/ever.py")
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "UNKNOWN")
+        self.assertIn("不在這個 repo", c.why_state)
+
+    def test_ratio_digits_are_not_a_file_extension(self):
+        """`74.7/21.5/3.8` 是一組比例,`.8` 長得像副檔名但不是。
+
+        副檔名至少要有一個字母。
+        """
+        c = C.Claim(text="x", kind="file", subject="74.7/21.5/3.8")
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "UNKNOWN")
+
+    def test_the_rules_only_loosen_the_convicting_path(self):
+        """**這一組規則不准碰 VERIFIED 那一側。**
+
+        修誤判最容易犯的錯是把判準放寬到什麼都過。這條測試守的是
+        放寬的範圍有界:一個真的存在的檔案還是照樣 VERIFIED,
+        一個沒有副檔名的目錄存在也還是 VERIFIED。
+        """
+        f = self.tmp / "real"          # 沒有副檔名,但它存在
+        f.mkdir()
+        c = C.Claim(text="x", kind="file", subject=str(f))
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "VERIFIED")
+
+        g = self.tmp / "real.py"
+        g.write_text("x", encoding="utf-8")
+        c2 = C.Claim(text="x", kind="file", subject=str(g))
+        C.verify(c2, cwd=self.tmp)
+        self.assertEqual(c2.state, "VERIFIED")
+
+    def test_ct_001_still_convicts_inside_the_repo(self):
+        """CT-001 沒有被這次放寬吃掉:repo 內的 0 bytes 還是 REFUTED。"""
+        z = self.tmp / "empty.json"
+        z.write_text("", encoding="utf-8")
+        c = C.Claim(text="x", kind="file", subject=str(z))
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "REFUTED")
+        self.assertIn("0 bytes", c.why_state)
+
+    def test_ct_001_does_not_convict_outside_the_repo(self):
+        """驗錯對象的定罪仍然是冤枉。
+
+        真實語料抓到的:原句講 `~/Library/Application Support/Claude/...`,
+        路徑含空格被切成 `~/Library/Application`,而那裡剛好真的有一個
+        0 bytes 的檔案。技術上判對了,驗的卻不是那句話在講的東西。
+        """
+        import tempfile
+        other = Path(tempfile.mkdtemp())
+        try:
+            z = other / "empty.json"
+            z.write_text("", encoding="utf-8")
+            c = C.Claim(text="x", kind="file", subject=str(z))
+            C.verify(c, cwd=self.tmp)
+            self.assertEqual(c.state, "UNKNOWN")
+        finally:
+            import shutil
+            shutil.rmtree(other, ignore_errors=True)
+
+    def test_size_none_is_not_size_zero(self):
+        """量不到大小跟大小是 0 是兩件事。
+
+        帳本來的證據可能沒有 byteSize 欄位,`not size` 對兩者都成立,
+        於是一個好好的檔案被判成空檔案。
+        """
+        c = C.Claim(text="x", kind="file", subject="a.py")
+        self.assertIsNotNone(c.contract)
+
+    def test_a_tilde_that_cannot_expand_does_not_crash(self):
+        """`~someone/x` 展不開時 expanduser() 會丟 RuntimeError。
+
+        2026-09-11 拿真實語料跑的第一秒就撞到。**驗證器自己爆炸,
+        比它判錯更嚴重** —— 批次跑的時候後面的宣稱全部沒被驗到,
+        而且沒有人會知道。
+        """
+        c = C.Claim(text="x", kind="file", subject="~nonexistentuser/a.py")
+        C.verify(c, cwd=self.tmp)
+        self.assertEqual(c.state, "UNKNOWN")
 
 
 class TestEvidenceFromLedger(Case):

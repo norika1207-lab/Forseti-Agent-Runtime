@@ -142,7 +142,11 @@ PAST_TENSE = (
 )
 
 # 路徑：至少一個斜線或一個副檔名，而且不是句子裡的一般文字。
-_PATH = re.compile(r"(?:[\w.~-]+/)+[\w.-]+|\b[\w-]+\.(?:py|js|mjs|ts|md|json|"
+#
+# 開頭的 `/` 要吃進來。2026-09-11 拿真實 transcript 跑才發現漏了：
+# 「/Users/norikaoda」被抽成「Users/norikaoda」，相對於 repo 當然找不到，
+# 然後被判 REFUTED。一個真的存在的目錄被判成假的，只因為少吃一個字元。
+_PATH = re.compile(r"\$?/?(?:[$\w.~-]+/)+[\w.-]+|\b[\w-]+\.(?:py|js|mjs|ts|md|json|"
                    r"jsonl|html|css|txt|yml|yaml|toml|sh|db|sql)\b")
 # 數字：整數、小數、百分比、含千分位。
 _NUMBER = re.compile(r"\b\d+(?:,\d{3})*(?:\.\d+)?%?\b")
@@ -391,7 +395,14 @@ def resolve_subject(subject: str, cwd: Path | None = None) -> tuple[Path | None,
     if looks_like_enumeration(subject):
         return None, f"「{subject}」看起來是用斜線分隔的列舉，不是路徑"
     if "/" in subject or subject.startswith("~"):
-        p = Path(subject).expanduser()
+        try:
+            p = Path(subject).expanduser()
+        except (RuntimeError, OSError) as e:
+            # `~someone/x` 展不開的時候 expanduser() 會丟 RuntimeError。
+            # 2026-09-11 拿真實 transcript 跑的第一秒就撞到,而且它不是誤判,
+            # 是整個 verify() 炸掉 —— 一個驗證器自己爆炸,比它判錯更嚴重,
+            # 因為批次跑的時候後面的宣稱全部沒被驗到,而且沒人會知道。
+            return None, f"「{subject}」的 ~ 展不開（{e}），沒辦法對到路徑"
         return ((cwd / p) if (cwd and not p.is_absolute()) else p), "路徑"
 
     root = cwd or Path.cwd()
@@ -458,6 +469,74 @@ def _disk(path: str, cwd: Path | None = None) -> dict:
         return {"existence": True, "byteSize": st.st_size, "contentHash": None}
     return {"existence": True, "byteSize": len(data),
             "contentHash": hashlib.sha256(data).hexdigest()[:16]}
+
+
+# 佔位符。真實路徑不長這樣,而文件與說明裡到處都是。
+# `tests/test_fXX.py`、`<name>.json`、`src/*.py` —— 拿這些去 stat
+# 當然找不到,然後判一個人在說謊。
+# `$HOME/x` 是 shell 變數,`.../x` 是省略。兩種都在真實 transcript 裡
+# 大量出現(貼指令、貼路徑摘要),而它們都不是可以去 stat 的東西。
+_PLACEHOLDER = re.compile(r"[*?<>{}$]|\.\.\.|([A-Z])\1{1,}|\bXX+\b|\bNNN?\b")
+
+# 最後一段有沒有副檔名。**點後面至少要有一個字母。**
+# 「74.7/21.5/3.8」的 `.8` 長得像副檔名但不是 —— 那是一組比例數字,
+# 2026-09-11 真實語料抓到它被判 REFUTED。
+# 「Midjourney...」點後面是空的,不算;「9/8」沒有點,不算。
+_HAS_EXT = re.compile(r"\.(?=[A-Za-z0-9]{1,8}$)[A-Za-z0-9]*[A-Za-z][A-Za-z0-9]*$")
+
+
+def can_refute(subject: str, resolved: Path, cwd: Path | None) -> tuple[bool, str]:
+    """這個宣稱,驗證器有沒有資格判它假。
+
+    ────────────────────────────────────────────────────
+
+    **REFUTED 是這套系統唯一的定罪輸出。** 它說的是「你講了一件假的事」。
+
+    2026-09-11 拿六個真實 session 跑出來:1,755 個宣稱裡 541 個 REFUTED,
+    30.8%。逐條看原句,絕大多數是冤枉的 —— `Goal/Task` 是列舉不是路徑,
+    `github.com/...` 是網址,`9/8` 是日期,`/api/tokens` 是別的專案的端點。
+
+    一個被冤枉的 REFUTED,傷害比十個漏掉的假宣稱大得多。人只要被冤枉
+    一次就不會再信任整套判定,而那正好殺死北極星(不讓使用者變成 QA)。
+
+    所以門檻改成這一句:**只有在驗證器真的有能力驗、而且真的驗了、
+    答案是否定的時候,才給 REFUTED。其餘一律 UNKNOWN。**
+
+    三條都是結構規則,不讀語意(`docs/build-plan.md:350`)。回傳
+    (可不可以定罪, 為什麼不行)。
+
+    ## 這裡最容易犯的錯
+
+    修誤判的時候最容易犯的錯是把判準放寬到什麼都過。我 2026-09-11
+    在 `_disk()` 的註解裡寫過這句話,寫完不到五分鐘自己犯了一次
+    (把「真的不存在」也併進 unknown)。
+
+    這三條刻意都不碰 VERIFIED 那一側:一個存在的檔案還是照驗、
+    CT-001 的 0 bytes 還是照判 REFUTED。動到的只有定罪這條路徑,
+    所以放寬的範圍是有界的。
+    """
+    if _PLACEHOLDER.search(subject):
+        return False, f"「{subject}」看起來是佔位符不是真的路徑"
+
+    if not _HAS_EXT.search(subject):
+        # 沒有副檔名的時候,我分不出「不存在的目錄」跟「用斜線分隔的列舉」。
+        # 分不出來就不定罪 —— 這是 bible Q-07 的形式。
+        #
+        # 代價是誠實的:一個人宣稱建立了 src/newdir 而沒建立,會變成
+        # UNKNOWN 不是 REFUTED。但 UNKNOWN 不是放過,它是「還沒驗」,
+        # 下游仍然看得到它。
+        return False, (f"「{subject}」沒有副檔名，分不出是目錄路徑還是"
+                       "用斜線分隔的列舉，不猜")
+
+    if cwd is not None:
+        try:
+            resolved.resolve().relative_to(Path(cwd).resolve())
+        except (ValueError, OSError):
+            # 落在 repo 外面。驗證器只看得到一個 repo,說它「不存在」
+            # 是在講一件自己不知道的事。
+            return False, f"「{subject}」不在這個 repo 底下，不在能驗的範圍內"
+
+    return True, ""
 
 
 def evidence_from_ledger(subject: str, led=None) -> dict | None:
@@ -538,6 +617,12 @@ def verify(claim: Claim, *, cwd: Path | None = None, led=None) -> Claim:
         claim.to("UNKNOWN", f"量不到 {claim.subject}（權限或路徑），不是不存在")
         return claim
     if not ev.get("existence"):
+        # 量到它不存在。但「量到不存在」跟「有資格說這個人在說謊」
+        # 是兩件事 —— 見 can_refute()。
+        ok, why_not = can_refute(claim.subject, resolved, cwd)
+        if not ok:
+            claim.to("UNKNOWN", why_not)
+            return claim
         # 措辭要精確:驗證器只看得到一個 repo。一個宣稱可能在講別的
         # 專案(2026-09-11 實測抓到:`src/forseti` 是隔壁 Moirai 的目錄)。
         # 寫「不存在」太絕對,寫「在這裡找不到」才是這個驗證器真正知道的。
@@ -551,8 +636,26 @@ def verify(claim: Claim, *, cwd: Path | None = None, led=None) -> Claim:
         return claim
 
     size = ev.get("byteSize")
+    if size is None:
+        # 量得到它存在但量不到大小(讀不到內容、或帳本那筆證據沒有這個欄位)。
+        # **None 不是 0。** 2026-09-11 真實語料抓到:帳本來的證據少那個欄位,
+        # 於是 `not size` 成立,一個好好的檔案被判成空檔案。
+        claim.to("UNKNOWN", f"{claim.subject} 存在，但量不到大小")
+        return claim
     if not size:
-        # CT-001。
+        # CT-001。定罪之前一樣要問有沒有資格 ——
+        #
+        # 2026-09-11 真實語料抓到一個漂亮的例子:原句講的是
+        # `~/Library/Application Support/Claude/...`,路徑含空格被正則切成
+        # `~/Library/Application`,而那裡剛好真的有一個 0 bytes 的檔案
+        # (某個程式被同樣的空格問題咬到留下的)。於是驗證器「正確地」
+        # 判了一個 0 bytes,但它驗的根本不是那句話在講的東西。
+        #
+        # **一個技術上成立的定罪,驗錯了對象,仍然是冤枉。**
+        ok, why_not = can_refute(claim.subject, resolved, cwd)
+        if not ok:
+            claim.to("UNKNOWN", why_not)
+            return claim
         claim.to("REFUTED",
                  f"{claim.subject} 存在但是 0 bytes。建立了一個空檔案，"
                  "跟沒建立對使用者是一樣的")
