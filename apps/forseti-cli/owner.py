@@ -413,3 +413,159 @@ def from_transcript(path) -> list[tuple[int, str]]:
             if is_owner_text(text):
                 out.append((i, text))
     return out
+
+
+# ---------------------------------------------------------------------------
+# 她的沉默（build-plan.md:363）
+# ---------------------------------------------------------------------------
+
+# 一段 AI 輸出之後，她做了什麼。
+#
+# **第三態 MOVED_ON 是這一整塊的理由。**
+#
+# 沉默有兩種完全不同的意思：她看過了覺得沒問題（默許），
+# 或者她根本沒看到。兩者在 transcript 裡長得一模一樣 ——
+# 都是「她沒有針對那段說話」。
+#
+# 把它們合成一類的代價是不對稱的：一個她漏看的錯誤會被記成她同意過，
+# 而「owner 同意過」在這個系統裡是最強的證據等級（E4 的 owner-confirmed）。
+# 用沉默去餵那一級，等於讓系統自己發明權威。
+SILENCE = ("EXPLICIT_OK", "RESPONDED", "MOVED_ON", "UNOBSERVED")
+
+SILENCE_MEANING = {
+    "EXPLICIT_OK": "她明確說了好、對、繼續。那是默許，而且說得出口",
+    "RESPONDED": "她針對內容說了話（糾正、澄清、改變方向）。不是沉默",
+    "MOVED_ON": "她沒有回應內容，直接講下一件事。**可能是默許，"
+                "也可能是沒看到 —— 這兩者分不出來，所以不准當成同意**",
+    "UNOBSERVED": "後面沒有她的訊息了。可能還沒看到，可能 session 結束了",
+}
+
+
+@dataclass(frozen=True)
+class Silence:
+    """一段 AI 輸出，與她接下來的反應。"""
+
+    kind: str
+    ai_line: int
+    owner_line: int | None
+    owner_kind: str | None
+    ai_excerpt: str = ""
+    flagged: bool = False
+
+    def __post_init__(self):
+        if self.kind not in SILENCE:
+            raise ValueError(f"不是合法的沉默類型：{self.kind}")
+
+    @property
+    def risky(self) -> bool:
+        """這一段沉默值不值得拿出來問。
+
+        `flagged` 是呼叫端給的：那一段 AI 輸出裡有沒有未解的東西
+        （驗不過的宣稱、標成 UNKNOWN 的判定、明說做不到的事）。
+
+        **被標記過而她只是 MOVED_ON，那是最值得問的組合** ——
+        因為那正是「她可能沒看到」與「那裡真的有問題」重疊的地方。
+        """
+        return self.flagged and self.kind in ("MOVED_ON", "UNOBSERVED")
+
+
+def silence_map(transcript_path, flagged_lines: set[int] | None = None
+                ) -> list[Silence]:
+    """走一遍 transcript，把每一段 AI 輸出配上她接下來的反應。
+
+    `flagged_lines` 是那些「裡面有未解的東西」的 AI 行號，由呼叫端給。
+    這個函式自己不判斷內容有沒有問題 —— 那是 claims 與 overclaim 的事，
+    混進來會讓這個模組同時在做兩件事。
+    """
+    import json as _json
+    flagged = flagged_lines or set()
+    ai_turns: list[tuple[int, str]] = []
+    owner_turns: list[tuple[int, str]] = []
+
+    with open(transcript_path, encoding="utf-8") as f:
+        for i, line in enumerate(f, 1):
+            try:
+                d = _json.loads(line)
+            except ValueError:
+                continue
+            t = d.get("type")
+            c = (d.get("message") or {}).get("content")
+            if t == "assistant" and isinstance(c, list):
+                text = "\n".join(b.get("text", "") for b in c
+                                 if isinstance(b, dict) and b.get("type") == "text")
+                if text.strip():
+                    ai_turns.append((i, text))
+            elif t == "user":
+                if isinstance(c, str):
+                    text = c
+                elif isinstance(c, list):
+                    text = "\n".join(b.get("text", "") for b in c
+                                     if isinstance(b, dict) and b.get("type") == "text")
+                else:
+                    continue
+                if is_owner_text(text):
+                    owner_turns.append((i, text))
+
+    # 以「輪」為單位，不是以每一個 text block。
+    #
+    # 2026-09-11 實測：一份 transcript 有 713 段 AI 文字但只有 105 則
+    # owner 訊息，因為一輪回應會有很多塊（工具之間的說明、最後的報告）。
+    # 逐塊配對的話 MOVED_ON 會是 89%，而那個數字量的是「一輪有幾塊」，
+    # 不是「她跳過了多少」。
+    #
+    # 一輪 = 兩則 owner 訊息之間的所有 AI 輸出。代表那一輪的是**最後一塊**，
+    # 因為那通常是報告，也是她最可能讀的那一段。
+    rounds: list[tuple[int, str]] = []
+    bounds = [ln for ln, _ in owner_turns]
+    cur: tuple[int, str] | None = None
+    bi = 0
+    for ai_line, ai_text in ai_turns:
+        while bi < len(bounds) and bounds[bi] < ai_line:
+            if cur is not None:
+                rounds.append(cur)
+                cur = None
+            bi += 1
+        cur = (ai_line, ai_text)
+    if cur is not None:
+        rounds.append(cur)
+
+    out: list[Silence] = []
+    for ai_line, ai_text in rounds:
+        nxt = next(((ln, tx) for ln, tx in owner_turns if ln > ai_line), None)
+        if nxt is None:
+            out.append(Silence("UNOBSERVED", ai_line, None, None,
+                               ai_text[:80], ai_line in flagged))
+            continue
+        owner_line, owner_text = nxt
+        k = classify(owner_text).kind
+        if k == "ACKNOWLEDGEMENT":
+            kind = "EXPLICIT_OK"
+        elif k in ("CORRECTION", "CLARIFICATION", "MIND_CHANGE"):
+            kind = "RESPONDED"
+        else:
+            # NEW_REQUEST 或 UNKNOWN：她講了別的事。
+            # **不當成同意。** 見 SILENCE 的註解。
+            kind = "MOVED_ON"
+        out.append(Silence(kind, ai_line, owner_line, k,
+                           ai_text[:80], ai_line in flagged))
+    return out
+
+
+def silence_summary(items: list[Silence]) -> dict:
+    """統計，而且刻意把 MOVED_ON 單獨列出來。
+
+    把它併進「沒有異議」那一欄的話，這個模組就白做了。
+    """
+    tally: dict[str, int] = {}
+    for s in items:
+        tally[s.kind] = tally.get(s.kind, 0) + 1
+    risky = [s for s in items if s.risky]
+    return {
+        "total": len(items),
+        "by_kind": tally,
+        "risky": len(risky),
+        "risky_lines": [s.ai_line for s in risky][:20],
+        "note": ("MOVED_ON 不等於同意。它的意思是「她沒有針對那段說話」，"
+                 "而那可能是看過覺得沒問題，也可能是根本沒看到。"
+                 "要當成同意只有一條路：她自己說出口（EXPLICIT_OK）"),
+    }

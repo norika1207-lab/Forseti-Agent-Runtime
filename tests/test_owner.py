@@ -227,5 +227,99 @@ class TestGoalChangeGap(unittest.TestCase):
         """第 1 版不算「換過一次」。它是起點。"""
         self.assertEqual(O.goal_change_gap(1, 1)["north_star_bumps"], 0)
 
+
+class TestSilence(unittest.TestCase):
+    """她的沉默（build-plan.md:363）。
+
+    **這一組的核心是一件事：MOVED_ON 不等於同意。**
+
+    沉默有兩種完全不同的意思 —— 她看過覺得沒問題，或者她根本沒看到。
+    兩者在 transcript 裡長得一模一樣。合成一類的代價不對稱：
+    一個她漏看的錯誤會被記成她同意過，而「owner 同意過」是這個系統裡
+    最強的證據等級（E4 的 owner-confirmed）。
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = Path(tempfile.mkdtemp())
+
+    def transcript(self, turns) -> Path:
+        """turns 是 (type, text) 的序列。"""
+        import json
+        p = self.tmp / "t.jsonl"
+        with p.open("w", encoding="utf-8") as f:
+            for kind, text in turns:
+                if kind == "assistant":
+                    rec = {"type": "assistant",
+                           "message": {"content": [{"type": "text", "text": text}]}}
+                else:
+                    rec = {"type": "user", "message": {"content": text}}
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        return p
+
+    def test_explicit_ok_is_the_only_thing_that_counts_as_consent(self):
+        p = self.transcript([("assistant", "做完了"), ("user", "好")])
+        self.assertEqual(O.silence_map(p)[0].kind, "EXPLICIT_OK")
+
+    def test_moving_on_is_not_consent(self):
+        """她講了下一件事，那不是同意。"""
+        p = self.transcript([("assistant", "做完了"), ("user", "幫我改 a.py")])
+        s = O.silence_map(p)[0]
+        self.assertEqual(s.kind, "MOVED_ON")
+        self.assertNotEqual(s.kind, "EXPLICIT_OK")
+
+    def test_the_summary_refuses_to_merge_moved_on_into_agreement(self):
+        p = self.transcript([("assistant", "做完了"), ("user", "幫我改 a.py")])
+        note = O.silence_summary(O.silence_map(p))["note"]
+        self.assertIn("MOVED_ON 不等於同意", note)
+        self.assertIn("她自己說出口", note)
+
+    def test_responding_is_not_silence(self):
+        p = self.transcript([("assistant", "做完了"), ("user", "你忘了加測試")])
+        self.assertEqual(O.silence_map(p)[0].kind, "RESPONDED")
+
+    def test_nothing_after_is_unobserved_not_agreement(self):
+        """後面沒有她的訊息，那是「還沒看到」不是「沒有異議」。"""
+        p = self.transcript([("user", "做這個"), ("assistant", "做完了")])
+        self.assertEqual(O.silence_map(p)[0].kind, "UNOBSERVED")
+
+    def test_one_round_not_one_block(self):
+        """一輪回應有很多塊，她回應的是整輪。
+
+        2026-09-11 實測：一份 transcript 有 713 段 AI 文字但只有
+        105 則 owner 訊息。逐塊配對的話 MOVED_ON 會是 89%，
+        而那個數字量的是「一輪有幾塊」，不是「她跳過了多少」。
+        """
+        p = self.transcript([
+            ("user", "做這個"),
+            ("assistant", "我先查一下"),
+            ("assistant", "查到了"),
+            ("assistant", "做完了，報告如下"),
+            ("user", "好"),
+        ])
+        items = O.silence_map(p)
+        self.assertEqual(len(items), 1, "三塊是一輪")
+        self.assertIn("報告", items[0].ai_excerpt)
+
+    def test_risky_needs_both_a_flag_and_silence(self):
+        """有問題而且她跳過，兩個條件都要。
+
+        只有其中一個都不值得特別拿出來問。
+        """
+        p = self.transcript([("assistant", "做完了"), ("user", "幫我改 a.py")])
+        clean = O.silence_map(p)[0]
+        self.assertFalse(clean.risky, "沒有被標記的就不算")
+
+        flagged = O.silence_map(p, flagged_lines={1})[0]
+        self.assertTrue(flagged.risky)
+
+        p2 = self.transcript([("assistant", "做完了"), ("user", "好")])
+        answered = O.silence_map(p2, flagged_lines={1})[0]
+        self.assertFalse(answered.risky, "她明確說了好，那就不是沉默")
+
+    def test_four_states_with_meanings(self):
+        self.assertEqual(len(O.SILENCE), 4)
+        self.assertEqual(set(O.SILENCE_MEANING), set(O.SILENCE))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
