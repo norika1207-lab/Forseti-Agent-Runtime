@@ -283,6 +283,34 @@ async function main() {
   //
   // 整段 try/catch 連 import 一起包。記錄失敗絕不能變成工作失敗，
   // 那正是 2026-09-08 那次事故的形狀：hook 把自己的問題變成她的問題。
+  // Evidence Receipt 在這裡量，不在下面那個 PostToolUse 分支量。
+  //
+  // 「搬進帳本」（docs/build-plan.md:323）的實際意思是讓證據跟它所屬的
+  // 事件在同一筆紀錄上。所以要在 append 之前量完，不是 append 一筆、
+  // 稍後再補一筆 —— 兩筆之間的關聯要靠時間或 id 去拼，而拼接會錯。
+  //
+  // 成本沒有增加：下面本來就會對同一個檔案做同樣的 statSync 與 hash，
+  // 這裡只是把那次量提前，然後兩邊共用。
+  let receipt = null;
+  if (input.hook_event_name === 'PostToolUse'
+      && WRITE_TOOLS.test(String(input.tool_name))
+      && input.tool_input?.file_path) {
+    const f = input.tool_input.file_path;
+    const ev = evidenceFor(f);
+    receipt = {
+      observedAt: Date.now(),
+      resourceLocator: f,
+      // 三態。量得到就是 true/false，量不到是 'unknown' 不是 false ——
+      // 那個區別是 src/evidence.js 拒絕接受其他值的原因。
+      existence: ev.bytes === null ? 'unknown' : true,
+      byteSize: ev.bytes,
+      contentHash: ev.hash,
+      captureMethod: `PostToolUse:${input.tool_name}`,
+      exitCode: typeof input.tool_response?.exit_code === 'number'
+        ? input.tool_response.exit_code : null,
+    };
+  }
+
   try {
     const el = await import(join(HERE, 'event-ledger.mjs'));
     // FORSETI_EVENT_LEDGER_DIR 是給測試用的出口。
@@ -299,6 +327,7 @@ async function main() {
     el.appendEvent(dir, input, {
       sessionId: input.session_id || '',
       projectId: REPO_ROOT.split(sep).pop() || '',
+      evidence: receipt,
     });
   } catch { /* 記不下來就算了，下面每一步都不受影響 */ }
 
@@ -371,7 +400,12 @@ async function main() {
   if (input.hook_event_name === 'PostToolUse') {
     const file = input.tool_input?.file_path;
     if (file && WRITE_TOOLS.test(String(input.tool_name))) {
-      const ev = evidenceFor(file);
+      // 上面已經量過了,這裡重用。同一輪對同一個檔案量兩次的話,
+      // 兩次之間檔案可能已經變了,而那會產生兩個都是真的、
+      // 但互相矛盾的證據。
+      const ev = receipt
+        ? { bytes: receipt.byteSize, hash: receipt.contentHash }
+        : evidenceFor(file);
       Object.assign(event, ev);
 
       /**
@@ -385,8 +419,15 @@ async function main() {
        * existence 三態:量得到就是 true/false,量不到是 'unknown',
        * 不是 false。這個區別是 evidence.js 拒絕接受其他值的原因。
        */
+      // 舊的憑證仍然寫進 state.json,沒有拿掉。
+      //
+      // 那不是重複,是兩個不同的讀者:src/runtime.js 的分析層讀 state.json,
+      // 而 Event Ledger 是給重播與跨 session 追溯用的。要拿掉舊的,
+      // 得先把 runtime.js 那一整層改成從帳本讀,那是另一件事。
+      //
+      // 兩份的內容保證一致,因為它們用的是同一次量測(上面的 receipt)。
       try {
-        rt.captureReceipt({
+        rt.captureReceipt(receipt ?? {
           observedAt: event.at,
           resourceLocator: file,
           existence: ev.bytes === null ? 'unknown' : true,

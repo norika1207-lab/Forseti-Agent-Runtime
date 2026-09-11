@@ -240,5 +240,63 @@ class TestCorruptionIsLoud(Case):
                 f"EventLedger 不該有 {forbidden}()，append-only 要靠沒有入口")
 
 
+
+class TestEvidenceTravelsWithItsEvent(Case):
+    """Evidence Receipt 跟它所屬的事件在同一筆（build-plan:323）。
+
+    為什麼不另開一種事件：evidence 不是一件「發生的事」，是某件事在
+    那一刻的證據。拆成兩筆的話，它們之間的關聯要靠時間或 id 去拼，
+    而拼接是會錯的 —— 尤其在併發寫入的時候。
+    """
+
+    def test_evidence_survives_a_round_trip_through_the_index(self):
+        """寫進去、重建索引、再查出來，證據要還在。"""
+        r = raw(payload={"tool_name": "Write", "path": "a.txt"})
+        ev = {"byteSize": 42, "contentHash": "deadbeef", "existence": True,
+              "captureMethod": "PostToolUse:Write", "exitCode": None}
+        self.led.append(r, E.NormalizedEvent(
+            raw_event_id=r.id, type="FILE_WRITE", session_id="s1",
+            result="42 bytes", metadata={"evidence": ev}))
+        self.led.reindex()
+
+        con = self.led._connect()
+        row = con.execute(
+            "SELECT result, metadata FROM events WHERE session_id='s1'").fetchone()
+        self.assertEqual(row[0], "42 bytes")
+        got = json.loads(row[1])["evidence"]
+        self.assertEqual(got["byteSize"], 42)
+        self.assertEqual(got["contentHash"], "deadbeef")
+
+    def test_unknown_existence_is_preserved_not_coerced(self):
+        """'unknown' 不能在任何一層被轉成 False。
+
+        量不到跟不存在是兩件事。混在一起的話，一個因為權限讀不到的檔案
+        會被當成「AI 說做了但沒做」，而那是冤枉它。
+        """
+        r = raw(payload={"tool_name": "Write"})
+        self.led.append(r, E.NormalizedEvent(
+            raw_event_id=r.id, type="FILE_WRITE", session_id="s2",
+            result="UNKNOWN",
+            metadata={"evidence": {"existence": "unknown", "byteSize": None}}))
+        self.led.reindex()
+        con = self.led._connect()
+        meta = json.loads(con.execute(
+            "SELECT metadata FROM events WHERE session_id='s2'").fetchone()[0])
+        self.assertEqual(meta["evidence"]["existence"], "unknown")
+        self.assertIsNot(meta["evidence"]["existence"], False)
+
+    def test_evidence_does_not_break_replay_determinism(self):
+        """帶了證據的事件，重播兩次仍然逐位元組相同。
+
+        evidence 是巢狀 dict，而巢狀是 canonical JSON 最容易出錯的地方。
+        """
+        for i in range(3):
+            r = raw(payload={"i": i}, ts=1700000000.0 + i)
+            self.led.append(r, E.NormalizedEvent(
+                raw_event_id=r.id, type="FILE_WRITE",
+                metadata={"evidence": {"z": 1, "a": {"y": None, "x": i}}}))
+        self.assertEqual(self.led.replay(), self.led.replay())
+        self.assertEqual(self.led.digest(), self.led.digest())
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -124,7 +124,8 @@ export function shrink(payload, forsetiDir) {
  *
  * @returns {string|null} raw event id，寫不進去就是 null
  */
-export function appendEvent(forsetiDir, input, { sessionId, projectId } = {}) {
+export function appendEvent(forsetiDir, input,
+                            { sessionId, projectId, evidence } = {}) {
   try {
     const type = classify(input);
     if (!type) return null;
@@ -159,10 +160,24 @@ export function appendEvent(forsetiDir, input, { sessionId, projectId } = {}) {
       action: String(input.tool_name || input.hook_event_name || ''),
       subject: String(input.tool_input?.file_path || input.cwd || ''),
       object: '',
-      result: '',
+      // Evidence Receipt 就放在它所屬的那一筆事件上，不另外開一種事件。
+      //
+      // 理由：evidence 不是一件「發生的事」，是某件事在那一刻的證據。
+      // 拆成兩筆的話，它們之間的關聯要靠時間或 id 去拼，而拼接是會錯的。
+      // v5.0 §6.1 的 NormalizedEvent 本來就有 result 與 metadata，
+      // 證據放在那裡是它們的用途。
+      //
+      // 為什麼非得在 hook 這一刻量（v2 FS-TMP-001）：檔案被改過、
+      // 覆蓋、刪掉之後，當時的大小與指紋就永遠沒有了。事後分析看到的是
+      // 「AI 說做了」加上一個不存在的檔案，而那時候分不出是當時沒做，
+      // 還是後來被清掉了（FS-TMP-003）。
+      result: evidence
+        ? (evidence.existence === 'unknown' ? 'UNKNOWN'
+          : `${evidence.byteSize ?? '?'} bytes`)
+        : '',
       provenance: 'OBSERVED',
       risk: '',
-      metadata: {},
+      metadata: evidence ? { evidence } : {},
     };
 
     const line = canonicalJson({ raw, norm });

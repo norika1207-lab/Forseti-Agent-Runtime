@@ -403,6 +403,37 @@ PostToolUse  FILE_WRITE   .forseti/inbox/.../done.txt
 | 重播兩次逐位元組相同 | 通過（62,342 bytes，跨行程也相同） |
 | tool / 檔案 / 程序事件都進得來 | **通過**（TOOL_CALL、FILE_WRITE 來自真實工作；MODEL_OUTPUT 實測） |
 
-**還沒做完的一項交付：** `docs/build-plan.md:323` 的
-「Evidence Receipt 在 PostToolUse 當下寫入，已經做了，要搬進帳本」。
-現在 evidence 仍寫在 `.forseti/state.json`，沒有搬。
+### Evidence Receipt 搬進帳本（2026-09-11）
+
+`docs/build-plan.md:323` 的最後一項交付。**做法不是新增一種事件，
+是讓事件帶著自己的證據。**
+
+理由：evidence 不是一件「發生的事」，是某件事在那一刻的證據。
+拆成兩筆的話，它們之間的關聯要靠時間或 id 去拼，而拼接會錯，
+尤其在併發寫入的時候。v5.0 §6.1 的 NormalizedEvent 本來就有
+`result` 與 `metadata`，證據放那裡是它們的用途。
+
+量測的位置也動了：從原本的 PostToolUse 分支提前到 append 之前，
+兩邊共用同一次量測。**同一輪對同一個檔案量兩次的話，兩次之間檔案
+可能已經變了，而那會產生兩個都是真的、但互相矛盾的證據。**
+
+實測（`FORSETI_EVENT_LEDGER_DIR` 導向沙箱）：
+
+```
+type      FILE_WRITE
+result    13 bytes
+evidence  byteSize 13, contentHash a1c372016c6ccf88, existence true
+磁碟實際  13 bytes, a1c372016c6ccf88
+```
+
+**舊的 `state.json` 那份沒有拿掉。** 那不是重複而是兩個讀者：
+`src/runtime.js` 的分析層讀 `state.json`，Event Ledger 是給重播與
+跨 session 追溯用的。要拿掉舊的得先把 runtime.js 那一整層改成從帳本讀，
+那是另一件事。兩份內容保證一致，因為用的是同一次量測。
+
+`existence` 的三態在兩邊都有測試守著：量得到是 `true`/`false`，
+量不到是 `'unknown'` 不是 `false`。**量不到跟不存在是兩件事** ——
+混在一起的話，一個因為權限讀不到的檔案會被當成「AI 說做了但沒做」，
+而那是冤枉它。
+
+**階段 1 的五項交付到此全部完成。**

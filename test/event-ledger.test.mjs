@@ -160,3 +160,54 @@ test('append 是 append，不覆蓋', () => {
   assert.equal(lines.length, 3);
   assert.equal(readdirSync(dir).includes('event_ledger.jsonl'), true);
 });
+
+test('Evidence Receipt 跟它所屬的事件在同一筆', async (t) => {
+  await t.test('evidence 進 metadata，大小進 result', () => {
+    const dir = box();
+    appendEvent(dir, {
+      hook_event_name: 'PostToolUse', tool_name: 'Write',
+      tool_input: { file_path: '/x.txt' }, session_id: 's',
+    }, {
+      evidence: {
+        observedAt: 1, resourceLocator: '/x.txt', existence: true,
+        byteSize: 42, contentHash: 'deadbeef', captureMethod: 'PostToolUse:Write',
+        exitCode: null,
+      },
+    });
+    const rec = JSON.parse(readFileSync(join(dir, 'event_ledger.jsonl'), 'utf8').trim());
+    assert.equal(rec.norm.metadata.evidence.byteSize, 42);
+    assert.equal(rec.norm.metadata.evidence.contentHash, 'deadbeef');
+    assert.equal(rec.norm.result, '42 bytes');
+  });
+
+  await t.test('existence 是三態，unknown 不會變成 false', () => {
+    // 這個區別是 src/evidence.js 拒絕接受其他值的原因：
+    // 「量不到」跟「不存在」是兩件事。混在一起的話，一個因為權限讀不到的
+    // 檔案會被當成「AI 說做了但沒做」，而那是冤枉它。
+    const dir = box();
+    appendEvent(dir, {
+      hook_event_name: 'PostToolUse', tool_name: 'Write',
+      tool_input: { file_path: '/nope' }, session_id: 's',
+    }, {
+      evidence: {
+        observedAt: 1, resourceLocator: '/nope', existence: 'unknown',
+        byteSize: null, contentHash: null, captureMethod: 'PostToolUse:Write',
+        exitCode: null,
+      },
+    });
+    const rec = JSON.parse(readFileSync(join(dir, 'event_ledger.jsonl'), 'utf8').trim());
+    assert.equal(rec.norm.metadata.evidence.existence, 'unknown');
+    assert.notEqual(rec.norm.metadata.evidence.existence, false);
+    assert.equal(rec.norm.result, 'UNKNOWN');
+  });
+
+  await t.test('沒有 evidence 的事件，metadata 是空物件不是塞 null', () => {
+    // 塞一個 evidence: null 進去的話，下游要分辨「沒量」與「量到空的」
+    // 就得看兩層。空物件讓「這一筆沒有證據」只有一種形狀。
+    const dir = box();
+    appendEvent(dir, { hook_event_name: 'PreToolUse', tool_name: 'Write' }, {});
+    const rec = JSON.parse(readFileSync(join(dir, 'event_ledger.jsonl'), 'utf8').trim());
+    assert.deepEqual(rec.norm.metadata, {});
+    assert.equal(rec.norm.result, '');
+  });
+});
