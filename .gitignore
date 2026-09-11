@@ -14,6 +14,10 @@ node_modules/
 !.forseti/DECISION_LEDGER.md
 !.forseti/BLOCKERS.md
 !.forseti/REQUIRED_READING.md
+# 2026-09-11 加。那天新寫的 HANDOVER_FAILURE 被 `.forseti/*` 擋在版控外,
+# 而我宣稱「已經 commit」——commit 確實成功了,只是不含那個檔案。
+# 白名單是「列舉式」的,所以每一份新的控制檔都要自己加一行,漏了不會有錯誤。
+!.forseti/HANDOVER_FAILURE_*.md
 ._*
 .DS_Store
 
