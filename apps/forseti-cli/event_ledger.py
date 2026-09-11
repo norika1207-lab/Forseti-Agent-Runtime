@@ -44,6 +44,7 @@ append-only 的文字檔天生滿足這兩條 —— 每筆寫完就 flush，行
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import sqlite3
 from dataclasses import dataclass, field, asdict
@@ -143,7 +144,12 @@ SPEC_DEVIATIONS = (
 # 分析的時候該排除,取證的時候不該假裝沒發生過。
 #
 # 來源已經修掉:hook 現在尊重 FORSETI_EVENT_LEDGER_DIR,測試導向沙箱。
-KNOWN_TEST_SESSIONS = ("insider", "perf", "probe-1", "b", "s", "stop-probe")
+# 「e2e」是 2026-09-11 加的:test/install.test.mjs 那條端到端測試
+# 沒有把 Event Ledger 導進沙箱,每跑一次就往正本寫一筆,帳本裡已經
+# 累積九筆。源頭已經修掉(那個測試現在設 FORSETI_EVENT_LEDGER_DIR),
+# 這裡列出來是處理已經寫進去的那些 —— **寫進帳本的不刪,只標記**。
+KNOWN_TEST_SESSIONS = ("insider", "perf", "probe-1", "b", "s", "stop-probe",
+                       "e2e")
 
 
 def is_test_event(rec: dict) -> bool:
@@ -258,12 +264,30 @@ def default_jsonl(root: Path | None = None) -> Path:
     這個區分是 2026-09-09 那個 worker 指出來的，我原本判斷得太粗，
     以為整個儲存體系都得搬去 home。
     """
+    if root is None:
+        # **兩邊要吃同一個環境變數,不然沙箱只擋住一半。**
+        #
+        # 2026-09-11 做採集 preflight 才發現:node 的 hook 尊重
+        # FORSETI_EVENT_LEDGER_DIR,這邊不吃。於是一個把 writer 導向沙箱
+        # 的測試,reader 仍然讀正本 —— 兩邊看到的是不同的帳本,
+        # 而測試會通過,因為它只檢查了其中一邊。
+        #
+        # 一個只擋住寫入端的沙箱,比沒有沙箱更危險:它讓人以為隔離了。
+        env = os.environ.get("FORSETI_EVENT_LEDGER_DIR")
+        if env:
+            return Path(env).expanduser() / "event_ledger.jsonl"
     base = (root or Path(__file__).resolve().parents[2]).resolve()
     return base / ".forseti" / "event_ledger.jsonl"
 
 
 def default_index(root: Path | None = None) -> Path:
     """索引放 home。壞了刪掉重建，正本不動。"""
+    if root is None:
+        env = os.environ.get("FORSETI_EVENT_LEDGER_DIR")
+        if env:
+            # 索引跟著正本走。留在 home 的話,換一個沙箱正本卻沿用舊索引,
+            # 會讀到上一次測試的殘留。
+            return Path(env).expanduser() / "index.db"
     base = (root or Path(__file__).resolve().parents[2]).resolve()
     key = hashlib.sha256(str(base).encode("utf-8")).hexdigest()[:12]
     return Path.home() / ".forseti" / "events" / f"{base.name}-{key}.db"

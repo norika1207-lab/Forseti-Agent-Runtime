@@ -664,10 +664,40 @@ def verify(claim: Claim, *, cwd: Path | None = None, led=None) -> Claim:
         return claim
 
     resolved, how = resolve_subject(claim.subject, cwd=cwd)
+
     if resolved is None:
-        # 對不到路徑就是對不到。判 REFUTED 會冤枉一個可能存在的檔案,
-        # 而 UNKNOWN 誠實得多:我不知道它指哪裡,所以我沒有驗。
-        claim.to("UNKNOWN", how)
+        # 路徑對不到,但帳本可能知道。**先問帳本再放棄。**
+        #
+        # ────────────────────────────────────────────
+        # 2026-09-11 準備開採集之前做 preflight 才發現的順序錯誤。
+        #
+        # 原本這裡直接回 UNKNOWN,連查都不查。那會讓整個採集白做:
+        # hook 明明在 FILE_WRITE 事件裡記了絕對路徑與 hash,
+        # 而驗證器因為自己 resolve 不出來就先走開了。
+        #
+        # **帳本比現場的路徑解析可靠** —— 它記的是 hook 在那一刻
+        # 親眼量到的東西,不需要猜基準。所以它該是第一順位不是備案。
+        # ────────────────────────────────────────────
+        from_ledger = evidence_from_ledger(claim.subject, led=led)
+        if from_ledger is None:
+            # 對不到路徑就是對不到。判 REFUTED 會冤枉一個可能存在的檔案,
+            # 而 UNKNOWN 誠實得多:我不知道它指哪裡,所以我沒有驗。
+            claim.to("UNKNOWN", how)
+            return claim
+        size = from_ledger.get("byteSize")
+        if from_ledger.get("existence") is not True:
+            claim.to("UNKNOWN", f"{how}；帳本裡那一筆也沒有量到它存在")
+            return claim
+        if not size:
+            claim.to("REFUTED",
+                     f"{claim.subject} 在帳本裡是 0 bytes。建立了一個空檔案，"
+                     "跟沒建立對使用者是一樣的")
+            claim.raise_strength("E2", "帳本裡 hook 當時量到的：size = 0")
+            return claim
+        claim.to("VERIFIED",
+                 f"{claim.subject} 對不到現在的路徑，但帳本記得寫入的那一刻："
+                 f"{size:,} bytes")
+        claim.raise_strength("E2", "帳本裡 hook 當時量到的證據")
         return claim
 
     from_ledger = evidence_from_ledger(claim.subject, led=led)

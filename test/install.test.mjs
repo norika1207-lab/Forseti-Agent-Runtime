@@ -131,7 +131,19 @@ t('端到端:裝完預設不生效,手動打開之後 hook 才真的動作', () 
       tool_name: 'Write', tool_input: { file_path: join(dir, 'a.js') },
     }),
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: '', HOME: emptyHome, USERPROFILE: emptyHome },
+    // Event Ledger 也要導進沙箱。
+    //
+    // 【2026-09-11 抓到,而且它已經發生很多次了】這條測試換了 HOME 與
+    // CLAUDE_PROJECT_DIR,以為就隔離乾淨了 —— 但 event-ledger.mjs 還有
+    // 一條從 hook 檔案自己的位置推回 repo 的路徑,於是每跑一次就往
+    // **正本帳本**寫一筆。帳本裡當時已經有九筆這種殘留。
+    //
+    // 一個專案的核心如果是「帳本是證據」,那讓測試往證據裡寫東西
+    // 就是最不該犯的錯。這也是 KNOWN_TEST_SESSIONS 那張表存在的原因 ——
+    // 那張表是補丁,這一行才是修。
+    env: { ...process.env, CLAUDE_PROJECT_DIR: '', HOME: emptyHome,
+           USERPROFILE: emptyHome,
+           FORSETI_EVENT_LEDGER_DIR: join(dir, '.forseti') },
   });
 
   run([dir]);   // 安裝,預設關閉

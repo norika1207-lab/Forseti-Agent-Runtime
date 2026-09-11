@@ -584,5 +584,96 @@ class TestUncertaintyFallsToUnknownNotRefuted(Case):
         self.assertEqual(c.state, "REFUTED")
         self.assertIn(str(target.parent), c.why_state)
 
+
+class TestTheLedgerComesFirst(unittest.TestCase):
+    """路徑對不到的時候，先問帳本再放棄。
+
+    2026-09-11 準備開採集之前做 preflight 才發現的順序錯誤:
+    原本 resolve 失敗就直接回 UNKNOWN，連查都不查。
+
+    **那會讓整個採集白做** —— hook 明明在 FILE_WRITE 事件裡記了
+    絕對路徑與 hash，而驗證器因為自己 resolve 不出來就先走開了。
+    帳本記的是 hook 在那一刻親眼量到的東西，不需要猜基準，
+    所以它該是第一順位不是備案。
+    """
+
+    def setUp(self):
+        import os
+        import tempfile
+        self.box = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.box,
+                                                            ignore_errors=True))
+        self.old = os.environ.get("FORSETI_EVENT_LEDGER_DIR")
+        os.environ["FORSETI_EVENT_LEDGER_DIR"] = str(self.box)
+        self.addCleanup(self._restore)
+        C._RESOLVE_CACHE.clear()
+
+    def _restore(self):
+        import os
+        if self.old is None:
+            os.environ.pop("FORSETI_EVENT_LEDGER_DIR", None)
+        else:
+            os.environ["FORSETI_EVENT_LEDGER_DIR"] = self.old
+        C._RESOLVE_CACHE.clear()
+
+    def _record(self, subject, size):
+        import sys as _s
+        _s.path.insert(0, str(Path(__file__).resolve().parents[1]
+                              / "apps" / "forseti-cli"))
+        import importlib
+        EL = importlib.import_module("event_ledger")
+        importlib.reload(EL)
+        led = EL.EventLedger()
+        try:
+            raw = EL.RawEvent(provider="claude-code",
+                              provider_event_type="PostToolUse",
+                              timestamp=1.0, payload={"file_path": subject})
+            norm = EL.NormalizedEvent(
+                raw_event_id=raw.id, type="FILE_WRITE", subject=subject,
+                provenance="OBSERVED",
+                metadata={"evidence": {"existence": True, "byteSize": size,
+                                       "contentHash": "deadbeef"}})
+            led.append(raw, norm)
+        finally:
+            led.close()
+
+    def test_the_writer_and_the_reader_share_one_sandbox(self):
+        """**一個只擋住寫入端的沙箱，比沒有沙箱更危險** —— 它讓人以為隔離了。
+
+        2026-09-11 實測:node 的 hook 尊重 FORSETI_EVENT_LEDGER_DIR，
+        Python 這邊不吃。於是 writer 寫沙箱、reader 讀正本，
+        兩邊看到不同的帳本，而測試會通過，因為它只檢查了其中一邊。
+        """
+        import importlib
+        import sys as _s
+        _s.path.insert(0, str(Path(__file__).resolve().parents[1]
+                              / "apps" / "forseti-cli"))
+        EL = importlib.import_module("event_ledger")
+        importlib.reload(EL)
+        self.assertEqual(EL.default_jsonl().parent, self.box)
+
+    def test_a_lost_path_is_verified_by_the_ledger(self):
+        self._record("/somewhere/else/gone-for-good.py", 128)
+        c = C.Claim(text="x", kind="file", subject="gone-for-good.py")
+        C.verify(c, cwd=self.box)
+        self.assertEqual(c.state, "VERIFIED")
+        self.assertEqual(c.strength, "E2")
+        self.assertIn("帳本記得", c.why_state)
+
+    def test_the_ledger_can_also_convict(self):
+        """帳本說它當時是 0 bytes，CT-001 照樣成立。"""
+        self._record("/somewhere/else/empty-one.py", 0)
+        c = C.Claim(text="x", kind="file", subject="empty-one.py")
+        C.verify(c, cwd=self.box)
+        self.assertEqual(c.state, "REFUTED")
+        self.assertIn("0 bytes", c.why_state)
+
+    def test_no_ledger_entry_still_falls_to_unknown(self):
+        c = C.Claim(text="x", kind="file", subject="never-recorded.py")
+        C.verify(c, cwd=self.box)
+        self.assertEqual(c.state, "UNKNOWN")
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

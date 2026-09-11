@@ -376,6 +376,40 @@ probe 立刻讀，而寫入還沒落到磁碟，於是讀到舊內容、hash 沒
 > 換句話說，階段 2 與階段 3 的機制都通了，但它們現在拿不到足以判斷的
 > 資料。B-13 不是「之後再補的採集」，它是這兩層能不能運作的條件。
 
+> **2026-09-11 傍晚：owner 決定走第二條 —— 從 repo 目錄開新 session。**
+>
+> 選它的理由是影響範圍有界：`.claude/settings.json` 只在這個專案生效，
+> 不動 `~/.claude/settings.json`。驗證這套系統本來就該在它自己的 repo 裡做。
+>
+> 開之前做了 preflight，抓到三個會讓整件事白做的問題：
+>
+> **一，`verify()` 在路徑對不到的時候直接回 UNKNOWN，連帳本都不查。**
+> hook 明明在 FILE_WRITE 事件裡記了絕對路徑與 hash，而驗證器因為自己
+> resolve 不出來就先走開了。帳本現在是第一順位不是備案。
+>
+> **二，node 與 Python 的沙箱出口不一致。** hook 尊重
+> `FORSETI_EVENT_LEDGER_DIR`，Python 這邊不吃。於是 writer 寫沙箱、
+> reader 讀正本，兩邊看到不同的帳本，而測試會通過 ——
+> **一個只擋住寫入端的沙箱，比沒有沙箱更危險，它讓人以為隔離了。**
+>
+> **三，測試一直在污染正本帳本。** `test/install.test.mjs` 那條端到端
+> 測試換了 HOME 與 CLAUDE_PROJECT_DIR，但 event-ledger.mjs 還有一條從
+> hook 檔案位置推回 repo 的路徑，每跑一次就往正本寫一筆，累積了九筆。
+> 一個專案的核心如果是「帳本是證據」，那讓測試往證據裡寫東西
+> 就是最不該犯的錯。源頭修掉了，已寫進去的不刪只標記。
+>
+> **端到端驗過了**：餵一筆 PostToolUse 給 hook，然後用一個
+> 在錯誤 cwd 底下、而且檔案已經刪掉的相對路徑宣稱去驗 ——
+>
+> ```
+> 狀態  VERIFIED
+> 強度  E2
+> 理由  tmp-preflight.txt 對不到現在的路徑，但帳本記得寫入的那一刻：24 bytes
+> ```
+>
+> 這證明採集一開始，這條線就會活起來。**B-13 現在等的只有一件事：
+> 在 `/Volumes/NewDrive/AI Project/Forseti` 底下開一個 session。**
+
 
 **擋住：** 關於主 session 的任何宣稱，這套系統目前都只能答「我不知道」。
 階段 1 的 Event Ledger 與階段 2 的 FP-03 在最重要的那個對象上是半盲的。
