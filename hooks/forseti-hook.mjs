@@ -81,6 +81,48 @@ function insideRepo(cwd) {
 }
 
 /**
+ * 第二條路:被動到的檔案在這個 repo 底下。
+ *
+ * ── 為什麼要加這一條(2026-09-11) ──────────────────────────
+ *
+ * 上面那條邊界看的是 cwd。實測的後果是:一個 cwd 在別處、但正在編輯
+ * 這個 repo 檔案的 session,完全不會被記錄。
+ *
+ * 那正是主 session 一整天的工作模式 —— 它的 project 是 home,
+ * 而它改的每一個檔案都在這個 repo 裡。結果是 Event Ledger 裡
+ * 沒有任何一筆來自主 session,而 FP-03 被問到「你有沒有親自驗」的時候
+ * 只能回 INDETERMINATE,因為查不到它的 receipt。
+ *
+ * ── 為什麼這樣改是安全的,而 2026-09-08 那次不是 ──────────
+ *
+ * 那次事故的形狀是「範圍太寬」加「會擋人」:一個只寫著某專案路徑的
+ * scope 對整台機器每個目錄生效,而且直接 exit(2)。
+ *
+ * 這一條在兩個方向上都更窄:
+ *
+ *   範圍  它只在「被寫的檔案在 Forseti repo 底下」時成立。
+ *         動別的專案的檔案完全不觸發 —— 比 cwd 判斷更精確,
+ *         因為 cwd 在 repo 底下的時候,人也可能在改 /tmp 的東西。
+ *
+ *   行為  這個檔案裡每一個攔截點都要先過 gate(),而閘門的答案一直是
+ *         只准安靜標註。這一條只增加「會被記錄的事件」,
+ *         不增加任何一條會擋人的路徑。
+ *
+ * 跟 insideRepo() 一樣:不看設定、不看環境變數、不可設定關閉。
+ * 要再放寬必須改這段程式碼並且說明理由。
+ */
+function touchesRepo(input) {
+  const f = input?.tool_input?.file_path;
+  if (!f || typeof f !== 'string') return false;
+  try {
+    const p = resolvePath(f);
+    return p === REPO_ROOT || p.startsWith(REPO_ROOT + sep);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 對外部專案的保護,預設關閉。
  *
  * 2026-09-08 擁有者的裁決:先把「監控別的專案」這個能力寫出來,
@@ -272,7 +314,11 @@ async function main() {
 
   // 邊界最先檢查,在讀任何狀態、建任何目錄之前。
   const cwdForBoundary = process.env.CLAUDE_PROJECT_DIR || input.cwd;
-  if (!insideRepo(cwdForBoundary) && !crossProjectEnabled(cwdForBoundary)) OK();
+  // 三條路任一成立才繼續：cwd 在 repo 內、被寫的檔案在 repo 內、
+  // 或目標專案自己明確開了 cross-project。
+  // 第二條是 2026-09-11 加的，理由寫在 touchesRepo() 的註解。
+  const inScope = insideRepo(cwdForBoundary) || touchesRepo(input);
+  if (!inScope && !crossProjectEnabled(cwdForBoundary)) OK();
 
   // 階段 1：把這一筆記進 Event Ledger 的正本。
   //
@@ -322,8 +368,14 @@ async function main() {
     //
     // 修法是給一個出口而不是讓測試去清理：清理意味著要從 append-only
     // 的正本裡刪東西，而那個檔案存在的意義就是沒有人能刪它。
+    // 正本寫哪裡。cwd 在 repo 外但動了 repo 檔案的時候（主 session 的
+    // 情況），projectRoot(cwd) 會指向 home —— 那會把 Forseti 的事件
+    // 寫到使用者家目錄，而且散在一個沒有人會去看的地方。
+    // 判斷依據跟作用範圍一致：因為哪一條而進來的，就寫到哪裡。
     const dir = process.env.FORSETI_EVENT_LEDGER_DIR
-      || join(projectRoot(input.cwd), '.forseti');
+      || (insideRepo(cwdForBoundary)
+        ? join(projectRoot(input.cwd), '.forseti')
+        : join(REPO_ROOT, '.forseti'));
     el.appendEvent(dir, input, {
       sessionId: input.session_id || '',
       projectId: REPO_ROOT.split(sep).pop() || '',

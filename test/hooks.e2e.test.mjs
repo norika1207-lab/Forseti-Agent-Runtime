@@ -458,3 +458,57 @@ t('AT-HOOK-14 非寫入工具直接放行', () => {
 
 console.log(`結果：${pass} 通過，${fail} 失敗，共 ${pass + fail} 條`);
 process.exit(fail ? 1 : 0);
+
+
+/**
+ * 2026-09-11 加的第二條邊界：被寫的檔案在 repo 底下也算在範圍內。
+ *
+ * 為什麼要加：主 session 的 project 是 home，而它改的每一個檔案都在
+ * 這個 repo 裡。只看 cwd 的話，Event Ledger 裡一筆它的紀錄都沒有，
+ * 而 FP-03 問「你有沒有親自驗」的時候只能回 INDETERMINATE。
+ *
+ * **這一組測試裡最重要的是第二條**：範圍沒有失控。
+ * 一個新增的邊界如果讓 hook 對別的專案生效，那就是 2026-09-08 重演。
+ */
+t('AT-HOOK-B4 cwd 在 repo 外，但動的是 repo 的檔案：要記錄', () => {
+  const box = mkdtempSync(join(tmpdir(), 'forseti-b4-'));
+  const r = runHook(PRE, {
+    hook_event_name: 'PostToolUse', session_id: 'outside-cwd',
+    cwd: tmpdir(),
+    tool_name: 'Write',
+    tool_input: { file_path: join(dirname(HERE), 'docs', 'probe-b4.md') },
+  }, { FORSETI_EVENT_LEDGER_DIR: join(box, '.forseti') });
+  assert.equal(r.code, 0);
+  const led = join(box, '.forseti', 'event_ledger.jsonl');
+  assert.ok(existsSync(led), '動到 repo 的檔案就要被記錄，不管 cwd 在哪');
+  assert.equal(readFileSync(led, 'utf8').trim().split('\n').length, 1);
+});
+
+t('AT-HOOK-B5 cwd 在外、檔案也在外：一個位元組都不准寫', () => {
+  // 這條是新邊界的煞車。它守的是 2026-09-08 那次事故的形狀：
+  // 範圍在沒有人確認過的情況下自己擴大。
+  const box = mkdtempSync(join(tmpdir(), 'forseti-b5-'));
+  const r = runHook(PRE, {
+    hook_event_name: 'PostToolUse', session_id: 'fully-outside',
+    cwd: tmpdir(),
+    tool_name: 'Write',
+    tool_input: { file_path: join(tmpdir(), 'someone-elses-project.txt') },
+  }, { FORSETI_EVENT_LEDGER_DIR: join(box, '.forseti') });
+  assert.equal(r.code, 0);
+  assert.equal(existsSync(join(box, '.forseti', 'event_ledger.jsonl')), false,
+    '別人的專案完全不該被碰，連一個空檔案都不該建');
+  assert.equal(existsSync(join(box, '.forseti')), false,
+    '連目錄都不該建 —— 邊界要在動任何檔案系統之前就擋住');
+});
+
+t('AT-HOOK-B6 沒有 file_path 的事件，不會因為新邊界而混進來', () => {
+  // touchesRepo() 只看 tool_input.file_path。沒有那個欄位的事件
+  // 必須完全靠 cwd 判斷，不能因為「拿不到路徑」就放行。
+  const box = mkdtempSync(join(tmpdir(), 'forseti-b6-'));
+  const r = runHook(PRE, {
+    hook_event_name: 'PostToolUse', session_id: 'no-path',
+    cwd: tmpdir(), tool_name: 'Bash', tool_input: { command: 'ls' },
+  }, { FORSETI_EVENT_LEDGER_DIR: join(box, '.forseti') });
+  assert.equal(r.code, 0);
+  assert.equal(existsSync(join(box, '.forseti', 'event_ledger.jsonl')), false);
+});
