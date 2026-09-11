@@ -86,7 +86,32 @@ TYPES: dict[str, tuple[str, ...]] = {
                "THRASHING", "TOOL_LOOP"),
 }
 
+# 本專案自己要求、而 v5.0 §6.2 沒有的事件。**跟上面那張表分開放。**
+#
+# 上面那張逐字取自規格，一個都沒加。這張是另一回事：它們的出處是
+# 本專案的 `docs/build-plan.md`，而混在一起的話，下一個人會以為
+# 整張表都有規格背書。
+#
+#   OWNER_GOAL_CHANGE  build-plan.md:360 明寫要有這個事件。
+#                      v5.0 §6.2 的 Cognitive 類最接近的是
+#                      DECISION_PROPOSAL，但那是「提案」，
+#                      而 owner 改變方向不是提案，是決定。
+PROJECT_TYPES: dict[str, tuple[str, ...]] = {
+    "Cognitive": ("OWNER_GOAL_CHANGE",),
+}
+
 TYPE_TO_CATEGORY = {t: c for c, ts in TYPES.items() for t in ts}
+TYPE_TO_CATEGORY.update({t: c for c, ts in PROJECT_TYPES.items() for t in ts})
+
+# 哪些 type 有 v5.0 背書，哪些是本專案加的。查得到才不會被誤用。
+def spec_source(event_type: str) -> str:
+    for ts in TYPES.values():
+        if event_type in ts:
+            return "v5.0 §6.2"
+    for ts in PROJECT_TYPES.values():
+        if event_type in ts:
+            return "本專案 docs/build-plan.md，不是 v5.0 §6.2"
+    return ""
 
 # v5.0 §6.3 的十種 lineage 邊。這裡先定義不實作 ——
 # 邊要有兩端才畫得出來，而現在只有事件還沒有 claim 與 decision。

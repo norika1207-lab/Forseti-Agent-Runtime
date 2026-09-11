@@ -39,8 +39,27 @@ class TestMindChangeVsCorrection(unittest.TestCase):
         "算了，先跳過那個",
         "改成用 SQLite",
         "我改變主意，先做階段 3",
-        "先處理採集那個缺口",
+        "先不要動作，我們先對話",
     )
+
+    # 【這一組是實測推翻我自己的假設，2026-09-11】
+    #
+    # 我原本把「先處理採集那個缺口」寫進上面那張表當 MIND_CHANGE。
+    # 拿真實 transcript 跑之後才看清楚：那句話是採納建議加指定順序，
+    # 也就是**新要求**，不是推翻原本的方向。
+    #
+    # 「先做 X」單獨看判不出是哪一種 —— 要分辨得知道「原本要做的是什麼」，
+    # 而這個分類器是無狀態的。所以那條 pattern 已經從 MIND_CHANGE 拿掉。
+    NOT_MIND_CHANGE = (
+        "先處理採集那個缺口",
+        "先做 B-10",
+        "優先做階段 2",
+    )
+
+    def test_specifying_the_next_step_is_a_new_request(self):
+        for t in self.NOT_MIND_CHANGE:
+            with self.subTest(t):
+                self.assertNotEqual(O.classify(t).kind, "MIND_CHANGE")
 
     def test_corrections_point_at_the_ai(self):
         for t in self.CORRECTIONS:
@@ -132,6 +151,81 @@ class TestKindsAreClosed(unittest.TestCase):
         with self.assertRaises(ValueError):
             O.OwnerMessage("差不多是糾正", "理由")
 
+
+
+class TestOwnerGoalChangeEvent(unittest.TestCase):
+    """build-plan.md:360 的 OWNER_GOAL_CHANGE 事件。"""
+
+    def test_mind_change_becomes_owner_goal_change(self):
+        ev = O.to_event(O.classify("改成用 SQLite"), session_id="s1")
+        self.assertIsNotNone(ev)
+        self.assertEqual(ev[1].type, "OWNER_GOAL_CHANGE")
+        self.assertEqual(ev[1].category, "Cognitive")
+
+    def test_correction_maps_to_the_spec_type(self):
+        ev = O.to_event(O.classify("你忘了加測試"))
+        self.assertEqual(ev[1].type, "CORRECTION")
+
+    def test_acknowledgement_is_not_recorded(self):
+        """「好」不是一個發生的事。
+
+        記它只會讓帳本充滿雜訊，而雜訊會讓真的訊號變得不顯眼。
+        """
+        for t in ("好", "繼續", "OK"):
+            self.assertIsNone(O.to_event(O.classify(t)), t)
+
+    def test_unknown_is_not_recorded(self):
+        self.assertIsNone(O.to_event(O.classify("天氣不錯")))
+
+    def test_the_event_keeps_the_original_text(self):
+        """raw 裡要留原文。正規化不得摧毀原始證據（v5.0 §6.1）。"""
+        text = "算了，先跳過那個"
+        raw, norm = O.to_event(O.classify(text))
+        self.assertEqual(raw.payload["text"], text)
+        self.assertEqual(raw.provider, "owner")
+
+    def test_owner_goal_change_is_marked_as_not_from_the_spec(self):
+        """這個 type 是本專案加的，不是 v5.0 §6.2 的。
+
+        混在一起的話，下一個人會以為整張表都有規格背書。
+        """
+        import event_ledger as E
+        self.assertIn("不是 v5.0", E.spec_source("OWNER_GOAL_CHANGE"))
+        self.assertEqual(E.spec_source("TOOL_CALL"), "v5.0 §6.2")
+
+
+class TestGoalChangeGap(unittest.TestCase):
+    """她改了幾次方向，北極星換了幾版。"""
+
+    def test_it_asks_a_question_instead_of_taking_an_action(self):
+        """這個函式不自動換北極星。
+
+        換北極星是權威行為 —— northstar.Chain.adopt() 強制要求具名的
+        authority，就是為了讓「誰決定的」永遠答得出來。
+        自動換版的話那個欄位會變成「系統」，就失去意義了。
+        """
+        import northstar as N
+        self.assertFalse(hasattr(O, "auto_adopt"))
+        g = O.goal_change_gap(5, 1)
+        self.assertTrue(g["needs_review"])
+        self.assertIn("在有人確認之前", g["note"])
+        # 而真正換版的那條路仍然需要 authority
+        with self.assertRaises(N.NorthStarError):
+            N.Chain().adopt("新方向", authority="", why="x")
+
+    def test_no_gap_when_versions_keep_up(self):
+        g = O.goal_change_gap(2, 3)
+        self.assertFalse(g["needs_review"])
+        self.assertLessEqual(g["gap"], 0)
+
+    def test_zero_changes_is_not_a_problem(self):
+        g = O.goal_change_gap(0, 1)
+        self.assertFalse(g["needs_review"])
+        self.assertIn("沒有偵測到", g["note"])
+
+    def test_a_single_version_means_zero_bumps(self):
+        """第 1 版不算「換過一次」。它是起點。"""
+        self.assertEqual(O.goal_change_gap(1, 1)["north_star_bumps"], 0)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

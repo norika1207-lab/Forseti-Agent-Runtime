@@ -32,6 +32,23 @@
 所以這裡全部是結構規則：人稱、否定、祈使、長度、問句標記。
 **規則之間有優先序，而且不確定就回 UNKNOWN**（bible Q-07）。
 
+## 已知會誤判的三種，實測出來的（2026-09-11）
+
+拿今天這個 session 的 105 則訊息跑，發現三種結構規則分不出來的東西。
+**寫在這裡而不是偷偷修掉，因為它們沒有乾淨的結構解法。**
+
+一，**她貼上來的工具輸出**。一則訊息裡貼了 `forseti doctor` 的結果，
+而那段輸出裡有「還沒做」三個字，於是整則被判成糾正。
+分辨「她說的話」與「她貼的東西」需要看格式而不是看詞，那是另一個模組。
+
+二，**長篇論述裡的否定詞**。一句「到了 AI，這件事情就不成立了」裡面
+有「不是這樣」的形狀，但她在講道理不是在糾正。長度不是好判準 ——
+真正的糾正也可能很長。
+
+三，**沒有明確訊號的祈使句**落到 UNKNOWN。105 則裡有 53 則（50%）是
+UNKNOWN，其中大部分是這種。**那個比例看起來很糟，但它是誠實的** ——
+猜出來的分類會讓所有下游統計都帶著看不見的誤差。
+
 零依賴（ADR-009）。
 """
 
@@ -90,10 +107,29 @@ _CORRECTION = (
 # 「不用…了」「改成」「先做」這種形狀，主詞是那件事不是那個人。
 _MIND_CHANGE = (
     re.compile(r"不用.{0,8}了|不做.{0,6}了|先不要|先跳過|算了"),
-    re.compile(r"改成|換成|改用|改去|改做"),
+    # 【拿掉「改做」「改去」,2026-09-11 實測】
+    # 「邊做邊改做到沒有完成的一天」這句話命中了「改做」——
+    # 那是「改」跟「做到」跨詞邊界的偶然組合。
+    #
+    # **中文沒有詞邊界,兩個字的 regex 會跨詞命中。** 英文有 \b 可以用,
+    # 中文沒有對應的東西。所以這裡只留那些「兩個字合起來幾乎只有一種
+    # 用法」的詞:改成、換成、改用。改做、改去單獨看有歧義,拿掉。
+    re.compile(r"改成|換成|改用"),
     re.compile(r"我改變(?:主意|想法)|我想想|重新想|換個方向|換個做法"),
-    re.compile(r"先做|先處理|優先|順序.{0,4}(?:換|改)"),
+    re.compile(r"順序.{0,4}(?:換|改)"),
 )
+
+# 【拿掉的一條,2026-09-11 實測】原本這裡有 `先做|先處理|優先`。
+#
+# 拿真實 transcript 跑之後,「先做 B-10」「先處理採集那個缺口」
+# 被判成改變想法 —— 而它們其實是新要求:她在指定下一步,
+# 不是推翻原本的方向。
+#
+# **單獨一句「先做 X」判不出是哪一種。** 要分辨得知道「原本要做的是什麼」,
+# 而那需要上一則訊息,這個分類器是無狀態的(一次只看一則)。
+#
+# 拿掉之後它們會落到 NEW_REQUEST(有祈使形狀),那更接近實情。
+# 要正確處理得先讓分類器看得到上下文,那是另一件事。
 
 # 確認：短，而且是正面回應。長度限制是必要的 ——
 # 一句「好，那你把 X 改成 Y」的重點在後半，不是那個「好」。
@@ -204,3 +240,176 @@ def classify(text: str) -> OwnerMessage:
         "UNKNOWN",
         "沒有命中任何一條結構規則。分不出來比猜錯好 —— "
         "猜錯會把她行使擁有者的權力記成 AI 的失誤，或者相反", t)
+
+
+# ---------------------------------------------------------------------------
+# 接到 Event Ledger 與北極星鏈（build-plan.md:360）
+# ---------------------------------------------------------------------------
+
+# 五類對到 canonical event type。
+#
+# **三個是 v5.0 §6.2 的，一個是本專案加的，一個刻意不記。**
+#
+#   NEW_REQUEST / CLARIFICATION → USER_INSTRUCTION
+#       澄清也算指令：她在講同一件事，而那件事仍然是要 AI 做的。
+#   CORRECTION → CORRECTION
+#       §6.2 的 Cognitive 類本來就有這個。
+#   MIND_CHANGE → OWNER_GOAL_CHANGE
+#       §6.2 沒有對應的。最接近的 DECISION_PROPOSAL 是「提案」，
+#       而 owner 改變方向不是提案是決定。出處是 build-plan.md:360。
+#   ACKNOWLEDGEMENT → 不記
+#       「好」「繼續」不是一個發生的事，記它只會讓帳本充滿雜訊，
+#       而雜訊會讓真的訊號變得不顯眼。
+#   UNKNOWN → 不記
+#       記一個分不出類型的事件，等於在帳本裡放一筆沒有意義的資料。
+EVENT_TYPE = {
+    "NEW_REQUEST": "USER_INSTRUCTION",
+    "CLARIFICATION": "USER_INSTRUCTION",
+    "CORRECTION": "CORRECTION",
+    "MIND_CHANGE": "OWNER_GOAL_CHANGE",
+    "ACKNOWLEDGEMENT": None,
+    "UNKNOWN": None,
+}
+
+
+def to_event(msg: OwnerMessage, *, session_id: str = "",
+             timestamp: float | None = None) -> tuple | None:
+    """把一則分類結果轉成 (RawEvent, NormalizedEvent)。不該記的回 None。
+
+    延遲 import event_ledger，避免兩個模組互相依賴。
+    """
+    etype = EVENT_TYPE.get(msg.kind)
+    if etype is None:
+        return None
+    import importlib
+    import sys as _sys
+    import time as _time
+    from pathlib import Path as _Path
+    try:
+        el = importlib.import_module("event_ledger")
+    except ImportError:
+        _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+        el = importlib.import_module("event_ledger")
+
+    ts = timestamp if timestamp is not None else _time.time()
+    raw = el.RawEvent(provider="owner", provider_event_type="message",
+                      timestamp=ts,
+                      payload={"text": msg.text, "kind": msg.kind,
+                               "matched": msg.matched})
+    norm = el.NormalizedEvent(
+        raw_event_id=raw.id, type=etype, session_id=session_id,
+        action=msg.kind, subject=msg.matched or "",
+        result=msg.why[:120], provenance="OBSERVED",
+        metadata={"owner_kind": msg.kind})
+    return raw, norm
+
+
+# ---------------------------------------------------------------------------
+# 落差：她改了幾次方向，北極星換了幾版
+# ---------------------------------------------------------------------------
+
+def goal_change_gap(goal_change_events: int, north_star_versions: int) -> dict:
+    """她改變方向的次數，對北極星實際換版的次數。
+
+    **這個函式刻意不自動換北極星，它只把落差算出來。**
+
+    理由有兩層。
+
+    表層：不是每個 MIND_CHANGE 都該換北極星。「不用跑測試了」是改變
+    想法，但它改的是一個步驟不是專案方向。分辨這兩者需要判斷，
+    而判斷正是這一整套東西不做的事。
+
+    深層：換北極星是權威行為。`northstar.Chain.adopt()` 強制要求
+    具名的 authority，就是為了讓「誰決定的」永遠答得出來。
+    一個自動換版的北極星，authority 會變成「系統」——
+    那個欄位就失去意義了。
+
+    **所以這裡產生的是一個問題不是一個動作：** 有 N 次方向改變而
+    北極星還是第 1 版，那正常嗎。答案可能是正常的（那些都是小調整），
+    也可能不是（北極星早就該更新了，而偏離判定一直在拿舊的警告她）。
+    系統問得出來就夠了。
+    """
+    gap = goal_change_events - max(north_star_versions - 1, 0)
+    if goal_change_events == 0:
+        note = "沒有偵測到方向改變"
+    elif gap <= 0:
+        note = "北極星換版的次數跟得上方向改變的次數"
+    else:
+        note = (f"偵測到 {goal_change_events} 次方向改變，"
+                f"而北極星只換過 {max(north_star_versions - 1, 0)} 次。"
+                "差的那幾次可能是小調整不該換版，也可能是北極星該更新了 —— "
+                "在有人確認之前，任何偏離判定都應該先問一句"
+                "「我拿的是不是舊的那一版」")
+    return {
+        "goal_changes": goal_change_events,
+        "north_star_bumps": max(north_star_versions - 1, 0),
+        "gap": gap,
+        "needs_review": gap > 0,
+        "note": note,
+    }
+
+# ---------------------------------------------------------------------------
+# 從 transcript 撈出真的是她講的話
+# ---------------------------------------------------------------------------
+
+# 長得像 owner 訊息但不是的東西。逐條取自
+# `tools/find-owner-signals.mjs` 的 NOT_OWNER，那份清單是實測出來的：
+# 2026-09-09 掃 800 個 session 發現，Codex 的 user_message 有 33.6%
+# 是它自己塞回去的歷史，而那批東西讓 REWORK_DEMANDED 的統計虛胖 5.4 倍。
+#
+# **不過濾的話，這個模組會把系統注入的文字當成她說的話。**
+NOT_OWNER = tuple(re.compile(p) for p in (
+    r"The following is the Codex agent history",
+    r"<heartbeat>",
+    r"^Approach this as the design lead",
+    r"^# /loop —",
+    r"^# Workflow authoring reference",
+    r"^# Schedule Cloud Agents",
+    r"^# In app browser:",
+    r"Another Claude session sent a message",
+    r"<cross-session-message",
+    r"^=== 共享內容 ===",
+    r"以下是其他視窗",
+    r"This session is being continued from a previous conversation",
+    r"^Caveat: The messages below",
+    r"系統提醒|system-reminder",
+    r"\[SYSTEM NOTIFICATION",
+    r"<task-notification>",
+    r"^Contents of /",
+))
+
+
+def is_owner_text(text: str) -> bool:
+    t = text or ""
+    return bool(t.strip()) and not any(p.search(t) for p in NOT_OWNER)
+
+
+def from_transcript(path) -> list[tuple[int, str]]:
+    """從一份 jsonl 撈出 owner 真的講過的話。回傳 (行號, 文字)。
+
+    只看 `type == "user"` 而且 content 是純文字的。
+    tool_result 那種 content 是 list of dict 的不算 —— 那是工具回傳，
+    不是她說的話。
+    """
+    import json as _json
+    out: list[tuple[int, str]] = []
+    with open(path, encoding="utf-8") as f:
+        for i, line in enumerate(f, 1):
+            try:
+                d = _json.loads(line)
+            except ValueError:
+                continue
+            if d.get("type") != "user":
+                continue
+            c = (d.get("message") or {}).get("content")
+            if isinstance(c, str):
+                text = c
+            elif isinstance(c, list):
+                parts = [b.get("text", "") for b in c
+                         if isinstance(b, dict) and b.get("type") == "text"]
+                text = "\n".join(x for x in parts if x)
+            else:
+                continue
+            if is_owner_text(text):
+                out.append((i, text))
+    return out
