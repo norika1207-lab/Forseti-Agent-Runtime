@@ -297,7 +297,7 @@ ARCH-EXEC-001 §1 原文：
 | `F02_Task_State_Machine.md`（F02-TSM-001） | 39 | 已讀 | FULL_READ |
 | `F03_Main_SubSession_Context_Isolation.md`（F03-CSI-001） | 40 | 已讀 | FULL_READ |
 | `F04_Event_Driven_Dispatch.md`（F04-EVT-001） | 37 | 已讀 | FULL_READ |
-| `F05_Watchdog_Heartbeat_Recovery.md` | 39 | **未讀** | NONE |
+| `F05_Watchdog_Heartbeat_Recovery.md`（F05-WDG-001） | 39 | 已讀 | FULL_READ |
 | `F06_Execution_Continuity.md` | 37 | **未讀** | NONE |
 | `F07_Output_Starvation.md` | 33 | **未讀** | NONE |
 | `F08_Context_Isolation_Rehydration.md`（F08-CTX-001） | 36 | 已讀 | FULL_READ |
@@ -432,6 +432,40 @@ CT-F04-03 把它變成可驗收的：**使用者離線八小時，已授權的�
 今天我每一輪做完就停下來等 owner 說下一句。三條全部不符合。
 而 owner 今天整晚在當那個 heartbeat，那正是 F04 副標題寫的
 「humans do not act as heartbeats」的反面。
+
+### 12.3d 對 F05：今天對得最準的一份，但也暴露一個我答不出來的問題
+
+`watchdog.py` 的 `check_liveness()` 因子名是 `duration_anomaly`、
+`no_progress_growth`、`no_event_activity`。**這三個跟 F05 §3 公式裡的
+前三項逐字一致。**
+
+B-12 那個 bug 就出在 `no_event_activity`：`worker_event()` 用兩次
+`time.time()`，剛寫入的事件查不到自己，因子從 0.0 變 1.0。
+我當時寫的回歸測試叫
+`test_CT_F05_03_ping_with_progress_proof_clears_suspicion` ——
+**`CT_F05_03` 正是這份文件 §7 的 conformance test 編號。**
+
+所以我做 F05 的時候，手上有某個來源給了我正確的編號與因子名，
+而我以為那是 v5.0 給的。**那個來源是什麼，我現在答不出來，要查才知道。**
+在查清楚之前不准猜。
+
+這件事本身值得記：一個「用對了編號但說不出編號從哪來」的實作，
+跟 ARCH-EXEC-001 §1 那句「It must name the exact specification IDs
+it loaded」正好相反。
+
+缺的：
+
+| 規格 | 現況 |
+|---|---|
+| §3 第四個因子 `expected_progress_confidence` | 沒實作，我的公式只有三個因子 |
+| §5 recovery ladder 八階 | 只做到 SUSPECT、soft ping 兩階 |
+| `checkpoint` / `restart/reassign` / `clean fork` | 全缺 |
+| §6 心跳健康但證據錯，開獨立的正確性事件 | 沒做，watchdog 只管活著沒活著 |
+
+**`clean fork` 要特別記**：owner 2026-09-11 講的樹狀圖 fork，
+在三份文件裡都出現 —— F05 §5 的 recovery ladder、F08 §4 的
+rehydration 鏈、spec-v2.0 §17 的 Rescue 流程。那不是新功能，
+是三份規格都要求而一份都還沒做的東西。
 
 ### 12.4 對 F02 §5
 
