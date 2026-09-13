@@ -292,6 +292,7 @@ ARCH-EXEC-001 §1 原文：
 | 文件 | 行數 | 狀態 | Coverage |
 |---|---|---|---|
 | `README.md` | 14 | 已讀 | FULL_READ |
+| `spec_manifest.json` | 44 | 已讀 | FULL_READ |
 | `00_Forseti_Execution_Foundation_Architecture.md`（ARCH-EXEC-001） | 84 | 已讀 | FULL_READ |
 | `F01_Persistent_Execution_Contract.md`（F01-PEC-001） | 60 | 已讀 | FULL_READ |
 | `F02_Task_State_Machine.md`（F02-TSM-001） | 39 | 已讀 | FULL_READ |
@@ -713,9 +714,27 @@ F08 §5 原文那句話在這裡第二次成立：
 
 > "I know the document" with SAMPLED coverage is not full understanding.
 
-### 16.6 兩件現在就該修的
+### 16.6 兩件現在就該修的（兩件都已處理）
 
-一，`.forseti/REQUIRED_READING.md` 第 178 行的路徑已經過時，要更新成
-含 `Forseti Agent Runtime` 那層的現行路徑。
+一，`.forseti/REQUIRED_READING.md` 第 178 行的路徑已經過時。
+**已更正**成含 `Forseti Agent Runtime` 那層的現行路徑，並留了更正說明。
 
-二，那份 `spec_manifest.json` 從來沒有被讀過，要讀。
+二，那份 `spec_manifest.json` 從來沒有被讀過。**已讀完**，44 行。
+
+### 16.7 `spec_manifest.json` 裡那條閱讀政策
+
+manifest 的內容大部分是 architecture 加八個 feature 的 id 對 file 映射，
+跟已讀過的九份一致。但最後一行是這整組規格的閱讀政策，逐字：
+
+```json
+"reading_policy": "full-file required; sampled/title-only reading is non-conformant"
+```
+
+**這條寫在機器可讀的 json 裡，不是寫在給人看的 md 裡。**
+也就是說它本來就設計成可以被程式檢查，不是靠 AI 自律。
+
+照這條政策判，我今天對 `.forseti/REQUIRED_READING.md` 的閱讀是
+`non-conformant`：讀了最底下那張表，沒讀上面 60 行，那是 sampled。
+
+這條跟 F08 §5 的七級 Context Coverage 是同一件事的兩種寫法，
+一個給人看，一個給機器讀。**而 repo 裡目前沒有任何程式在檢查它。**
