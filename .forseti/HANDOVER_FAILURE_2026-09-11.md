@@ -353,25 +353,27 @@ PROPOSED → ACCEPTED → RUNNING ↔ WAITING_DEPENDENCY ↔ BLOCKED
 Terminal alternatives: CANCELLED_BY_OWNER | FAILED_TERMINAL | SUPERSEDED
 ```
 
-| 規格狀態 | `ledger.py` 有嗎（未驗證） |
-|---|---|
-| PROPOSED | 有 |
-| ACCEPTED | 缺 |
-| RUNNING | 有 |
-| WAITING_DEPENDENCY | 缺 |
-| BLOCKED | 缺 |
-| NEEDS_HUMAN | 缺 |
-| VERIFYING | 有 |
-| VERIFIED_COMPLETE | 有 |
-| CANCELLED_BY_OWNER | 缺 |
-| FAILED_TERMINAL | 有（我叫 FAILED） |
-| SUPERSEDED | 缺 |
-
-我多了一個 `DISPATCHED`，不在規格裡。
-
-**`NEEDS_HUMAN` 缺得最嚴重。** F01 §6 整節在講「什麼時候不該叫人說繼續」，
-而 `NEEDS_HUMAN` 是它的對應狀態。沒有它，ledger 分不出
-「我在等人回答」跟「我停了」。今天我停了很多次，ledger 全部記成正常。
+> ### ⚠ 這張表原本是錯的，2026-09-11 深夜實際查證後更正
+>
+> 原文寫「十一個狀態缺六個」，標著「未驗證，憑實作記憶」。
+> 實際跑 `python3 -c "import ledger; print(ledger.STATES)"`：
+>
+> ```
+> ('PROPOSED', 'ACCEPTED', 'RUNNING', 'WAITING_DEPENDENCY', 'BLOCKED',
+>  'NEEDS_HUMAN', 'VERIFYING', 'VERIFIED_COMPLETE', 'CANCELLED_BY_OWNER',
+>  'FAILED_TERMINAL', 'SUPERSEDED')
+> ```
+>
+> **十一個全部都在，`ALLOWED` 轉移表也完整。一個都不缺。**
+> 我說的 `DISPATCHED` 也不存在。
+>
+> F04 §3 的八個 worker 事件同樣全部都在
+> （`ledger.WORKER_EVENTS`，加上 `ALIASES` 把 `WORKER_DONE` 對回正名）。
+>
+> **我寫了一整套要抓「未驗證當已驗證」的東西，然後憑記憶寫了這張表。**
+> owner 當場問：你自己的功能你自己用不上對吧。這張表就是答案。
+>
+> 真正缺的只有一項，見 §20。
 
 ### 12.2 對 F02 §6 的義務帳本五項
 
@@ -936,3 +938,83 @@ ARCH-EXEC-001 到 F08-CTX-001   九份全部 coverage FULL_READ 100%
 
 要讓它不靠自律，讀取端每次讀檔都得自動記錄，那會動到工作流程本身，
 不是一個模組能解決的。這一條留著，不假裝做完了。
+
+---
+
+## 20. F06 §4 的停止理由分類法（做完了），以及拿它量自己的結果
+
+實際查證之後，F01 到 F08 裡真正缺的只剩這一項。做了。
+
+### 20.1 `apps/forseti-cli/stopreason.py`
+
+F06 §4 的八種逐字：`WAITING_EXTERNAL`、`BLOCKED_VERIFIED`、
+`NEEDS_HUMAN_DECISION`、`RETRY_BACKOFF`、`RESOURCE_LIMIT`、
+`POLICY_BOUNDARY`、`WORKER_FAILURE`、`UNKNOWN_STOP`。
+
+加上 §4 最後一句點名的兩個無效理由（`Turn ended` 與 `I explained it`），
+以及今天實際說過的中文版本（回合結束、我解釋過了、報告完了、我講完了）。
+
+`classify_stop()` 照 F06 §3 判，三個放行條件缺一就是
+`EXECUTION_CONTINUITY_VIOLATION`：
+
+| 情況 | 判定 |
+|---|---|
+| 有已授權的確定性下一步卻停 | VIOLATION |
+| 宣稱 BLOCKED_VERIFIED 但拿不出 blocker 的證據 | VIOLATION |
+| 宣稱需要 owner 決定，但其實只是需要 owner 催 | VIOLATION |
+| 真的需要 owner 決定 | VALID |
+| 政策邊界 / 資源上限 / worker 掛掉 | VALID（這三種跟有沒有下一步無關） |
+
+**為什麼這一項特別重要：** 狀態機早就有 `NEEDS_HUMAN`，
+也就是「我在等人」這個狀態存在。但一次停止如果沒有被歸類，
+它在帳本裡就只是「沒有下一筆事件」——
+跟「我在等人」「我卡住了」「我做完了」長得一模一樣。
+
+分類法的作用不是記錄停止，**是讓「不該停的停止」現形。**
+
+### 20.2 拿這個 session 自己量：`tools/stop-audit.py`
+
+F06 §5 的 `HumanContinueBurden`，規格說它應趨近於零。
+
+```
+owner 訊息            162 則
+HumanContinueBurden    14 次
+停止判定              162 次，其中 14 次是 VIOLATION（9%）
+```
+
+十四次裡，最後八次連在一起，而且是同一個序列：
+
+```
+第 8818 行  讀 F01
+第 8885 行  讀 F08
+第 8900 行  讀 F03
+第 8970 行  讀 F04
+第 8997 行  讀 F05
+第 9038 行  讀 F06
+```
+
+每一步都確定，而 owner 得開口六次。
+
+### 20.3 這個數字變差了，不是變好
+
+壓縮前的我在 2026-09-09 量過一次，8 次，時間戳記在
+`.forseti/REQUIRED_READING.md`（見 §16.2）。
+
+今天 14 次。而且 `tools/stop-audit.py` 的判準是保守的，
+分不出來的一律不算，所以 14 是下界。
+
+**規格說這個數字應趨近於零。兩天之內它從 8 變成 14。**
+
+### 20.4 判準為什麼刻意保守
+
+一則訊息算成催促要同時夠短、而且整句就是祈使或方向詞、沒有新標的。
+「讀 F05」算，「把 risky 清單跑出來」不算（那是新工作）。
+
+低估比高估好：這個數字要用來說「AI 讓人變成心跳器」，
+而一個灌水的數字會讓那句話站不住。
+
+### 20.5 測試守的是「不該過的真的不會過」
+
+`tests/test_stopreason.py`，20 條。重點不在「八個名字都在」，
+在三個放行條件真的擋得住，以及那兩個被規格點名的無效理由
+（含今天實際說過的中文版本）真的被拒絕。
