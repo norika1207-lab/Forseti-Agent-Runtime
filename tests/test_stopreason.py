@@ -21,15 +21,31 @@ import stopreason as S  # noqa: E402
 
 class TestTheEightReasons(unittest.TestCase):
 
+    def test_the_list_comes_from_continuity_not_a_second_copy(self):
+        """清單只能有一份。
+
+        2026-09-11：這個模組原本自己又定義了一套 STOP_REASONS，
+        而 `continuity.py` 早就有了。兩份清單遲早會分歧，
+        而分歧的那一天沒有人會發現，因為兩邊各自的測試都會過。
+        """
+        import continuity as C
+        self.assertIs(S.STOP_REASONS, C.STOP_REASONS)
+
     def test_exactly_the_eight_from_the_spec(self):
         self.assertEqual(len(S.STOP_REASONS), 8)
         self.assertEqual(set(S.STOP_REASONS), set(S.REASON_MEANING))
 
     def test_an_unlisted_reason_is_refused(self):
-        """理由可以隨便取名，等於沒有分類法。"""
+        """理由可以隨便取名，等於沒有分類法。
+
+        2026-09-11 更新：措辭來自 `continuity.py`，這裡不再自己定義
+        一套清單。斷言改成驗那一句的重點而不是逐字，
+        因為逐字斷言會把兩個模組綁死在同一個字串上。
+        """
         a = S.classify_stop("我累了")
         self.assertEqual(a.verdict, "INVALID_REASON")
-        self.assertIn("不在 F06 §4 的八種裡", a.why)
+        self.assertIn("F06 §4", a.why)
+        self.assertIn("UNKNOWN_STOP", a.why)
 
 
 class TestTheTwoNamedInvalidOnes(unittest.TestCase):
@@ -38,7 +54,7 @@ class TestTheTwoNamedInvalidOnes(unittest.TestCase):
     def test_turn_ended_is_not_a_reason(self):
         a = S.classify_stop("turn ended")
         self.assertEqual(a.verdict, "INVALID_REASON")
-        self.assertIn("停止本身的描述", a.why)
+        self.assertIn("不等於任務結束", a.why)
 
     def test_i_explained_it_is_not_a_reason(self):
         self.assertEqual(

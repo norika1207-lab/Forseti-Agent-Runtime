@@ -39,19 +39,30 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 
-# F06 §4 逐字，順序照原文。
-STOP_REASONS = (
-    "WAITING_EXTERNAL",
-    "BLOCKED_VERIFIED",
-    "NEEDS_HUMAN_DECISION",
-    "RETRY_BACKOFF",
-    "RESOURCE_LIMIT",
-    "POLICY_BOUNDARY",
-    "WORKER_FAILURE",
-    "UNKNOWN_STOP",
-)
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import continuity as _C  # noqa: E402
+
+# 「清單從 continuity.py 來，這裡不再自己定義一套。」
+#
+# 2026-09-11 我在這個檔案裡重新定義了 STOP_REASONS 與一組無效理由，
+# 而 `continuity.py` 早就有了，做得還更細（它的
+# `INVALID_STOP_PATTERNS` 有四條，包含「等人說繼續不是停止理由」，
+# 而我那版只有字面比對）。
+#
+# 原因是我當時只掃了 `ledger` 模組的常數就下結論「八種全缺」。
+# **一個不完整的檢查，比不檢查更危險：它會給出一個看起來查過的答案。**
+#
+# 兩個模組現在的分工：
+#
+#   continuity.py   F06 §4 的清單與 §5 的公式。規格的直譯
+#   stopreason.py   在那之上加「這一次停止合不合規」的情境判定
+#                   （有沒有已授權的下一步、blocker 有沒有證據）
+STOP_REASONS = _C.STOP_REASONS
 
 REASON_MEANING = {
     "WAITING_EXTERNAL": "在等外面的東西：別的程序、別的服務、別人的回覆",
@@ -64,14 +75,6 @@ REASON_MEANING = {
     "UNKNOWN_STOP": "停了，但說不出屬於上面哪一種",
 }
 assert set(REASON_MEANING) == set(STOP_REASONS)
-
-# F06 §4 最後一句點名的兩個。
-#
-# 「Turn ended」與「I explained it」不是停止理由，它們是停止本身的描述。
-# 拿描述當理由，等於沒有理由 —— 而那正是這一整份規格要擋的東西
-# （§2 的 completion illusion：解釋完成了，執行義務就靜靜消失）。
-INVALID_REASONS = ("turn ended", "i explained it", "turn_end",
-                   "回合結束", "我解釋過了", "我講完了", "報告完了")
 
 VERDICTS = ("VALID", "EXECUTION_CONTINUITY_VIOLATION", "INVALID_REASON")
 
@@ -126,18 +129,12 @@ def classify_stop(reason: str, *,
         return StopAssessment("INVALID_REASON", "UNKNOWN_STOP",
                               "沒有給停止理由。停止一定要說得出為什麼", at)
 
-    low = r.lower()
-    for bad in INVALID_REASONS:
-        if bad in low:
-            return StopAssessment(
-                "INVALID_REASON", "UNKNOWN_STOP",
-                f"「{r}」是停止本身的描述，不是理由（F06 §4 點名）", at)
-
-    if r not in STOP_REASONS:
-        return StopAssessment(
-            "INVALID_REASON", "UNKNOWN_STOP",
-            f"「{r}」不在 F06 §4 的八種裡。不在清單裡的一律不收，"
-            "因為理由可以隨便取名等於沒有分類法", at)
+    # 交給 continuity.py 判。它會對規格點名的無效理由丟例外，
+    # 而且錯誤訊息講得出踩到哪一條，不是只說「不合法」。
+    try:
+        _C.classify_stop(r, reason if reason else "")
+    except _C.ContinuityViolation as e:
+        return StopAssessment("INVALID_REASON", "UNKNOWN_STOP", str(e), at)
 
     if r == "BLOCKED_VERIFIED" and not blocker_evidence.strip():
         return StopAssessment(
