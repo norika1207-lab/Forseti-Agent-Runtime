@@ -100,19 +100,51 @@ def declared() -> dict[str, tuple[str, str]]:
     return out
 
 
-def coverage_gap(doc_id: str) -> None:
+def coverage_gap(doc_id: str, fname: str = "") -> dict | None:
     """這一份讀了哪幾行，沒讀哪幾行。
 
-    「現在回 None，而且不打算用猜的填。」
+    「2026-09-11 之前這裡回 None 並說明為什麼。現在它真的答得出來了。」
 
-    要回答它需要讀取端在每次讀檔時記下行號範圍，那是 F08 §5 七級
-    Context Coverage 裡分辨 SAMPLED 與 FULL_READ 的唯一依據。
-    hash 比對做不到這件事：一個只讀了最後 20 行的人，
-    算出來的檔案 hash 跟讀完整份的人一模一樣。
+    答案來自 `.forseti/reading_coverage.jsonl`（append-only），
+    由 `apps/forseti-cli/coverage.py` 的 `CoverageLog` 維護。
 
-    留這個函式而不是不寫，是為了讓「這一塊還沒做」在程式碼裡看得見。
+    沒有記錄的時候仍然回 None，而且那是對的：**沒有涵蓋記錄
+    不等於沒讀，也不等於讀了。** 跟 `claims.py` 的三態同一個原則。
+    回一個 0% 會冤枉一個真的讀過但沒記錄的人。
     """
-    return None
+    if not fname:
+        return None
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "forseti_coverage",
+            REPO / "apps" / "forseti-cli" / "coverage.py")
+        if spec is None or spec.loader is None:
+            return None
+        cov = importlib.util.module_from_spec(spec)
+        # 「先放進 sys.modules 再 exec，順序不能反。」
+        #
+        # `dataclasses` 在處理類別時會去 `sys.modules` 找宣告它的模組，
+        # 找不到就炸 `AttributeError: 'NoneType' object has no attribute
+        # '__dict__'`。2026-09-11 實際撞到：coverage.py 有 dataclass，
+        # 而動態載入沒有註冊，於是每一次查詢都丟例外。
+        sys.modules[spec.name] = cov
+        spec.loader.exec_module(cov)
+        log = cov.CoverageLog(root=REPO)
+        rec = log.merged_for(str(SPEC_DIR / fname))
+    except Exception as e:                   # noqa: BLE001
+        # 「不要把例外吞成 None。」
+        #
+        # 原本這裡是 `except Exception: return None`，於是上面那個
+        # AttributeError 被顯示成「coverage 無記錄」——
+        # 一個壞掉的查詢跟一個誠實的「沒有記錄」長得一模一樣，
+        # 而前者才是要修的。這正是這個專案一直在抓的形狀。
+        return {"error": f"{type(e).__name__}: {e}"}
+    if rec is None:
+        return None
+    return {"level": rec.level(), "ratio": round(rec.ratio, 4),
+            "gaps": [list(x) for x in rec.gaps()],
+            "conformant": rec.conformant()}
 
 
 def check() -> dict:
@@ -150,7 +182,7 @@ def check() -> dict:
         rows.append({"id": doc_id, "file": fname, "verdict": verdict,
                      "why": why, "actual": actual,
                      "declared": dec[1] if dec else None,
-                     "coverage_gap": coverage_gap(doc_id)})
+                     "coverage_gap": coverage_gap(doc_id, fname)})
 
     return {"status": "NON_CONFORMANT" if bad else "CONFORMANT",
             "policy": policy, "checked": len(rows), "bad": bad, "rows": rows}
@@ -170,11 +202,23 @@ def main(argv: list[str]) -> int:
         print()
         for row in r["rows"]:
             mark = "  " if row["verdict"] == "OK" else "！"
-            print(f"  {mark}{row['id']:<16} {row['verdict']:<12} {row['why']}")
+            cg = row.get("coverage_gap")
+            cov = ""
+            if cg and cg.get("error"):
+                cov = f"　coverage 查詢出錯：{cg['error']}"
+            elif cg:
+                cov = f"　coverage {cg['level']} {cg['ratio']:.0%}"
+                if not cg["conformant"]:
+                    cov += f"　沒讀到 {cg['gaps']}"
+            elif row["verdict"] == "OK":
+                cov = "　coverage 無記錄（不等於沒讀，也不等於讀了）"
+            print(f"  {mark}{row['id']:<16} {row['verdict']:<12}"
+                  f"{row['why']}{cov}")
         print()
-        print("  這支驗的是「檔案沒變」與「補讀表有記錄」。")
-        print("  它驗不到「讀了幾行」—— 只讀最後 20 行算出來的 hash，")
-        print("  跟讀完整份的一模一樣。那要段落層級的 coverage，見 coverage_gap()。")
+        print("  hash 那一層驗的是「檔案沒變」與「補讀表有記錄」。")
+        print("  coverage 那一層驗的是「讀了哪幾行」，來自")
+        print("  .forseti/reading_coverage.jsonl（append-only）。")
+        print("  沒有涵蓋記錄時顯示「無記錄」而不是 0%：沒記錄不等於沒讀。")
         print()
     return 0 if r["status"] == "CONFORMANT" else 1
 

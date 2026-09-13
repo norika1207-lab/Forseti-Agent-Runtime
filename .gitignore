@@ -18,6 +18,8 @@ node_modules/
 # 而我宣稱「已經 commit」——commit 確實成功了,只是不含那個檔案。
 # 白名單是「列舉式」的,所以每一份新的控制檔都要自己加一行,漏了不會有錯誤。
 !.forseti/HANDOVER_FAILURE_*.md
+# 產品方向。owner 2026-09-11 逐字交代的三件事,不能只活在 context 裡。
+!.forseti/PRODUCT_DIRECTION.md
 ._*
 .DS_Store
 
