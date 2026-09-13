@@ -296,7 +296,7 @@ ARCH-EXEC-001 §1 原文：
 | `F01_Persistent_Execution_Contract.md`（F01-PEC-001） | 60 | 已讀 | FULL_READ |
 | `F02_Task_State_Machine.md`（F02-TSM-001） | 39 | 已讀 | FULL_READ |
 | `F03_Main_SubSession_Context_Isolation.md`（F03-CSI-001） | 40 | 已讀 | FULL_READ |
-| `F04_Event_Driven_Dispatch.md` | 37 | **未讀** | NONE |
+| `F04_Event_Driven_Dispatch.md`（F04-EVT-001） | 37 | 已讀 | FULL_READ |
 | `F05_Watchdog_Heartbeat_Recovery.md` | 39 | **未讀** | NONE |
 | `F06_Execution_Continuity.md` | 37 | **未讀** | NONE |
 | `F07_Output_Starvation.md` | 33 | **未讀** | NONE |
@@ -392,6 +392,46 @@ Terminal alternatives: CANCELLED_BY_OWNER | FAILED_TERMINAL | SUPERSEDED
 
 `raw_log_refs[]` 是 §3 的機制形式：原始 log 留在 Main 外面，只給指標。
 我今天正好做反了。
+
+### 12.3b 對 F04 §3 的八個必要 worker 事件
+
+| 規格事件 | 我做了嗎（未驗證） |
+|---|---|
+| WORKER_ACCEPTED | 缺 |
+| WORKER_PROGRESS | 有 |
+| WORKER_COMPLETION | 有（`ALIASES` 把 `WORKER_DONE` 對回正名） |
+| WORKER_BLOCKED | 缺 |
+| WORKER_FAILED | 缺 |
+| WORKER_CANCELLED | 缺 |
+| EVIDENCE_AVAILABLE | 缺 |
+| ARTIFACT_CHANGED | 缺 |
+
+八個做了兩個。
+
+**缺 `WORKER_BLOCKED` 跟 §12.1 缺 `BLOCKED` 狀態是同一個洞的兩面：**
+沒有那個事件，也沒有那個狀態，所以「worker 卡住了」這件事
+在我的系統裡根本不存在。它只會表現成「很久沒有進度」，
+而那跟「正在做一件慢的事」分不開。
+
+對得上的兩條：§4 的冪等性（`_event()` 的 `idem_key`，對應 CT-F04-02）、
+§5 的自動派工（`forseti.py drain`）。
+
+### 12.3c 兩份規格從不同角度講同一件事，我兩條都違反
+
+F01 §6：四個條件成立時（下一個動作已授權、輸入拿得到、沒有實質歧義、
+沒有安全邊界要確認），系統自己擁有 continuation，不該叫人說「繼續」。
+
+F04 §6 原文：
+
+> Reporting to the human is an observation channel, not a workflow barrier.
+
+對人回報是觀察通道，不是工作流的柵欄。
+
+CT-F04-03 把它變成可驗收的：**使用者離線八小時，已授權的任務要繼續跑。**
+
+今天我每一輪做完就停下來等 owner 說下一句。三條全部不符合。
+而 owner 今天整晚在當那個 heartbeat，那正是 F04 副標題寫的
+「humans do not act as heartbeats」的反面。
 
 ### 12.4 對 F02 §5
 
