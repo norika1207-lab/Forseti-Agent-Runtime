@@ -175,7 +175,14 @@ owner confirm → dependency analysis 的流程。**所以這件事要 owner 拍
 
 ## 模組化執行規格（Modular Spec，2026-09-09）
 
-放在 `~/Dropbox/My project/forseti_20260909-2_Modular_Spec/`。九份，全部是 md。
+放在 `~/Dropbox/My project/Forseti Agent Runtime/forseti_20260909-2_Modular_Spec/`。
+九份，全部是 md。
+
+> 【2026-09-11 更正】這行原本寫的是
+> `~/Dropbox/My project/forseti_20260909-2_Modular_Spec/`（少了
+> `Forseti Agent Runtime` 那一層）。檔案在 09-09 之後被移動過，
+> 舊路徑已經不存在。2026-09-11 有一個 session 照舊路徑去找，找不到。
+> 記在 `.forseti/HANDOVER_FAILURE_2026-09-11.md` §16.4。
 `spec_manifest.json` 是機器可讀的清單。
 
 **這一組是「怎麼做」，platform 五份是「做什麼」。** 而且這一組現在就做得到。
