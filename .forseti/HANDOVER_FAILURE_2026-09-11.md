@@ -298,8 +298,8 @@ ARCH-EXEC-001 §1 原文：
 | `F03_Main_SubSession_Context_Isolation.md`（F03-CSI-001） | 40 | 已讀 | FULL_READ |
 | `F04_Event_Driven_Dispatch.md`（F04-EVT-001） | 37 | 已讀 | FULL_READ |
 | `F05_Watchdog_Heartbeat_Recovery.md`（F05-WDG-001） | 39 | 已讀 | FULL_READ |
-| `F06_Execution_Continuity.md` | 37 | **未讀** | NONE |
-| `F07_Output_Starvation.md` | 33 | **未讀** | NONE |
+| `F06_Execution_Continuity.md`（F06-EXC-001） | 37 | 已讀 | FULL_READ |
+| `F07_Output_Starvation.md`（F07-OUT-001） | 33 | 已讀 | FULL_READ |
 | `F08_Context_Isolation_Rehydration.md`（F08-CTX-001） | 36 | 已讀 | FULL_READ |
 
 repo 內仍未讀：`docs/spec-v0.1.md`（471 行）、`docs/cases/README.md`（81 行）、
@@ -544,3 +544,53 @@ owner 今天必須開口問「你知道你讀了多少文件嗎」。她不該�
 
 壓縮隨時會發生，而壓縮後的 session 只看得到落在磁碟上的東西。
 一份寫到一半但已經存檔的記錄，比一份完整但還在 context 裡的有用。
+
+---
+
+## 15. 八份 feature spec 全部讀完之後的總帳（2026-09-11 深夜）
+
+ARCH-EXEC-001 加 F01 到 F08，419 行全部 FULL_READ。
+現在可以回答 owner 那個問題：要不要重做。
+
+### 15.1 結論：不是重做，是補
+
+`forseti.py tasks` 的未完成義務原文寫著
+「實作 Forseti Execution Foundation：ARCH-EXEC-001 底下的 F01 到 F08」，
+狀態 VERIFYING，也就是還沒完成。
+
+而 `src/*.js` 那 40 個模組是觀測層（capture、persist、drift、provenance、
+signals、rhetoric、intervention 這些），F01 到 F08 是執行層
+（任務持續性、狀態機、派工、watchdog、連續性、吐白、context 隔離）。
+
+**這是一層本來就沒做的東西，我今天做的方向是對的。**
+錯的是我照了 09-04 的 v5.0，不是照 09-09 的 F01 到 F08。
+
+所以要做的是對照規格補齊，不是砍掉重來。
+
+### 15.2 逐份完成度（憑實作記憶，未逐行核對）
+
+| 規格 | 我做的 | 缺的 |
+|---|---|---|
+| F01 持續執行契約 | 無明確對應 | PersistentExecutionContract 十四欄、四個終端狀態的語意 |
+| F02 任務狀態機 | `ledger.py` 狀態機 | 十一個狀態缺六個（ACCEPTED / WAITING_DEPENDENCY / BLOCKED / NEEDS_HUMAN / CANCELLED_BY_OWNER / SUPERSEDED）；義務帳本五項缺一項 |
+| F03 主從隔離 | `collect_inbox()`、回報通道 | Worker Result Packet 十一欄缺四欄 |
+| F04 事件派工 | `dispatch`、`drain`、`idem_key` | 八個 worker 事件只做兩個 |
+| F05 watchdog | `check_liveness()` 三因子 | 第四因子、recovery ladder 八階只做兩階 |
+| F06 執行連續性 | `continuity()` | 停止理由八種全缺、EXECUTION_CONTINUITY_VIOLATION、HumanContinueBurden |
+| F07 吐白 | Evidence Receipt | 五個失效類別全缺、recovery 流程 |
+| F08 context 壓縮 | 無 | 全部。而這正是今天事故的根因所在 |
+
+### 15.3 三份規格都要求而一份都沒做的：clean fork
+
+F05 §5 recovery ladder 的倒數第二階、F08 §4 rehydration 鏈的終點、
+spec-v2.0 §17 Rescue 流程的 `CLEAN FORK / NEW SESSION / RESUME`。
+
+owner 2026-09-11 講的樹狀圖 fork 就是這個。**它不是新功能，
+是三份規格都寫了而實作完全沒有的一塊。**
+
+### 15.4 一個我答不出來的來源問題
+
+`watchdog.py` 的因子名跟 F05 §3 公式前三項逐字一致，
+測試名帶著 `CT_F05_03` 這個正確編號，而我以為那是 v5.0 給的。
+
+那個來源是什麼，我現在答不出來。查清楚之前不准猜。
