@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Forseti</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="shell">
+
+  <header class="topbar" data-tauri-drag-region>
+    <div class="brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="name">Forseti</span>
+    </div>
+    <div class="repo" id="repo"></div>
+    <div class="lamp" id="lamp">
+      <span class="dot"></span>
+      <span class="lv">讀取中</span>
+    </div>
+  </header>
+
+  <div class="body">
+
+    <aside class="rail">
+      <nav>
+        <button class="tab" data-view="tree" aria-pressed="true">路徑</button>
+        <button class="tab" data-view="health" aria-pressed="false">狀態</button>
+      </nav>
+      <div class="sessions">
+        <div class="rail-lbl">Session</div>
+        <select id="sessionPick" aria-label="選一個 session"></select>
+        <button class="load" id="loadBtn">載入路徑</button>
+        <p class="hint" id="loadHint"></p>
+      </div>
+    </aside>
+
+    <main class="main">
+
+      <section class="view" id="view-health">
+        <div class="banner" id="banner"></div>
+        <div class="gauges" id="gauges"></div>
+        <div class="advice" id="advice"></div>
+      </section>
+
+      <section class="view" id="view-tree" hidden>
+        <div class="tree-head">
+          <div class="tally" id="tally"></div>
+          <div class="mini-wrap">
+            <div class="mini-lbl">全景 · 依時序</div>
+            <div class="mini" id="mini"></div>
+            <p class="mini-note" id="miniNote"></p>
+          </div>
+        </div>
+        <div class="tree-body">
+          <div class="listcol">
+            <div class="filters" id="filters"></div>
+            <ol class="line" id="list"></ol>
+          </div>
+          <div class="detail" id="detail">
+            <p class="empty">左邊選一個 session，按載入路徑。</p>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <span id="statusText">啟動中</span>
+    <span class="spacer"></span>
+    <span id="stamp"></span>
+  </footer>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>

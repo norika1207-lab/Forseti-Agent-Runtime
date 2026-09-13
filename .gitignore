@@ -47,3 +47,9 @@ __pycache__/
 # B-10 的收件匣。worker 的回報落在這裡,撿完就移到 .done/。
 # 不進版控:它是執行期的暫存,不是專案的一部分。
 .forseti/inbox/
+
+# 桌面版 build 產物。target 已改指本機 APFS(見 desktop/.cargo/config.toml),
+# 這幾條是保險。
+desktop/node_modules/
+desktop/src-tauri/target/
+desktop/dist/

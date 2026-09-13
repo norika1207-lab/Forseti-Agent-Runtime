@@ -1,0 +1,14 @@
+# build 產物放本機 APFS,不放 exFAT。
+#
+# 【2026-09-13 實測,不是預防性設定】
+# NewDrive 是 exFAT,macOS 會為每個帶 extended attribute 的檔案寫一個
+# `._` sidecar。Tauri 的 build script 會掃 permissions 目錄下的每個
+# .toml,而它把 `._default.toml` 當成真的權限檔去讀,然後炸在
+# 「stream did not contain valid UTF-8」。
+#
+# 刪掉不夠:那些 sidecar 在下一次寫檔時又會長回來。
+#
+# 這不違反「開發檔案存外接碟」那條規則 —— build 產物是暫存,
+# 原始碼仍然在外接碟上。而且它在 exFAT 上根本編不起來。
+[build]
+target-dir = "/Users/norikaoda/.forseti/build/forseti-desktop"
