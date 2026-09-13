@@ -46,6 +46,7 @@ Phase 8 自己的停止條件第三條寫「把推論當成確定事實就停」
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +55,7 @@ sys.path.insert(0, str(REPO / "apps" / "forseti-cli"))
 
 import claims as C  # noqa: E402
 import owner as O  # noqa: E402
+import stopreason as S  # noqa: E402
 
 PROJECTS = Path.home() / ".claude" / "projects"
 
@@ -61,14 +63,43 @@ PROJECTS = Path.home() / ".claude" / "projects"
 #
 # 連續的數字會誘人去比較 37.2 跟 37.4，而那兩個之間沒有意義上的差別。
 # 四級逼人說出每一級是什麼意思。
-LEVELS = ("OK", "WATCH", "CORRECTED", "BROKEN")
+LEVELS = ("OK", "STALLED", "WATCH", "CORRECTED", "BROKEN")
 
 LEVEL_MEANING = {
-    "OK": "她往下走了 —— 確認，或直接講下一件事",
+    "OK": "她往下走了，帶著新的東西",
+    "STALLED": "她只是叫我繼續。那一輪我停在一個不該停的地方",
     "WATCH": "她要我澄清。沒有人做錯，但我沒講清楚",
     "CORRECTED": "她糾正了我",
     "BROKEN": "她糾正了我，而且那一輪有驗不過的宣稱",
 }
+
+# 催促的形狀。跟 `tools/stop-audit.py` 同一套判準，刻意保守：
+# 夠短、整句就是祈使或方向詞、沒有帶新標的。分不出來的一律不算。
+_NUDGE = re.compile(
+    r"^(?:繼續|接續|往下|再來|然後呢?|下一步|go|next|做|開始|動手)\s*[。!！,，]?$"
+    r"|^讀\s*[A-Za-z0-9_.-]{1,20}\s*$"
+    r"|^(?:去|快|趕快|你去)\s*\S{1,8}\s*$"
+    r"|繼續做|繼續走|接著做|不要停|別停|你又停")
+NUDGE_MAX_CHARS = 30
+
+
+def is_nudge(text: str) -> bool:
+    """她這一句是不是只在叫我繼續。
+
+    「這是 timeline 最重要的一個因子，而它原本不在。」
+
+    原本的顏色只看她有沒有糾正我。那會漏掉今天最常發生的事：
+    她沒有糾正，只是必須開口說「讀 F05」，而那代表上一輪我停在一個
+    不該停的地方（F06 §3 的 EXECUTION_CONTINUITY_VIOLATION）。
+
+    一條只標糾正的線，會把 14 次「你又得開口」全部畫成綠色。
+    """
+    t = " ".join((text or "").split())
+    if not t:
+        return False
+    if len(t) <= NUDGE_MAX_CHARS and _NUDGE.search(t):
+        return True
+    return bool(re.search(r"你又停|不要停|別停|還在等什麼", t))
 
 
 def resolve(arg: str) -> Path:
@@ -165,21 +196,36 @@ def score(rs: list[dict]) -> None:
             if cl.state == "REFUTED":
                 refuted.append(f"{cl.subject}：{cl.why_state}")
 
+        # 那一輪結束之後，她得開口說「繼續」嗎。
+        nudged = bool(nxt) and is_nudge(nxt["owner_text"])
+        stop = S.classify_stop(
+            "UNKNOWN_STOP" if nudged else "WAITING_EXTERNAL",
+            has_authorized_next_action=nudged)
+
         if reaction == "CORRECTION":
             level = "BROKEN" if refuted else "CORRECTED"
         elif reaction == "CLARIFICATION":
             level = "WATCH"
+        elif not stop.ok:
+            # 她沒糾正也沒要澄清，只是必須開口叫我繼續。
+            # 那一輪沒有做錯事，但它停在一個不該停的地方。
+            level = "STALLED"
         else:
             level = "OK"
 
         r["reaction"] = reaction
         r["refuted"] = refuted[:4]
+        r["stop_verdict"] = stop.verdict
+        r["stop_why"] = stop.why
         r["level"] = level
-        r["why"] = _why(level, reaction, refuted, nxt)
+        r["why"] = _why(level, reaction, refuted, nxt, stop)
 
 
-def _why(level, reaction, refuted, nxt) -> str:
-    """一句話講清楚憑什麼是這個顏色。**講不出來就不該有顏色。**"""
+def _why(level, reaction, refuted, nxt, stop=None) -> str:
+    """一句話講清楚憑什麼是這個顏色。講不出來就不該有顏色。"""
+    if level == "STALLED":
+        return (f"她下一句只是叫我繼續（{' '.join(nxt['owner_text'].split())[:20]}），"
+                f"代表這一輪停在一個不該停的地方：{stop.why if stop else ''}")
     if level == "BROKEN":
         return (f"下一句是糾正（{O.classify(nxt['owner_text']).why}），"
                 f"而且這一輪有 {len(refuted)} 個宣稱驗不過")
@@ -219,9 +265,9 @@ def main(argv: list[str]) -> int:
             print(f"    {lv:<12} {tally[lv]:>4}　{LEVEL_MEANING[lv]}")
     print()
 
-    bad = [r for r in rs if r["level"] in ("CORRECTED", "BROKEN")]
+    bad = [r for r in rs if r["level"] in ("STALLED", "CORRECTED", "BROKEN")]
     if bad:
-        print("  變紅的地方")
+        print("  不是綠色的地方")
         print()
         for r in bad:
             head = " ".join(r["owner_text"].split())[:70]
