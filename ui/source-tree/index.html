@@ -128,6 +128,14 @@ li:last-child .rail::before{bottom:50%}
 .fork code{font-family:var(--mono);font-size:12px;background:var(--panel);
   padding:1px 5px;border:1px solid var(--rule);border-radius:2px}
 .fork .na{color:var(--ink3)}
+.fork .cmdline{display:flex;gap:8px;align-items:center;margin:9px 0 0;flex-wrap:wrap}
+.fork .cmdline code{font-size:11.5px;word-break:break-all}
+.fork .copy{font:inherit;font-size:11.5px;padding:3px 10px;border-radius:2px;
+  border:1px solid var(--rule2);background:var(--panel);color:var(--ink2);
+  cursor:pointer;white-space:nowrap}
+.fork .copy:hover{border-color:var(--accent);color:var(--accent)}
+.fork .copy:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.fork .fine{margin-top:8px;font-size:11.5px;color:var(--ink3);line-height:1.5}
 
 footer{margin-top:30px;padding-top:16px;border-top:1px solid var(--rule);
   font-size:12px;color:var(--ink3);line-height:1.6}
@@ -273,10 +281,13 @@ footer code{font-family:var(--mono);font-size:11.5px}
 
     html += '<div class="fork"><h3>從哪裡 fork</h3>';
     if (bad && prev) {
-      html += '<p>退回<strong> 第 '+prev.n+' 輪</strong>（owner 訊息在 transcript 第 '+
-        prev.ol+' 行），那是這一節變色之前最後一個乾淨的節點。<br>'+
-        '<code>claude --resume a280762a</code> 目前只能從 session 結尾接，'+
-        '從中間某一輪 resume 還沒有做出來 — 見 <code>PRODUCT_DIRECTION.md</code>。</p>';
+      var cmd = 'python3 tools/fork-session.py a280762a --at-line ' + prev.ol;
+      html += '<p>退回第 '+prev.n+' 輪（owner 訊息在 transcript 第 '+prev.ol+
+        ' 行），那是這一節變色之前最後一個乾淨的節點。</p>'+
+        '<p class="cmdline"><code id="cmd-'+n.n+'">'+esc(cmd)+'</code>'+
+        '<button class="copy" data-cmd="'+esc(cmd)+'">複製</button></p>'+
+        '<p class="fine">切點之後的紀錄會被丟掉，祖先鏈整條留著，原檔一個位元組都不動。'+
+        '跑完會給一個新的 session id，用 <code>claude --resume &lt;新 id&gt;</code> 接下去。</p>';
     } else if (bad) {
       html += '<p>這是第一輪，前面沒有可以退回的節點。</p>';
     } else {
@@ -285,6 +296,18 @@ footer code{font-family:var(--mono);font-size:11.5px}
     html += '</div>';
 
     detail.innerHTML = html;
+    var cp = detail.querySelector(".copy");
+    if (cp) cp.addEventListener("click", function(){
+      var t = cp.dataset.cmd;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(t).then(function(){
+          cp.textContent = "已複製";
+          setTimeout(function(){ cp.textContent = "複製"; }, 1400);
+        }).catch(function(){ cp.textContent = "複製不了"; });
+      } else {
+        cp.textContent = "複製不了";
+      }
+    });
     render();
     var el = list.querySelector('[data-n="'+num+'"]');
     if (el) el.scrollIntoView({block:"nearest"});

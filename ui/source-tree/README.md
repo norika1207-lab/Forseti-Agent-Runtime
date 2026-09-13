@@ -38,15 +38,51 @@ python3 tools/timeline.py <session-uuid> --out /tmp/timeline.json
 `nodes.sample.js` 是 2026-09-11 那個 session 的實際資料，
 163 輪，留著當範例與回歸對照。
 
+## fork 做出來了
+
+`tools/fork-session.py`。點任何一個變色的節點，介面給一行可以直接跑的指令：
+
+```bash
+python3 tools/fork-session.py <session-uuid> --at-line <行號>
+```
+
+跑完會在同一個 projects 目錄產生一個新的 jsonl，
+`claude --resume <新 id>` 就從那一節接下去。
+
+### 內建的 --fork-session 為什麼不夠
+
+`claude --resume <id> --fork-session` 存在，說明寫著
+「When resuming, create a new session ID instead of reusing the original」。
+但它是從 session 的**結尾**分岔，而 owner 要的是從中間某一輪 ——
+中間那一輪之後發生的事，正是要丟掉的那部分。
+
+### 做法：transcript 本身就是一棵樹
+
+每一行帶 `uuid` 與 `parentUuid`。從任何節點沿 `parentUuid` 往回走，
+就是那一刻的完整祖先鏈。所以不需要改動宿主，只要沿鏈收集、
+換一個 sessionId、寫成新檔案。
+
+2026-09-11 實測，從第 8818 行（owner 說「讀 F01」那一則）切：
+
+```
+留下 694 筆對話 + 2320 筆 header
+丟掉 6,223 筆
+新 session 的最後一筆正是「讀 F01」
+原檔 sha256 不變
+```
+
+### 一個會讓 fork 從一開始就說謊的 bug，已修
+
+沒有 uuid 的行不是無害的中繼資料，它們帶著 session 狀態：
+`last-prompt` 是最後一次的 prompt、`queue-operation` 是待辦佇列、
+`custom-title` 是標題。第一版把它們全部帶過去，等於把切點之後的狀態
+塞進一個宣稱停在切點的 session。現在 header 也跟著行號截斷，
+有測試守著（`test_headers_after_the_cut_are_dropped`）。
+
+**原檔一個位元組都不動。** 一個會改到原始對話的 fork，
+等於把「回頭看當時發生什麼」毀掉，而那正是 Source Tree 存在的理由。
+
 ## 現在做不到的，寫清楚
-
-**fork 只畫得出位置，按不下去。** `claude --resume <id>` 目前只能從
-session 結尾接，從中間某一輪 resume 還沒有做出來。介面上那一段
-明寫了這個限制，沒有畫一個按不下去的按鈕假裝可以。
-
-`clean fork` 在三份規格都出現而實作完全沒有：
-`F05-WDG-001` §5 recovery ladder、`F08-CTX-001` §4 rehydration 鏈、
-`spec-v2.0` §17 Rescue 流程。
 
 **這還不是桌面版。** `PRODUCT_DIRECTION.md` 第一件事是桌面 App，
 這個是網頁。工程書 Phase 8 §17.1 的 in scope 寫的是 `CLI/Tauri UI`。
