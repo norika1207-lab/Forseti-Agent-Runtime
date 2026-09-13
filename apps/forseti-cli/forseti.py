@@ -322,6 +322,48 @@ def build_report(root: Path) -> Report:
 MARK = {"OK": "  ", "WARN": " ! ", "MISSING": " ✗ "}
 
 
+
+def _reading_conformance() -> None:
+    """跑 tools/reading-conformance.py 的檢查,把結果印進 doctor。
+
+    整段包在 try 裡:一個檢查器自己壞掉,不該讓 doctor 跟著不能用。
+    壞掉的時候要說出來,不是靜靜略過 —— 靜靜略過會讓人以為檢查過了。
+    """
+    try:
+        import importlib.util
+        here = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location(
+            "reading_conformance", here / "tools" / "reading-conformance.py")
+        if spec is None or spec.loader is None:
+            return
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        r = mod.check()
+    except Exception as e:                       # noqa: BLE001
+        print(f"  規格閱讀合規　檢查器自己出錯：{type(e).__name__}")
+        print()
+        return
+
+    if r.get("status") == "CANNOT_CHECK":
+        print(f"  規格閱讀合規　無法檢查：{r.get('why', '')}")
+        print()
+        return
+
+    bad = r.get("bad", 0)
+    n = r.get("checked", 0)
+    if not bad:
+        print(f"  規格閱讀合規　{n} 份全部對得上")
+        print("    （驗的是檔案沒變與補讀表有記錄。驗不到「讀了幾行」,")
+        print("      那要段落層級的 coverage,見 coverage_gap()）")
+    else:
+        print(f"  規格閱讀合規　！{bad} / {n} 份不合格")
+        for row in r.get("rows") or []:
+            if row.get("verdict") != "OK":
+                print(f"    · {row.get('id')}　{row.get('verdict')}"
+                      f"　{row.get('why', '')}")
+        print("    政策原文：" + r.get("policy", ""))
+    print()
+
 def cmd_doctor(rep: Report) -> int:
     print()
     print(f"  專案根目錄　{rep.root}")
@@ -399,6 +441,14 @@ def cmd_doctor(rep: Report) -> int:
     ok_count = sum(1 for f in rep.findings if f.level == "OK")
     print(f"      （另有 {ok_count} 項正常，未列出）")
     print()
+
+    # 規格閱讀合規。spec_manifest.json 那條 reading_policy 寫著
+    # 「full-file required; sampled/title-only reading is non-conformant」,
+    # 而在 2026-09-11 之前沒有任何程式在檢查它。
+    #
+    # 掛在 doctor 而不是獨立跑,理由是接手的人一定會跑 doctor,
+    # 不一定會想到去跑一支他不知道存在的工具。
+    _reading_conformance()
 
     if rep.missing:
         print(f"  結論：缺 {len(rep.missing)} 份必要檔案，這個專案還不能接手。")
