@@ -20,6 +20,8 @@ node_modules/
 !.forseti/HANDOVER_FAILURE_*.md
 # 產品方向。owner 2026-09-11 逐字交代的三件事,不能只活在 context 裡。
 !.forseti/PRODUCT_DIRECTION.md
+# Widget 設計規格。owner 2026-09-13 到 09-14 口述的設計意圖正本。
+!.forseti/WIDGET_SPEC.md
 ._*
 .DS_Store
 
