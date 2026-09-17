@@ -190,14 +190,57 @@ class TestTakeoverGate(unittest.TestCase):
         self.assertIn("讀完幾份", joined)
         self.assertIn("照妖鏡", joined)
 
-    def test_gate_admits_it_cannot_verify_answers_yet(self):
-        """這個版本只列題目不驗答案，要講出來，不要讓人以為它在把關。"""
-        rep = forseti.build_report(ROOT)
+    def _sandbox_report(self):
+        """把閘門指到一份臨時副本，不要讓測試往真實帳本寫考卷。
+
+        `rep.missing` 仍然是對真 ROOT 算的，所以閘門該早退的時候照樣早退。
+        """
+        import dataclasses
+        import shutil
+        import tempfile
+
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / ".forseti").mkdir()
+        for name in ("NORTH_STAR.md", "DECISION_LEDGER.md", "BLOCKERS.md",
+                     "checkpoints.jsonl", "config.json"):
+            src = ROOT / ".forseti" / name
+            if src.is_file():
+                shutil.copy2(src, tmp / ".forseti" / name)
+        shutil.copy2(ROOT / "bible.md", tmp / "bible.md")
+        return dataclasses.replace(forseti.build_report(ROOT), root=tmp)
+
+    def test_gate_now_actually_grades_answers(self):
+        """B-08 解除：閘門會出一份批改得了的考卷。
+
+        先前這條測的是相反的事（「要講出來自己不驗答案」）。
+        那句話當時是誠實的，現在它會變成謊話 ——
+        `sufficiency.py` 接上之後這個指令真的批改。
+        """
         buf = io.StringIO()
         with redirect_stdout(buf):
-            forseti.cmd_gate_takeover(rep)
+            forseti.cmd_gate_takeover(self._sandbox_report())
         out = buf.getvalue()
-        self.assertIn("不驗證答案", out)
+        self.assertIn("考卷", out)
+        self.assertIn("gate submit", out)
+        self.assertNotIn("不驗證答案", out)
+
+    def test_gate_does_not_reveal_the_answers(self):
+        """v5.0 §39 第 2 步：先看到答案再推導，推導出來的就是那個答案。"""
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            forseti.cmd_gate_takeover(self._sandbox_report())
+        out = buf.getvalue()
+        # 出題的原文裡這幾段是答案，印出來就等於把答案端到受測者面前。
+        self.assertNotIn("環境裡實際是什麼", out)
+        self.assertNotIn("grep 找答案，文件", out)
+
+    def test_gate_says_which_half_it_cannot_verify(self):
+        """六題開放題系統驗不了，要講清楚，不要讓人以為全部都在把關。"""
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            forseti.cmd_gate_takeover(self._sandbox_report())
+        self.assertIn("系統驗不了", buf.getvalue())
 
 
 if __name__ == "__main__":

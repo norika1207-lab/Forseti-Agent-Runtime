@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  開發監督。每 5 分鐘檢查一次，停著而且還有事沒做就自動喚醒。
+
+  owner 2026-09-16：「只要停著就會自動喚醒接續工作，我不准你再把我當奴力」
+
+  【為什麼這份要你自己裝】
+  Claude Code 的權限層擋住了「由 AI 自己安裝一個會起 Claude 進程的
+  常駐服務」，理由是 Create Unsafe Agents。那個判斷是對的：
+  這支服務會用 --dangerously-skip-permissions 起新的 Claude，
+  等於給它一個不需要你點頭就能動手的入口。那種東西要你親手裝。
+
+  【裝】
+    cp "/Volumes/NewDrive/AI Project/Forseti/tools/com.forseti.supervisor.plist" \
+       ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.forseti.supervisor.plist
+
+  【停】三種方法，任何一種都行
+    python3 "/Volumes/NewDrive/AI Project/Forseti/tools/supervisor.py" --off
+    launchctl unload ~/Library/LaunchAgents/com.forseti.supervisor.plist
+    touch "/Volumes/NewDrive/AI Project/Forseti/.forseti/SUPERVISOR_OFF"
+
+  【看它做過什麼】
+    python3 "/Volumes/NewDrive/AI Project/Forseti/tools/supervisor.py" --status
+    tail "/Volumes/NewDrive/AI Project/Forseti/.forseti/supervisor.jsonl"
+
+  【注意 python3 的路徑】
+  下面寫的是 /usr/bin/python3（macOS 內建，一定存在）。
+  如果你的專案需要別版的 python，改掉第一個 <string>。
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.forseti.supervisor</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Volumes/NewDrive/AI Project/Forseti/tools/supervisor.py</string>
+  </array>
+
+  <!-- 每 5 分鐘。真正的門檻在腳本裡（停 25 分鐘才算停著），
+       這裡跑得勤只是為了不要錯過那個時間點。 -->
+  <key>StartInterval</key>
+  <integer>300</integer>
+
+  <!-- 開機或登入時不要立刻跑。剛開機的「停滯」是假的。 -->
+  <key>RunAtLoad</key>
+  <false/>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/forseti-supervisor.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/forseti-supervisor.err</string>
+
+  <!-- 背景優先權，不跟前景工作搶資源。 -->
+  <key>ProcessType</key>
+  <string>Background</string>
+</dict>
+</plist>

@@ -73,33 +73,9 @@ LEVEL_MEANING = {
     "BROKEN": "她糾正了我，而且那一輪有驗不過的宣稱",
 }
 
-# 催促的形狀。跟 `tools/stop-audit.py` 同一套判準，刻意保守：
-# 夠短、整句就是祈使或方向詞、沒有帶新標的。分不出來的一律不算。
-_NUDGE = re.compile(
-    r"^(?:繼續|接續|往下|再來|然後呢?|下一步|go|next|做|開始|動手)\s*[。!！,，]?$"
-    r"|^讀\s*[A-Za-z0-9_.-]{1,20}\s*$"
-    r"|^(?:去|快|趕快|你去)\s*\S{1,8}\s*$"
-    r"|繼續做|繼續走|接著做|不要停|別停|你又停")
-NUDGE_MAX_CHARS = 30
-
-
-def is_nudge(text: str) -> bool:
-    """她這一句是不是只在叫我繼續。
-
-    「這是 timeline 最重要的一個因子，而它原本不在。」
-
-    原本的顏色只看她有沒有糾正我。那會漏掉今天最常發生的事：
-    她沒有糾正，只是必須開口說「讀 F05」，而那代表上一輪我停在一個
-    不該停的地方（F06 §3 的 EXECUTION_CONTINUITY_VIOLATION）。
-
-    一條只標糾正的線，會把 14 次「你又得開口」全部畫成綠色。
-    """
-    t = " ".join((text or "").split())
-    if not t:
-        return False
-    if len(t) <= NUDGE_MAX_CHARS and _NUDGE.search(t):
-        return True
-    return bool(re.search(r"你又停|不要停|別停|還在等什麼", t))
+# 催促的判準搬去 owner.py 了 —— 這裡跟 desktop_api 都要用，
+# 而判斷邏輯只能有一份。兩份遲早會分歧，而分歧的那天沒有人會發現。
+is_nudge = O.is_nudge
 
 
 def resolve(arg: str) -> Path:

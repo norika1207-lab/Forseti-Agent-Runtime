@@ -493,3 +493,64 @@ NormalizedEvent 結構，現有欄位對不上，等於重寫加資料遷移。
 
 書的章節號與 `docs/spec-v2.0.md` 是兩套系統（書 §16 Phase 7 ≈
 spec-v2.0 §17）。repo 程式碼註解裡的 § 編號一律指 spec-v2.0。
+
+---
+
+## 2026-09-15　北極星維持單向，freshness 不用時間衰減
+
+owner 原話：「單向就好，freshness 不用時間衰減」。
+
+這兩件在此之前都掛在待決清單上，`REQUIRED_READING.md`「一件待決的事，
+不要自己決定」那一節明文寫著接手的 session 不准自己改 `NORTH_STAR.md`。
+現在 owner 拍板，所以記在這裡，並且兩處程式碼跟著改。
+
+### 一　北極星維持單向
+
+Vol1 §2 的平台北極星寫成雙向（Human-AI Collaboration Unit，第四條憲法
+明說不是單向檢討 AI），`.forseti/NORTH_STAR.md` 寫的是單向（AI 的狀態
+可觀測，使用者是被服務方）。
+
+**決定：維持單向。** Vol1 的雙向定義屬於平台願景層，不是現在這條線的
+北極星。Vol4 §1 自己寫了「任何 Stage 都必須能單獨產生使用者價值」，
+現在這條線是 L1，雙向屬於 L2 以後。
+
+影響：`goalgate.py` 的 `KNOWN_PROVENANCE_GAPS` 少一條，
+`provenance_integrity` 從 0.5 升到 0.75。
+
+### 二　freshness 不用時間衰減
+
+`docs/spec-v2.0.md` §5.1 的 GAC 公式有 freshness 這個因子，但規格沒有
+定義衰減曲線。先前 `goalgate.py` 一律回 None，讓 GAC 誠實地算不出來，
+理由是不自己編一條看起來像量出來的曲線。
+
+**決定：不用時間衰減，freshness 恆為 1.0。**
+
+這個 1.0 跟「把缺的因子當成 1」不是同一件事，差別是它說得出是誰決定的。
+所以 `freshness()` 的回傳一定帶 `decided_by` 與 `mode: NO_TIME_DECAY`，
+而 `tests/test_goalgate.py::test_freshness不用時間衰減且指得出是誰決定的`
+守著這件事：拿掉 `decided_by` 測試就會紅。
+
+### 三　拍板之後 GAC 的實際值
+
+三個因子都有值了，GAC 從「算不出來」變成 0.7125：
+
+```text
+0.95  OWNER_CONFIRMED_NORTH_STAR
+×1.00 freshness        owner 決定不衰減
+×1.00 scope_match      六條非目標踩到 0 條
+×0.75 provenance       還剩一個缺口
+= 0.7125   DERIVED
+```
+
+`may_suspect_drift` 是 true，`may_confirm_drift` 是 false，
+因為 §6.2 的 CONFIRMED 門檻是 GAC ≥ 0.80。
+
+**要跨過 0.80 只剩一條路：補上那份 ChatGPT 對話。**
+`NORTH_STAR.md` 的出處指向「她的 ChatGPT 對話第六十節」，
+而 `REQUIRED_READING.md` 記著那份不在資料夾裡、連結由她提供。
+那是 `provenance_integrity` 目前唯一的扣分項，補上之後
+provenance 到 1.0，GAC 變成 0.95。
+
+即使如此，紫點仍然不會直接出 CONFIRMED_DRIFT，因為 §6.2 另外四條
+（GAR ≥0.70、至少一個 deterministic contradiction、correction 之後仍持續、
+至少兩個獨立證據維度）一條都還沒實作。

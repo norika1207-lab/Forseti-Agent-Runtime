@@ -44,18 +44,45 @@ const DYNAMIC_OPAQUE_RE = /\bimport\s*\(\s*(?!['"])[^)]*\)/g;
 // require(非字面)
 const REQUIRE_OPAQUE_RE = /\brequire\s*\(\s*(?!['"])[^)]*\)/g;
 
-/** 把註解與字串以外的干擾降到最低。不是完整的剖析,只是少誤判。 */
+/**
+ * 把註解與字串以外的干擾降到最低。不是完整的剖析,只是少誤判。
+ *
+ * **換行一定要留著。** 第一版把整段 block comment 換成一個空格,
+ * 於是後面每一行的行號都會往前跳,而唯一用得到行號的地方
+ * (opaque 的位置)報出來的數字會是錯的 —— 而且看起來很正常,
+ * 因為它仍然是一個小於檔案長度的正整數。
+ * 一個錯的行號比沒有行號糟:沒有行號的人會自己去找,
+ * 拿到錯行號的人會走到那一行,看到不相干的程式碼,然後怪解析器亂報。
+ */
 function stripComments(src) {
+  const keepLines = (m) => m.replace(/[^\n]/g, ' ');
   return String(src ?? '')
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, keepLines)
+    // 單行註解不跨行,所以吃掉它不會影響任何行號,維持原本寫法。
     .replace(/(^|[^:])\/\/[^\n]*/g, '$1 ');
+}
+
+/** 字元位移換算成 1 起算的行號。 */
+function lineAt(src, index) {
+  if (!(index >= 0)) return null;
+  let line = 1;
+  for (let i = 0; i < index && i < src.length; i += 1) {
+    if (src[i] === '\n') line += 1;
+  }
+  return line;
 }
 
 /**
  * 從一份原始碼抽出它 import 了哪些 specifier。
  *
- * @returns {{specifiers: Array<{specifier, kind}>, opaque: number}}
+ * @returns {{specifiers: Array<{specifier, kind}>, opaque: number,
+ *            opaque_at: Array<{line, call}>}}
  *   opaque 是「看得到有動態載入但看不到目標」的次數。
+ *   opaque_at 是那幾次各自在第幾行、是哪一種呼叫。
+ *
+ *   **位置跟計數從同一次比對算出來**,不是各算一次。
+ *   兩個各自算的數字遲早會分歧,而分歧的那一天不會有錯誤訊息,
+ *   只會有一個「14 筆」配上 12 行位置,讀的人無從判斷哪一個是對的。
  */
 export function parseImports(source) {
   const src = stripComments(source);
@@ -73,10 +100,20 @@ export function parseImports(source) {
   for (const m of src.matchAll(REQUIRE_RE)) push(m[1], 'REQUIRE');
   for (const m of src.matchAll(DYNAMIC_LITERAL_RE)) push(m[1], 'DYNAMIC');
 
-  const opaque = (src.match(DYNAMIC_OPAQUE_RE) ?? []).length
-    + (src.match(REQUIRE_OPAQUE_RE) ?? []).length;
+  const opaqueAt = [];
+  for (const m of src.matchAll(DYNAMIC_OPAQUE_RE)) {
+    opaqueAt.push(Object.freeze({ line: lineAt(src, m.index), call: 'import' }));
+  }
+  for (const m of src.matchAll(REQUIRE_OPAQUE_RE)) {
+    opaqueAt.push(Object.freeze({ line: lineAt(src, m.index), call: 'require' }));
+  }
+  opaqueAt.sort((a, b) => (a.line ?? 0) - (b.line ?? 0));
 
-  return Object.freeze({ specifiers: Object.freeze(out), opaque });
+  return Object.freeze({
+    specifiers: Object.freeze(out),
+    opaque: opaqueAt.length,
+    opaque_at: Object.freeze(opaqueAt),
+  });
 }
 
 /**
@@ -157,6 +194,7 @@ export function buildImportRecords(sources, { extensions = DEFAULT_EXTENSIONS } 
   const entries = all.filter(([f]) => !NOT_SOURCE.test(f));
   const files = new Set(entries.map(([f]) => f));
   const imports = [];
+  const dynamicWhere = [];
   const stats = {
     files: entries.length,
     total: 0,
@@ -169,6 +207,9 @@ export function buildImportRecords(sources, { extensions = DEFAULT_EXTENSIONS } 
   for (const [file, src] of entries) {
     const parsed = parseImports(src);
     stats.dynamic_opaque += parsed.opaque;
+    for (const w of parsed.opaque_at) {
+      dynamicWhere.push(Object.freeze({ from: file, line: w.line, call: w.call }));
+    }
     for (const { specifier, kind } of parsed.specifiers) {
       stats.total += 1;
       const r = resolve(file, specifier, files, { extensions });
@@ -195,6 +236,15 @@ export function buildImportRecords(sources, { extensions = DEFAULT_EXTENSIONS } 
         : stats.resolved / (stats.total - stats.external),
       /** 永遠為真。動態載入與字串拼接的路徑,靜態解析看不到。 */
       is_lower_bound: true,
+      /**
+       * `dynamic_opaque` 那幾筆各自在哪個檔第幾行。
+       *
+       * 一個總數說得出「這張圖有 14 個看不到的地方」,
+       * 說不出「所以我該去看哪裡」。前者是免責聲明,
+       * 後者才查得下去。Python 那半邊的 `dynamic_opaque`
+       * 從一開始就帶 from 與 line,這裡補成同一個形狀。
+       */
+      dynamic_where: Object.freeze(dynamicWhere),
     }),
   });
 }

@@ -286,5 +286,52 @@ class TestStateMachine(LedgerCase):
         self.assertFalse(L.run_verifier("cmd:false").ok)
 
 
+class TestObligationsCarriesStopConditions(LedgerCase):
+    """停止條件要從帳本帶得出去。v5.0 §39.1 的 Next 群第二欄。
+
+    2026-09-16 之前它一直躺在 tasks 表裡沒有人讀 —— `obligations()`
+    的 SELECT 第四欄撈的是 `next_required_action`，而同一支函式的註解
+    寫著它刻意不讀那一欄（next 動態算）。所以那個位置撈回來的值
+    每一次都被丟掉，而真正要用的那一欄從來沒被撈過。
+    """
+
+    def test_未完成任務帶得出停止條件(self):
+        t = self.led.accept("任務", _steps(1),
+                            stop_conditions=["owner 說停", "出現矛盾"])
+        self.led.transition(t, "RUNNING", "開始")
+        rows = self.led.obligations()["unfinished_tasks"]
+        row = next(r for r in rows if r["task_id"] == t)
+        self.assertEqual(row["stop_conditions"], ["owner 說停", "出現矛盾"])
+
+    def test_沒有停止條件的任務回空清單不是None(self):
+        """空清單跟 None 在這裡是兩件事。
+
+        這一欄的下游（`contract.collect`）用「空不空」判 EMPTY，
+        None 會被判成沒有理由的缺席，那是一句錯的話 ——
+        來源在，只是這件任務沒有設條件。
+        """
+        t = self.led.accept("任務", _steps(1))
+        self.led.transition(t, "RUNNING", "開始")
+        row = next(r for r in self.led.obligations()["unfinished_tasks"]
+                   if r["task_id"] == t)
+        self.assertEqual(row["stop_conditions"], [])
+
+    def test_next照樣是動態算的(self):
+        """改撈 stop_conditions 不可以順手改掉 next 的來源。
+
+        `next_required_action` 是靜態欄位，要記得更新才會對，
+        而「記得更新」正是這個帳本想消滅的依賴。
+        """
+        t = self.led.accept("任務", _steps(2))
+        self.led.transition(t, "RUNNING", "開始")
+        self.led.con.execute(
+            "UPDATE tasks SET next_required_action=? WHERE task_id=?",
+            ("這是一個過期的靜態值", t))
+        row = next(r for r in self.led.obligations()["unfinished_tasks"]
+                   if r["task_id"] == t)
+        self.assertNotIn("過期的靜態值", row["next"])
+        self.assertIn("第 1 步", row["next"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

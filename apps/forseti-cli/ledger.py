@@ -1216,8 +1216,12 @@ class Ledger:
         這正是使用者 2026-09-08 那個八小時事故的反面。
         """
         q = self.con.execute
+        # 第四欄先前撈的是 `next_required_action`，而下面那個 `_next`
+        # 的註解寫著這支刻意不讀它（next 動態算）。所以那個位置一直在
+        # 撈一個撈回來就被丟掉的值。2026-09-16 改撈 `stop_conditions`
+        # —— §39.1 的 Next 群要它，而它一直躺在表裡沒有人帶出去。
         unfinished_tasks = q(
-            "SELECT task_id,objective,current_state,next_required_action FROM tasks"
+            "SELECT task_id,objective,current_state,stop_conditions FROM tasks"
             " WHERE current_state NOT IN (?,?,?,?)", TERMINAL).fetchall()
         unfinished_steps = q(
             "SELECT s.step_id,s.objective,s.state,t.task_id FROM steps s"
@@ -1244,9 +1248,10 @@ class Ledger:
             return f"{n['local_id']}　{n['objective']}" if n else "（沒有可動的步驟）"
 
         return {
-            "unfinished_tasks": [dict(zip(("task_id", "objective", "state", "next"),
-                                          (r[0], r[1], r[2], _next(r[0]))))
-                                 for r in unfinished_tasks],
+            "unfinished_tasks": [
+                dict(zip(("task_id", "objective", "state", "next", "stop_conditions"),
+                         (r[0], r[1], r[2], _next(r[0]), _u(r[3]))))
+                for r in unfinished_tasks],
             "unfinished_steps": [dict(zip(("step_id", "objective", "state", "task_id"), r))
                                  for r in unfinished_steps],
             "blocked": [dict(zip(("task_id", "objective"), r)) for r in blocked],

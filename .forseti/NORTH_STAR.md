@@ -2,6 +2,16 @@
 
 最後更新 2026-09-08。內容取自 `soul.md` 第二節，那份只增不改。
 
+> **2026-09-15 owner 拍板：單向就好。**
+>
+> 待決的問題是 Vol1 §2 的平台北極星寫成雙向（Human-AI Collaboration Unit），
+> 而這份寫的是單向（AI 的狀態可觀測，使用者是被服務方）。
+> owner 原話：「單向就好」。
+>
+> 所以這份不改成雙向，Vol1 §2 的雙向定義屬於平台願景層，不是現在這條線的
+> 北極星。這筆決定記在 `.forseti/DECISION_LEDGER.md`，
+> 並且讓 `goalgate.py` 的 provenance_integrity 少扣一格。
+
 ---
 
 ## 北極星

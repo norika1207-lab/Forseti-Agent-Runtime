@@ -67,14 +67,21 @@ B-02 的驗證推翻了那個前提。**owner 沒有動手。**
 
 ## 六個階段的總覽
 
-| 階段 | 名稱 | 回答哪幾題 | 狀態 |
-|---|---|---|---|
-| 0 | 控制檔與接管閘門 | — | `VERIFIED` |
-| 1 | 事件帳本 | 地基 | `NOT_STARTED` |
-| 2 | Claim 與 Reality | 6、7 | `NOT_STARTED` |
-| 3 | 人與 AI 雙向記錄 | 4、5 | `NOT_STARTED` |
-| 4 | 健康與退化 | 9、10 | `NOT_STARTED` |
-| 5 | Checkpoint 與 Fork | 13、14 | `NOT_STARTED` |
+> **2026-09-16 大幅更正。** 這張表先前說階段 1 到 5 全部 `NOT_STARTED`，
+> 而事件帳本明明在跑、310 筆真實事件在裡面。**一份沒人更新的狀態檔，
+> 會讓接手的人重做已經做完的事** —— B-14 記的就是這件事，
+> 而 2026-09-16 早上又發生一次同型事故。
+>
+> 下面每一格都附證據，是當天實際跑過或讀過程式碼判的，不是抄的。
+
+| 階段 | 名稱 | 回答哪幾題 | 狀態 | 證據（2026-09-16 驗） |
+|---|---|---|---|---|
+| 0 | 控制檔與接管閘門 | — | `PARTIAL` | 控制檔齊全；但 `gate takeover` 只列題目不驗答案（B-08） |
+| 1 | 事件帳本 | 地基 | `DONE` | `ledger.py` 1284 行、33 個方法、310 筆真實事件 |
+| 2 | Claim 與 Reality | 6、7 | `DONE` | `claims.py` 794 行、9 個函式全部接到畫面、`verify` 真的讀磁碟 |
+| 3 | 人與 AI 雙向記錄 | 4、5 | `PARTIAL` | `owner.py` 674 行；沉默地圖與 `goal_change_gap` 2026-09-16 才接上畫面；粉紅點同日補上 |
+| 4 | 健康與退化 | 9、10 | `DONE` | `vitals.py` 八維度、`context_meter`、`starvation`、`lanes` |
+| 5 | Checkpoint 與 Fork | 13、14 | `HALF` | fork 有（Tauri command + 乾跑）；**checkpoint 的 Python 實作不存在**，只有 `src/recovery.js` 302 行沒接 |
 
 第 1、2、3、8、11、12 題的現況見 `docs/build-plan.md` 第 1.3 節。
 

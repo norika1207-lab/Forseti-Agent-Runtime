@@ -160,16 +160,62 @@ async function main() {
 
   const lines = outstanding.map((d) => `  · ${d.targets.join(', ')} — ${(d.what ?? '').slice(0, 70)}`);
 
-  // 說了沒做不是硬前提未知,所以這裡不擋,只講。
-  // 原本這裡是 exit(2),那會變成「你不做完不准停」—— 而有些事本來就該
-  // 停下來問人,把那也擋掉就是把工具的意見凌駕在人的判斷之上。
-  process.stderr.write(
+  // ── 擋還是只講 ──────────────────────────────────────
+  //
+  // 預設只講。說了沒做不是「硬前提未知」,而 intervention.js 的
+  // canIntervene 裡 BLOCK_HIGH_RISK 只在硬前提不明時放行。
+  // 原本這裡是 exit(2) 而且沒問過那一層,2026-09-08 擋了她九個小時。
+  //
+  // **owner 可以覆寫。** 她在信任階層的第一級(§3.3),
+  // 她明確要求強制介入的時候,規格的預設姿態讓位給她的決定 ——
+  // 但讓位要留下痕跡,所以走 config 不走改程式碼,而且有次數上限。
+  //
+  // 2026-09-16 owner 原話:「我現在要你開啟 Forseti 全自動介入你的工作,
+  // 強制介入」。
+  let enforce = false;
+  let cap = 3;
+  try {
+    const cfgPath = join(root(cwd), '.forseti', 'config.json');
+    if (existsSync(cfgPath)) {
+      const cfg = JSON.parse(readFileSync(cfgPath, 'utf8'));
+      enforce = cfg.enforce_declarations === true;
+      if (Number.isInteger(cfg.enforce_max_per_session)) cap = cfg.enforce_max_per_session;
+    }
+  } catch { /* 讀不到設定就是沒開。預設永遠是不擋 */ }
+
+  // 次數上限。2026-09-08 那次沒有上限 ——
+  // 有上限的最壞情況是被煩三次,沒上限的最壞情況是一整晚沒辦法工作。
+  const sid = input.session_id || '';
+  const counts = led.enforced ?? {};
+  const used = counts[sid] ?? 0;
+  if (enforce && used >= cap) enforce = false;
+
+  const body =
     `Forseti: ${outstanding.length} thing(s) declared this session with no matching action on disk.\n`
-    + lines.join('\n')
-    + '\n\nEither do them now, or say explicitly that they are dropped. '
-    + 'This is an observation, not a block.\n',
+    + lines.join('\n');
+
+  if (!enforce) {
+    process.stderr.write(
+      body
+      + '\n\nEither do them now, or say explicitly that they are dropped. '
+      + 'This is an observation, not a block.\n',
+    );
+    process.exit(0);
+  }
+
+  save(cwd, {
+    open: remaining,
+    blockedAt: now,
+    enforced: { ...counts, [sid]: used + 1 },
+  });
+  process.stderr.write(
+    body
+    + `\n\n這一輪宣告了上面的檔案，結束時磁碟上沒有對應的動作。`
+    + `\n要嘛現在做完，要嘛明講那幾項不做了。`
+    + `\n\n（強制介入由 .forseti/config.json 的 enforce_declarations 開啟，`
+    + `這條線第 ${used + 1} 次，上限 ${cap} 次。要關掉把那個欄位改成 false）\n`,
   );
-  process.exit(0);
+  process.exit(2);
 }
 
 main().then(OK).catch(OK);

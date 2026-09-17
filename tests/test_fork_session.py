@@ -9,7 +9,6 @@ owner 2026-09-11 要的形狀：從紅色之前那一節 fork，任務接著跑�
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
 import shutil
 import sys
@@ -18,12 +17,12 @@ import unittest
 import uuid as _uuid
 from pathlib import Path
 
+# 核心在 apps/forseti-cli/forkline.py。
+# tools/fork-session.py 是它的 CLI 薄殼 —— Widget 也要用同一份，
+# 而判斷邏輯只能有一份。測試要對著核心測，不是對著殼。
 REPO = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location(
-    "fork_session", REPO / "tools" / "fork-session.py")
-FK = importlib.util.module_from_spec(spec)
-sys.modules[spec.name] = FK
-spec.loader.exec_module(FK)
+sys.path.insert(0, str(REPO / "apps" / "forseti-cli"))
+import forkline as FK  # noqa: E402
 
 
 class Case(unittest.TestCase):

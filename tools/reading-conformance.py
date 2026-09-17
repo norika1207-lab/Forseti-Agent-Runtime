@@ -87,16 +87,42 @@ def sha12(p: Path) -> str | None:
         return None
 
 
+class ReadingTableUnreadable(Exception):
+    """補讀表讀不到。
+
+    **「讀不到」跟「表在、可是一列都沒有」是兩件事。**
+    2026-09-17 之前這裡吞掉 `OSError` 回一個空 dict，於是 `check()`
+    把每一份都判成 `NO_RECORD`，理由印「補讀表裡沒有這一份的記錄」
+    —— 而補讀表根本沒有被讀到。實測兩種情形回傳的整個 dict 相同
+    （`tests/test_silent_oserror.py` 當時量過）。
+
+    那句理由是假的。照它去修的人會去補表，而表可能一直是對的，
+    錯的是讀不到。
+
+    丟例外不是為了讓它更嚴。`check()` 接住之後回 `CANNOT_CHECK`，
+    也就是這個模組檔頭 exit code 那一段本來就寫著的
+    「2　無法檢查（manifest 或補讀表找不到）」 —— 補讀表那一半
+    先前只寫在文件裡，沒有實作。
+    """
+
+
 def declared() -> dict[str, tuple[str, str]]:
-    """補讀表裡宣稱讀過的：id -> (檔名, hash 前 12)。"""
-    out: dict[str, tuple[str, str]] = {}
+    """補讀表裡宣稱讀過的：id -> (檔名, hash 前 12)。
+
+    讀不到就丟 `ReadingTableUnreadable`，不回空 dict。
+    空 dict 在下游代表「沒有人宣稱讀過」，那是一個結論，
+    而讀不到的時候還沒有資格下那個結論。
+    """
     try:
-        for line in READING.read_text(encoding="utf-8").splitlines():
-            m = _ROW.match(line.strip())
-            if m:
-                out[m.group(1)] = (m.group(2), m.group(3))
-    except OSError:
-        pass
+        text = READING.read_text(encoding="utf-8")
+    except OSError as e:
+        raise ReadingTableUnreadable(
+            f"補讀表讀不到 {READING}（{type(e).__name__}: {e}）") from e
+    out: dict[str, tuple[str, str]] = {}
+    for line in text.splitlines():
+        m = _ROW.match(line.strip())
+        if m:
+            out[m.group(1)] = (m.group(2), m.group(3))
     return out
 
 
@@ -162,7 +188,10 @@ def check() -> dict:
     for f in man.get("features") or []:
         want.append((f.get("id", ""), f.get("file", "")))
 
-    have = declared()
+    try:
+        have = declared()
+    except ReadingTableUnreadable as e:
+        return {"status": "CANNOT_CHECK", "why": str(e)}
     rows = []
     bad = 0
     for doc_id, fname in want:

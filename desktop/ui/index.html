@@ -4,76 +4,183 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Forseti</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<!-- 字體用系統的。SF Pro 跟蘋方本機就有 ——
+     去網路抓字體的那一刻，離線就等於質感垮掉，而離線是這個 app 的常態。 -->
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
-<div class="shell">
+<div class="w">
 
-  <header class="topbar" data-tauri-drag-region>
-    <div class="brand">
-      <span class="mark" aria-hidden="true"></span>
-      <span class="name">Forseti</span>
+  <!-- 資訊中心。owner 2026-09-14：
+       「上面那一塊條橫快整個拿掉吧，改成資訊中心好了，
+       變成『Forseti 建議：』這就會常態出現，
+       至於用戶要不要接受那是另外一回事。」 -->
+  <header class="top" data-tauri-drag-region>
+    <div class="bar">
+      <button class="burger" id="burgerBtn" aria-label="選 session">
+        <i></i><i></i><i></i>
+      </button>
+      <span class="tag">Forseti</span>
+      <span id="sessName"></span>
+      <!-- owner 2026-09-15:「上面一半的那個板塊要被拿掉，可以用彈出的，
+           但是我要讓樹的面積更大。」溫度留在 bar 上,其餘收進 #panel。 -->
+      <button class="miniT" id="miniT" type="button"
+              aria-expanded="false" aria-controls="panel"
+              title="展開溫度與建議">--</button>
+      <button class="help" id="helpBtn" aria-label="這些符號是什麼">?</button>
     </div>
-    <div class="repo" id="repo"></div>
-    <div class="lamp" id="lamp">
-      <span class="dot"></span>
-      <span class="lv">讀取中</span>
+
+    <!-- 溫度。工程書 §17.2 的預設畫面。
+         一個溫度、一行主要變化、一行已驗證進度、一行現在該做什麼。
+         §17.3：預設只顯示單一最高槓桿的事實，其餘全部 drill-down。
+         「A governance tool that continuously shouts is itself a
+         productivity failure.」 -->
+    <div class="panel" id="panel" hidden>
+    <div class="vitals" id="vitals">
+      <div class="vRow">
+        <span class="vTemp" id="vTemp">--</span>
+        <span class="vBand" id="vBand"></span>
+        <button class="vWhy" id="vWhy" type="button">為什麼</button>
+      </div>
+      <p class="vLine" id="vChange"></p>
+      <p class="vLine" id="vProg"></p>
+    </div>
+    <!-- 【2026-09-14】退場。它的內容被吸收進上面那組卡片，
+         頂部不並排兩組建議(§17.3 只顯示單一最高槓桿的事實)。
+         元素留著是因為 setAdvice 的跳轉邏輯還在用它的 dataset。 -->
+    <button class="adviceBox" id="adviceBox" type="button" hidden>
+      <span id="adviceText">讀取中</span>
+      <span id="adviceWhy"></span>
+      <span class="goto" id="adviceGoto" hidden></span>
+    </button>
+    <!-- 退回去的話，退到哪一輪。ROADMAP P0 第 1 項、Vol4 Stage 4。
+         這一格跟別處在講的不是同一題：紅點白點紫點講的是「哪裡出問題」，
+         這一格講的是「如果現在要退，退到哪、憑什麼、會丟掉多少」。
+         算不出來的時候它講缺什麼，不給輪號 ——
+         猜一個出來會把還好的工作一起丟掉，而且不會有人發現。 -->
+    <div class="rescue" id="rescue" hidden>
+      <p class="rTop"><span id="rBack"></span><span class="rWhy" id="rWhy"></span></p>
+      <p class="rCost" id="rCost"></p>
+      <div class="rRow">
+        <button class="rGo" id="rGo" type="button" hidden>看那一輪</button>
+        <span class="rHist" id="rHist"></span>
+      </div>
+    </div>
+
+    <!-- 三張卡片。bible.md I-04：事前給三個選項不吵，事後跳警告才吵。
+         每張可展開 Vol3 §12 要求的五件事：為什麼是現在、證據、
+         信心、不理會會怎樣。點「用這句」把話複製走。 -->
+    <div class="cards" id="cards"></div>
+
+
+    <!-- Context 是預警，不是統計，所以不擠進底下那排數字。
+         壓縮發生後畫一個黑點是事後，這一條是事前。 -->
+    <div class="ctx" id="ctx" hidden>
+      <div class="ctxBar"><i id="ctxFill"></i></div>
+      <p id="ctxText"></p>
+    </div>
+    <!-- 這四個數字全部是 Activity。v5.0 §34.1 明寫
+         Activity「Never sufficient evidence of progress」，
+         所以它們不預設顯示，按「為什麼」才展開。 -->
+    <div class="subs" id="subs" hidden></div>
     </div>
   </header>
 
-  <div class="body">
-
-    <aside class="rail">
-      <nav>
-        <button class="tab" data-view="tree" aria-pressed="true">路徑</button>
-        <button class="tab" data-view="health" aria-pressed="false">狀態</button>
-      </nav>
-      <div class="sessions">
-        <div class="rail-lbl">Session</div>
-        <select id="sessionPick" aria-label="選一個 session"></select>
-        <button class="load" id="loadBtn">載入路徑</button>
-        <p class="hint" id="loadHint"></p>
-      </div>
-    </aside>
-
-    <main class="main">
-
-      <section class="view" id="view-health">
-        <div class="banner" id="banner"></div>
-        <div class="gauges" id="gauges"></div>
-        <div class="advice" id="advice"></div>
-      </section>
-
-      <section class="view" id="view-tree" hidden>
-        <div class="tree-head">
-          <div class="tally" id="tally"></div>
-          <div class="mini-wrap">
-            <div class="mini-lbl">全景 · 依時序</div>
-            <div class="mini" id="mini"></div>
-            <p class="mini-note" id="miniNote"></p>
-          </div>
-        </div>
-        <div class="tree-body">
-          <div class="listcol">
-            <div class="filters" id="filters"></div>
-            <ol class="line" id="list"></ol>
-          </div>
-          <div class="detail" id="detail">
-            <p class="empty">左邊選一個 session，按載入路徑。</p>
-          </div>
-        </div>
-      </section>
-
-    </main>
+  <div class="scroll" id="scroll">
+    <div class="lane" id="lane"></div>
   </div>
 
-  <footer class="statusbar">
-    <span id="statusText">啟動中</span>
-    <span class="spacer"></span>
-    <span id="stamp"></span>
+  <footer class="bottom">
+    <span class="sp" data-tauri-drag-region></span>
+    <button class="foot-btn" id="followBtn" aria-pressed="true"
+            title="跟著最新的那條線">跟隨</button>
+    <span class="stat" id="stat">啟動中</span>
   </footer>
 
+  <div class="pop" id="pop" hidden></div>
+
+  <!-- Session 選擇器。owner 2026-09-14 手繪:
+       左上角漢堡，按下去蓋住整個畫面，選完回到 Tree。
+       「這樣就不用一直跳來跳去了。」
+
+       自動跟隨判不準，因為她同時開十幾個。與其猜，不如讓她自己指。 -->
+  <div class="picker" id="picker" hidden>
+    <div class="pickHead">
+      <h2>看哪一個</h2>
+      <button class="x" id="pickClose" aria-label="關閉">×</button>
+    </div>
+    <div class="pickViews" role="group" aria-label="檢視">
+      <button class="vw" data-view="tree" aria-pressed="true">對話</button>
+      <button class="vw" data-view="list" aria-pressed="false">需要注意</button>
+      <button class="vw" data-view="work" aria-pressed="false">在做什麼</button>
+      <button class="vw" data-view="spec" aria-pressed="false">讀文件</button>
+      <button class="vw" data-view="machine" aria-pressed="false">這台機器</button>
+      <button class="vw" data-view="feat" aria-pressed="false">功能</button>
+      <button class="vw" data-view="audit" aria-pressed="false">自我審計</button>
+    </div>
+    <div class="pickSearch">
+      <input id="pickQuery" type="search" placeholder="搜尋第一句話"
+             autocomplete="off" spellcheck="false">
+    </div>
+    <div class="pickList" id="pickList"></div>
+  </div>
+
+  <!-- 一輪的動作面板。owner 2026-09-14：
+       「點了某個節點，就要跳回到那個桌面 APP 相應對話位置啊，
+       這樣才能 Fork 啊，不然都是單向的還要自己慢慢往前面翻。」 -->
+  <div class="sheet" id="nodeSheet" hidden>
+    <div class="sheetInner">
+      <div class="sheetHead">
+        <h2 id="nodeTitle">這一輪</h2>
+        <button class="x" id="nodeClose" aria-label="關閉">×</button>
+      </div>
+      <div class="nodeBody">
+        <p class="nodeSaid" id="nodeSaid"></p>
+        <button class="act" id="actOpen">
+          <b>跳回桌面版這個 session</b>
+          <span>切過去之後還是停在它原本的位置，不會停在這一輪</span>
+        </button>
+        <button class="act" id="actFork">
+          <b>從這一輪開一個新的</b>
+          <span id="forkHint">算算看會留下什麼</span>
+        </button>
+        <!-- §17 可以回去的那一刻。系統不自己挑 last_good，
+             只有她按的這個才算 —— 最近的那一個常常正是出事的那一個。 -->
+        <button class="act" id="actMark">
+          <b>標記這裡是好的</b>
+          <span id="markHint">之後出事可以回到這一刻</span>
+        </button>
+        <div class="forkOut" id="forkOut" hidden></div>
+
+        <!-- 粉紅點。§5.5 owner 口述：
+             「或許我不會常用，但是當我用的時候，
+             肯定是有個想法我覺得很重要我要加上去。」
+
+             白點金點紫點都是系統給她的，這是唯一她給系統的，
+             所以它的等級是 HUMAN_ADJUDICATION，高過任何自動檢查。 -->
+        <div class="noteBox">
+          <div class="noteHead">你的注記<span id="noteCount"></span></div>
+          <ul class="noteList" id="noteList"></ul>
+          <textarea id="noteText" rows="2" maxlength="1200"
+                    placeholder="這一輪有什麼你覺得重要、而系統看不出來的"></textarea>
+          <button class="act small" id="noteSave" type="button">寫下來</button>
+          <span class="noteOut" id="noteOut"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 圖例。owner：「我看不懂」。
+       看不懂的介面等於沒有介面。 -->
+  <div class="sheet" id="sheet" hidden>
+    <div class="sheetInner">
+      <div class="sheetHead">
+        <h2>畫面上這些是什麼</h2>
+        <button class="x" id="sheetClose" aria-label="關閉">×</button>
+      </div>
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
 </div>
 <script src="app.js"></script>
 </body>

@@ -10,21 +10,46 @@
     "windows": [
       {
         "title": "Forseti",
-        "width": 1440,
-        "height": 900,
-        "minWidth": 1040,
-        "minHeight": 680,
+        "width": 340,
+        "height": 860,
+        "minWidth": 280,
+        "minHeight": 400,
+        "maxWidth": 520,
+        "x": 40,
+        "y": 60,
+        "alwaysOnTop": true,
         "titleBarStyle": "Overlay",
-        "hiddenTitle": true
+        "hiddenTitle": true,
+        "decorations": true,
+        "resizable": true,
+        "label": "main"
       }
     ],
     "security": {
-      "csp": null
-    }
+      "csp": null,
+      "capabilities": [
+        {
+          "identifier": "default",
+          "description": "Forseti 前端需要的權限。core:default 涵蓋 invoke 與 event。",
+          "windows": [
+            "main"
+          ],
+          "permissions": [
+            "core:default"
+          ]
+        }
+      ]
+    },
+    "withGlobalTauri": true
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/icon.png"]
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/icon.png"
+    ]
   }
 }

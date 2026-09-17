@@ -348,7 +348,7 @@ class Tracker:
         detail = "AI 的記憶從這裡開始不完整"
         if isinstance(pre, int) and isinstance(post, int) and pre > 0:
             kept = post / pre
-            detail = (f"壓縮前 {pre:,} token,壓縮後 {post:,}，"
+            detail = (f"壓縮前 {pre:,} token，壓縮後 {post:,}，"
                       f"留下 {kept:.1%}。觸發：{meta.get('trigger', '未知')}")
         cur = self._current()
         if cur is None:

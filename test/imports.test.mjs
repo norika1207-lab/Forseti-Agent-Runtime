@@ -56,6 +56,71 @@ t('看得到有動態載入但猜不到目標時,不編一個出來', () => {
   assert.equal(p.opaque, 1);
 });
 
+// ---- 盲點的位置,不只是盲點的數量 ----
+//
+// 2026-09-16：先前這半邊只回一個總數。一個總數說得出
+// 「這張圖有 14 個看不到的地方」,說不出「所以我該去看哪裡」。
+// Python 那半邊從一開始就帶 from 與 line。
+
+t('opaque 帶得出行號', () => {
+  const p = parseImports("import a from './a.js'\nawait import(x)\n");
+  assert.equal(p.opaque, 1);
+  assert.deepEqual(p.opaque_at.map((w) => [w.line, w.call]), [[2, 'import']]);
+});
+
+t('require 的 opaque 標成 require 不是 import', () => {
+  const p = parseImports("\n\nrequire(base + '/i.js')\n");
+  assert.deepEqual(p.opaque_at, [{ line: 3, call: 'require' }]);
+});
+
+t('位置跟計數一定一樣多,不是各算一次', () => {
+  const p = parseImports("await import(x)\nrequire(y)\nawait import(z)\n");
+  assert.equal(p.opaque, p.opaque_at.length);
+  assert.equal(p.opaque, 3);
+});
+
+// 這一條是這批裡最重要的。第一版的 stripComments 把整段 block comment
+// 換成一個空格,所以後面每一行的行號都往前跳,而報出來的數字
+// 仍然是一個看起來很正常的小正整數 —— 沒有任何訊號說它是錯的。
+t('多行註解不會讓後面的行號往前跳', () => {
+  const src = "/*\n\n\n*/\nawait import(x)\n";
+  assert.deepEqual(parseImports(src).opaque_at, [{ line: 5, call: 'import' }]);
+});
+
+t('註解裡的動態 import 不算,連位置都不該有', () => {
+  const p = parseImports("// await import(x)\n/* require(y) */\n");
+  assert.equal(p.opaque, 0);
+  assert.deepEqual(p.opaque_at, []);
+});
+
+t('位置照行號排序', () => {
+  const p = parseImports("await import(c)\nrequire(a)\nawait import(b)\n");
+  assert.deepEqual(p.opaque_at.map((w) => w.line), [1, 2, 3]);
+});
+
+t('整張圖的盲點帶得出是哪個檔第幾行', () => {
+  const rec = buildImportRecords({
+    'src/a.js': "import b from './b.js'\nawait import(n)\n",
+    'src/b.js': "\nrequire(p)\n",
+  });
+  assert.equal(rec.stats.dynamic_opaque, 2);
+  assert.deepEqual([...rec.stats.dynamic_where].sort((x, y) => x.from < y.from ? -1 : 1), [
+    { from: 'src/a.js', line: 2, call: 'import' },
+    { from: 'src/b.js', line: 2, call: 'require' },
+  ]);
+});
+
+t('沒有盲點時是空陣列,不是沒有這個欄位', () => {
+  const rec = buildImportRecords({ 'src/a.js': "import b from './b.js'\n" });
+  assert.equal(rec.stats.dynamic_opaque, 0);
+  assert.deepEqual(rec.stats.dynamic_where, []);
+});
+
+t('為什麼行號一定要留換行,理由寫在原始碼裡', () => {
+  const src = readFileSync(new URL('../src/imports.js', import.meta.url), 'utf8');
+  assert.ok(/一個錯的行號比沒有行號糟/.test(src));
+});
+
 // ---- 解析 ----
 const FILES = new Set(['src/a.js', 'src/b.js', 'src/deep/index.js', 'src/c.ts']);
 

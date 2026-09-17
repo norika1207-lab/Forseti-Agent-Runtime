@@ -157,6 +157,78 @@ class TestItAdmitsWhatItCannotDo(Case):
             "full-file required; sampled/title-only reading is non-conformant")
 
 
+class TestReadingTableUnreadable(Case):
+    """補讀表讀不到，跟補讀表是空的，不可以長得一樣。
+
+    2026-09-17 之前 `declared()` 吞掉 `OSError` 回空 dict，於是兩種
+    情形回傳的整個結果相同：每一份都 `NO_RECORD`，理由印
+    「補讀表裡沒有這一份的記錄」—— 而補讀表根本沒被讀到。
+    照那句理由去修的人會去補表，而表可能一直是對的。
+
+    修法不是讓它更嚴：讀不到的時候回 `CANNOT_CHECK`，
+    也就是模組檔頭 exit code 那段本來就寫著的第 2 種。
+    """
+
+    def _make_unreadable(self):
+        """讓補讀表那一個檔 `read_text` 丟 `OSError`，其餘檔案照常。
+
+        不用 `chmod` —— 這顆碟是 exFAT，不帶 Unix 權限，
+        `chmod 000` 在上面不會讓讀取失敗（`files-on-adata` 那條記過）。
+        """
+        orig = Path.read_text
+        target = self.reading
+
+        def bad(self_, *a, **k):
+            if self_ == target:
+                raise OSError(13, "permission denied")
+            return orig(self_, *a, **k)
+
+        Path.read_text = bad
+        self.addCleanup(lambda: setattr(Path, "read_text", orig))
+
+    def test_unreadable_table_is_cannot_check_not_no_record(self):
+        self._make_unreadable()
+        r = RC.check()
+        self.assertEqual(r["status"], "CANNOT_CHECK")
+        self.assertIn("補讀表讀不到", r["why"])
+        self.assertIn("permission denied", r["why"])
+        self.assertNotIn("rows", r)
+
+    def test_unreadable_table_exits_two(self):
+        """exit 2 是「無法檢查」。1 會讓人以為判過了而且不合格。"""
+        self._make_unreadable()
+        self.assertEqual(RC.main(["x"]), 2)
+
+    def test_declared_raises_instead_of_returning_empty(self):
+        self._make_unreadable()
+        with self.assertRaises(RC.ReadingTableUnreadable):
+            RC.declared()
+
+    def test_an_empty_but_readable_table_is_still_non_conformant(self):
+        """表在、讀得到、可是一列都沒有 —— 那是「沒有人宣稱讀過」。
+
+        這一條釘的是**沒有被順手放寬**：修掉上面那個假理由的時候，
+        最容易犯的是把空表也一起改成 `CANNOT_CHECK`。
+        """
+        self.reading.write_text("（這張表現在一列都沒有）\n",
+                                encoding="utf-8")
+        r = RC.check()
+        self.assertEqual(r["status"], "NON_CONFORMANT")
+        self.assertEqual(r["bad"], 2)
+        self.assertTrue(all(x["verdict"] == "NO_RECORD" for x in r["rows"]))
+        self.assertEqual(RC.main(["x"]), 1)
+
+    def test_the_two_cases_are_not_equal(self):
+        """兩種情形的回傳值要分得出來。這是這一組存在的理由。"""
+        self.reading.write_text("（這張表現在一列都沒有）\n",
+                                encoding="utf-8")
+        empty = RC.check()
+        self._make_unreadable()
+        unreadable = RC.check()
+        self.assertNotEqual(empty, unreadable)
+        self.assertNotEqual(empty["status"], unreadable["status"])
+
+
 class TestExitCodes(Case):
 
     def test_conformant_exits_zero(self):

@@ -639,3 +639,36 @@ def silence_summary(items: list[Silence]) -> dict:
                    "那部分量的是「分不出她在說什麼」而不是「她跳過了」。"
                    "分子含這種噪音的時候，risky 清單要當線索看不是當結論"),
     }
+
+
+# ── 催促：她只是叫我繼續 ────────────────────────────
+#
+# 2026-09-14 從 tools/timeline.py 搬過來。
+# 那邊也要用、desktop_api 的建議也要用，而判斷邏輯只能有一份 ——
+# 兩份遲早會分歧，而分歧的那天沒有人會發現，
+# 因為兩邊各自的測試都會過。
+#
+# 「這是 timeline 最重要的一個因子，而它原本不在。」
+#
+# 只標糾正的線，會把 14 次「你又得開口」全部畫成綠色。
+
+_NUDGE = re.compile(
+    r"^(?:繼續|接續|往下|再來|然後呢?|下一步|go|next|做|開始|動手)\s*[。!！,，]?$"
+    r"|^讀\s*[A-Za-z0-9_.-]{1,20}\s*$"
+    r"|^(?:去|快|趕快|你去)\s*\S{1,8}\s*$"
+    r"|繼續做|繼續走|接著做|不要停|別停|你又停")
+NUDGE_MAX_CHARS = 30
+
+
+def is_nudge(text: str) -> bool:
+    """她這一句是不是只在叫我繼續。
+
+    刻意保守:夠短、整句就是祈使或方向詞、沒有帶新標的。
+    分不出來的一律不算。
+    """
+    t = " ".join((text or "").split())
+    if not t:
+        return False
+    if len(t) <= NUDGE_MAX_CHARS and _NUDGE.search(t):
+        return True
+    return bool(re.search(r"你又停|不要停|別停|還在等什麼", t))

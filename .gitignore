@@ -18,6 +18,19 @@ node_modules/
 # 而我宣稱「已經 commit」——commit 確實成功了,只是不含那個檔案。
 # 白名單是「列舉式」的,所以每一份新的控制檔都要自己加一行,漏了不會有錯誤。
 !.forseti/HANDOVER_FAILURE_*.md
+# 2026-09-16 加。**同一個坑第三次。** 上面那段記的是 HANDOVER_FAILURE
+# 被擋在版控外,而 ROADMAP.md 與 AUTO_CONTINUE_LOG.md 一直也被擋著,
+# 沒有人發現 —— 因為漏了不會有錯誤,只會安靜地不存在。
+# 這兩份是控制檔不是執行期狀態:ROADMAP 是開發順序(它自己寫著
+# 「這份取代 TODO_AUDIT 的清單部分」),LOG 是每一輪做了什麼的紀錄。
+# 不在版控裡等於下一個 session 拿不到。
+!.forseti/ROADMAP.md
+!.forseti/AUTO_CONTINUE_LOG.md
+# NEXT.md **刻意不加**,留給 owner 決定。
+# 它是 handoff.py 每 4 分鐘自動重寫的執行期產物(性質同 state.json),
+# 進版控會產生大量沒有意義的 commit。但它同時是「下一個接手的人
+# 唯一看得到的東西」,所以這是一個取捨不是一個事實,我不自己定。
+# 要它進版控的話,加一行 `!.forseti/NEXT.md` 就好。
 # 產品方向。owner 2026-09-11 逐字交代的三件事,不能只活在 context 裡。
 !.forseti/PRODUCT_DIRECTION.md
 # Widget 設計規格。owner 2026-09-13 到 09-14 口述的設計意圖正本。

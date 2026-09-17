@@ -510,28 +510,139 @@ TAKEOVER_QUESTIONS = [
 ]
 
 
+def _suff():
+    return _sibling("sufficiency")
+
+
+def current_session() -> str:
+    """這條線的識別。環境變數優先，否則用最近被寫的那份 transcript。
+
+    權限綁在這個值上，所以它取錯的後果是「別人考過的算到我頭上」。
+    環境變數 `FORSETI_SESSION` 是給測試與非 Claude 環境用的逃生口。
+    """
+    import os
+    v = (os.environ.get("FORSETI_SESSION") or "").strip()
+    if v:
+        return v
+    try:
+        f = _sibling("tracker").latest_session()
+        return f.stem if f else ""
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
 def cmd_gate_takeover(rep: Report) -> int:
+    """接管閘門。**這一版真的驗答案。**
+
+    B-08 記的是「閘門攔不住寫程式的人，只列題目不驗答案」。
+    `sufficiency.py` 把 v5.0 §17.3 的五個維度接成一份會批改的考卷，
+    題目從原文抽，答案不寫進考卷（§39 第 2 步）。
+
+    下面那六題是另一回事:它們來自她實際糾正過的地方，是開放題，
+    **系統驗不了**，所以印出來的時候要說清楚哪一半會驗哪一半不會。
+    混在一起講就變成另一個「看起來有在把關」。
+    """
+    S = _suff()
+    root = rep.root if hasattr(rep, "root") else Path(__file__).resolve().parents[2]
+    sess = current_session()
+
     print()
     print("  接管測試")
     print()
-    print("  這六題不是考試，是攔截。2026-09-08 有一個 session 讀了九份文件")
+    print("  這不是考試，是攔截。2026-09-08 有一個 session 讀了九份文件")
     print("  裡的一份就開始寫程式，走偏兩小時。這個閘門就是為了那件事存在。")
     print()
-    print("  答不出來的，去讀對應的檔案再回來。")
-    print()
-    for i, (q, where) in enumerate(TAKEOVER_QUESTIONS, 1):
-        print(f"  {i}. {q}")
-        print(f"     答案在：{where}")
-        print()
 
     if rep.missing:
         print(f"  ✗ 缺 {len(rep.missing)} 份控制檔，這個閘門現在無效。")
         print()
         return 1
 
-    print("  這個版本只列題目與出處，不驗證答案。")
-    print("  驗證需要把答案存進帳本再比對，那是階段 1 之後的事。")
-    print("  在那之前，這個閘門靠的是讀的人自己誠實。")
+    st = S.state(root, session=sess)
+    print(f"  這條線　{sess or '（認不出來）'}")
+    print(f"  現在的權限　{'可以寫' if st['write'] else '唯讀'}　{st['why']}")
+    print(f"  強制擋人　{'開' if st['enforced'] else '關（只記錄不擋）'}")
+    print()
+
+    exam = S.open_exam(root, session=sess)
+    print(f"  考卷　{exam['id']}　{len(exam['questions'])} 題，"
+          f"門檻 {exam['threshold']:.0%}，逐維度算")
+    print()
+    for key, en, zh, _d in S.DIMENSIONS:
+        d = exam["dims"].get(key, {})
+        state = d.get("state", "")
+        if state == "OK":
+            print(f"  ● {zh}（{en}）　來源 {d.get('source', '')}")
+        else:
+            print(f"  ○ {zh}（{en}）　{state}：{d.get('why', '')}")
+    print()
+    for q in exam["questions"]:
+        print(f"  [{q['qid']}] {q['q']}")
+    print()
+    print("  答案不在這份考卷裡。v5.0 §39 第 2 步:先看到答案再推導，")
+    print("  推導出來的就是那個答案。要找依據去讀題目標的那一行原文。")
+    print()
+    print("  交卷：")
+    print(f"    echo '{{\"{exam['questions'][0]['qid'] if exam['questions'] else 'xxx-1'}\": \"...\"}}' | \\")
+    print(f"      python3 apps/forseti-cli/forseti.py gate submit {exam['id']}")
+    print()
+    print("  ── 以下六題系統驗不了，是開放題 ──")
+    print()
+    for i, (q, where) in enumerate(TAKEOVER_QUESTIONS, 1):
+        print(f"  {i}. {q}")
+        print(f"     依據在：{where}")
+        print()
+    return 0
+
+
+def cmd_gate_submit(rep: Report, args: list[str]) -> int:
+    """交卷。答案從 stdin 讀 JSON:`{"qid": "作答", ...}`。"""
+    S = _suff()
+    root = rep.root if hasattr(rep, "root") else Path(__file__).resolve().parents[2]
+    if not args:
+        print("要交哪一份考卷？　forseti gate submit <exam_id>", file=sys.stderr)
+        return 2
+    raw = sys.stdin.read()
+    try:
+        answers = json.loads(raw) if raw.strip() else {}
+    except ValueError as e:                                  # noqa: BLE001
+        print(f"讀不懂答案，要是 JSON：{e}", file=sys.stderr)
+        return 2
+    if not isinstance(answers, dict):
+        print("答案要是一個物件：{\"qid\": \"作答\"}", file=sys.stderr)
+        return 2
+
+    res = S.submit(root, exam_id=args[0], answers=answers,
+                   session=current_session())
+    if not res.get("ok"):
+        print(f"  ✗ {res.get('why')}")
+        return 2
+
+    print()
+    print(f"  判決　{res['verdict']}　{res['why']}")
+    print(f"  答對　{res['right']} / {res['asked']}　"
+          f"（{res['rate']:.0%}，門檻 {res['threshold']:.0%}）")
+    print()
+    for dim, v in res["per_dim"].items():
+        mark = "✓" if v["pass"] else "✗"
+        print(f"  {mark} {dim}　{v['right']}/{v['asked']}")
+    if res["missing_dims"]:
+        print()
+        print("  沒有來源可考的維度：" + "、".join(res["missing_dims"]))
+    print()
+    return 0 if res["verdict"] in ("PASS", "PASS_PARTIAL") else 1
+
+
+def cmd_gate_status(rep: Report) -> int:
+    S = _suff()
+    root = rep.root if hasattr(rep, "root") else Path(__file__).resolve().parents[2]
+    st = S.state(root, session=current_session())
+    print()
+    print(f"  這條線　{st['session'] or '（認不出來）'}")
+    print(f"  權限　{'可以寫' if st['write'] else '唯讀'}")
+    print(f"  理由　{st['why']}")
+    print(f"  考過幾次　{st['attempts']}")
+    print(f"  強制擋人　{'開' if st['enforced'] else '關（只記錄不擋）'}")
     print()
     return 0
 
@@ -1407,6 +1518,10 @@ def main(argv: list[str]) -> int:
         return cmd_status(rep)
     if cmd == "gate" and len(argv) > 2 and argv[2] == "takeover":
         return cmd_gate_takeover(rep)
+    if cmd == "gate" and len(argv) > 2 and argv[2] == "submit":
+        return cmd_gate_submit(rep, argv[3:])
+    if cmd == "gate" and len(argv) > 2 and argv[2] == "status":
+        return cmd_gate_status(rep)
     if cmd == "context":
         return cmd_context(argv[2:])
     if cmd == "index":
@@ -1441,6 +1556,14 @@ def main(argv: list[str]) -> int:
         return cmd_claims(argv[2:])
     if cmd == "overclaim":
         return cmd_overclaim(argv[2:])
+    if cmd == "probe":
+        import probe as PB
+        return PB.main(argv[2:])
+    if cmd == "probe-model":
+        # §15 三軸裡的 models 與 contexts。另開一個指令不混進 `probe`，
+        # 因為這一支會花掉訂閱額度，而 `probe` 是隨手跑得起來的。
+        import probemodel as PM
+        return PM.main(argv[2:])
 
     print(__doc__)
     return 2

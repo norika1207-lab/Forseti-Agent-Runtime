@@ -1,0 +1,94 @@
+"""Checkpoint。v5.0 §17、§25、階段 5
+
+**Python 端先前完全沒有這個東西**，而 `PHASE_STATUS.md` 把階段 5 叫
+「Checkpoint 與 Fork」。只有 fork，checkpoint 一行都沒有。
+
+這組守三件事：
+
+一，**存的是 §25 那四樣。** 目標、已接受的決策、未解決的未知、
+    最後已知良好狀態。少一樣，後繼者就答不出那一題。
+
+二，**不存對話全文。** §3.2 的非目標明寫不把完整歷史對話倒進後繼
+    session，而且全文本來就在 jsonl 裡。
+
+三，**last_good 沒有就是沒有。** 不准退而求其次拿最近的那一個 ——
+    最近的那一個常常正是出事的那一個。
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "apps" / "forseti-cli"))
+
+import checkpoint as C  # noqa: E402
+
+
+@pytest.fixture()
+def log(tmp_path):
+    return tmp_path / "cp.jsonl"
+
+
+def test_理由只收白名單(log):
+    r = C.create(session="s", n=1, reason="隨便填", path=log)
+    assert r["ok"] is False
+    assert "TASK_FINISHED" in r["why"]
+
+
+def test_存的是規格要的四樣(log):
+    r = C.create(session="s", n=3, reason="OWNER_MARK",
+                 goal="G", decisions=["D"], unknowns=["U"], verified=["V"],
+                 path=log)
+    cp = r["checkpoint"]
+    for k in ("goal", "decisions", "unknowns", "verified"):
+        assert k in cp, f"§25 要求的 {k} 不見了"
+
+
+def test_不存對話全文(log):
+    """有人把 transcript 塞進來就是把 §3.2 的非目標推翻了。"""
+    r = C.create(session="s", n=1, reason="OWNER_MARK", path=log)
+    cp = r["checkpoint"]
+    for bad in ("transcript", "rows", "messages", "text", "full"):
+        assert bad not in cp, f"checkpoint 不該存 {bad}"
+
+
+def test_沒有標記就沒有last_good(log):
+    C.create(session="s", n=1, reason="OWNER_MARK", path=log)
+    C.create(session="s", n=2, reason="TASK_FINISHED", path=log)
+    assert C.last_good("s", log) is None, "系統不准自己挑最近的那一個"
+
+
+def test_只回被明確標記的(log):
+    C.create(session="s", n=1, reason="OWNER_MARK", last_good=True, path=log)
+    C.create(session="s", n=9, reason="TASK_FINISHED", path=log)
+    lg = C.last_good("s", log)
+    assert lg is not None and lg["n"] == 1, "第 9 輪沒被標，不能拿它冒充"
+
+
+def test_多個標記取最後一個(log):
+    C.create(session="s", n=1, reason="OWNER_MARK", last_good=True, at=100, path=log)
+    C.create(session="s", n=5, reason="OWNER_MARK", last_good=True, at=200, path=log)
+    assert C.last_good("s", log)["n"] == 5
+
+
+def test_session_隔離(log):
+    C.create(session="a", n=1, reason="OWNER_MARK", last_good=True, path=log)
+    assert C.last_good("b", log) is None
+
+
+def test_摘要要說明為什麼沒有last_good(log):
+    C.create(session="s", n=1, reason="OWNER_MARK", path=log)
+    s = C.summary("s", log)
+    assert s["last_good"] is None
+    assert "最近的那一個常常正是出事的那一個" in s["why_no_last_good"]
+
+
+def test_id_穩定而且不同筆不撞(log):
+    a = C.create(session="s", n=1, reason="OWNER_MARK", at=1.0, path=log)["checkpoint"]
+    b = C.create(session="s", n=2, reason="OWNER_MARK", at=2.0, path=log)["checkpoint"]
+    assert a["id"] != b["id"]
+    assert a["id"].startswith("cp-")
