@@ -2295,7 +2295,7 @@ async function renderFeat() {
     const h = document.createElement("div");
     h.className = "fGap miss";
     const by = r.missing_by_barrier || {};
-    h.innerHTML = `還沒做的　<b>${miss.length}</b> 項` +
+    h.innerHTML = `<span class="fGapT">還沒做的　<b>${miss.length}</b> 項</span>` +
       '<span class="fKinds">' +
       Object.entries(by).filter(([, n]) => n)
         .map(([k, n]) => `<span>${esc(k)} <b>${n}</b></span>`).join("") +

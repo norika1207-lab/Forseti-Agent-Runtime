@@ -9885,3 +9885,201 @@ ROADMAP 的「5a 到 5al 那三十八節是什麼」明寫過這件事：
   `commit_boundary`、B-17 的 `RAW_INLINE_LIMIT`、`renderVitals`
   目標那格寫死、B-15、B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項
   那個 `dry_run=False`
+
+## 2026-09-17 23:xx　交接檔不再把碟上的 checkpoint 說成不存在，而且查出跑的不是磁碟上那一版
+
+### 挑了什麼，以及為什麼是它
+
+照那條兩步規則，先讀上一輪（§39.1 failed_attempts）的「還缺什麼」，
+逐項問「這一項要 owner 開口嗎」：
+
+    release() 還沒有人走過一次　　→　要 owner 重新登入 CLI
+    登記簿第二筆材料沒去找　　　　→　沒有親自驗過的來源，登了 verifier 就是假的
+    畫面上沒有 failed_attempts 節　→　要 owner（她明令不准自己開關 App）
+    §40 十七筆全部 OPEN　　　　　→　見下，這一輪動到了
+    其餘那一串　　　　　　　　　　→　全部要 owner
+
+四條沒有一條可以直接往下做，所以走到第二步：`contract.py` 的缺口表。
+EMPTY 那六條裡挑 Recovery 那兩欄，而挑它的理由是先量再挑，不是看表猜：
+
+    python3 -c "... CP.load() ..."
+    cp-260e6f0255 368 OWNER_MARK last_good=True session=a280762a-...
+    cp-376581b28a 253 OWNER_MARK last_good=True session=325f2601-...
+    cp-d94afd4c95 206 OWNER_MARK last_good=True session=a280762a-...
+
+    這一刻的 session = c062039d-601e-426b-964d-2b42b5186b0a（picked_by=跟著你）
+    這條 session 的 checkpoint = 0
+    碟上總數 = 3，全部 last_good，分屬 2 條 session
+
+交接檔對接手的人說的是「一個 checkpoint 都沒有」加「沒有任何 checkpoint
+被標成 last_good」。兩句各自都對（主詞是這條 session），合起來讀是
+「這台機器上完全沒有可以回去的點」。而碟上有三個，是人親手標的。
+
+### 改了什麼
+
+    checkpoint.elsewhere()      碟上不屬於這條 session 的那些。只給數字
+    checkpoint._why_no_lg()     那句話補主詞，碟上有被標記的就一起講
+    checkpoint.summary()        多一欄 elsewhere，**不併進 total**
+    contract._recovery_status   EMPTY 的理由帶出碟上事實，判定不變
+    contract._last_good_pointer 同上，而且寫明不替 owner 決定算不算數
+
+`last_good()` 一個字都沒改。跨 session 挑一個回去是一次狀態轉換，
+跟模組說明那句「系統自己挑會挑到最近的那一個，而最近的那一個常常
+正是出事的那一個」是同一條政策。**講事實不代表可以替人做選擇。**
+
+### 反向驗證八組，每一組都親自注入再還原
+
+    test_別條session的不併進total　　　　　elsewhere 回空　　　　→ 1 failed
+    test_沒有last_good那句話要有主詞　　　拿掉主詞　　　　　　　→ 1 failed
+    test_碟上沒有別的就不多講一句　　　　　條件改成永遠成立　　　→ 1 failed
+    test_講事實不等於跨session挑一個　　　last_good 改成跨 session → 1 failed
+    test_recovery_status_要講碟上還有什麼　把事實吞掉　　　　　　→ 1 failed
+    test_last_good_pointer_要講碟上還有什麼 同上　　　　　　　　　→ 1 failed
+    test_碟上沒有別的就不多講　　　　　　　沒有也硬講　　　　　　→ 1 failed
+    test_這條線上有checkpoint就不走那條理由 有值也退成 Empty　　 → 1 failed
+
+注入腳本用 try/finally 先存原文再還原，這是上一輪那個教訓
+（反向驗證腳本自己崩掉，注入沒還原留在碟上）。
+
+### 做到一半撞到一件比這一項嚴重的事
+
+改完之後兩條測試紅，而磁碟上的原始碼是對的。`inspect.getsource` 讀
+出來有 `if total: return f"checkpoint {total} 個"`，執行卻走進 Empty。
+查 `__code__.co_consts`，裡面**沒有** `checkpoint ` 這個常數 ——
+跑的不是那一版 bytecode。
+
+    pyc header   mtime 1789656105   size 78671
+    原始檔       mtime 1789656105   size 78671
+
+兩個數字完全一致。NewDrive 是 exFAT，mtime 解析度 2 秒，而 Python
+判斷 pyc 過期看的就是這兩個數字。同一個 2 秒窗裡「先 import 過、再
+改檔、而改完大小剛好不變」，舊 bytecode 就被判成有效。
+
+這台機器還設了 `sys.pycache_prefix`
+（`/Users/norikaoda/Library/Caches/com.apple.python`），pyc 不在專案
+底下：`git status` 看不到，刪專案的 `__pycache__` 也刪不到。症狀長得
+像「我剛才改錯了」，不像「跑的不是我改的那一版」。
+
+刪掉那兩個 pyc 之後，同樣兩條測試 124 passed，程式碼一個字沒改。
+
+#### 修的方式，以及第一版錯在哪
+
+`tests/conftest.py` 在被 import 的當下（任何測試 import 專案模組之前）
+把每個 `.py` 重編一次跟 pyc 比，對不上就刪掉。**比的不是 mtime 也不是
+大小** —— 被騙的正是那兩個數字。
+
+第一版比的是 `marshal.dumps` 之後的位元組，結果連沒改過的檔都判成
+陳舊（實測長度都是 93 而位元組不同，`marshal.dumps` 預設帶 ref 旗標，
+同一個 code 物件在不同 interning 狀態下 dump 出來不一樣）。那種誤判
+的代價是每跑一次全套就把整個專案重編一次。改成比結構摘要
+（bytecode、名字、常數，內嵌的 code 遞迴進去），不含檔名與行號表。
+
+**第一次跑就抓到另外兩個**：`apps/forseti-cli/handoff.py` 與
+`apps/forseti-cli/tracker.py` 也在用陳舊 bytecode。所以這不是單一
+檔案的意外。第二次跑回 0，確認不是每次都誤刪。
+
+#### 登進 §40，狀態 PARTIAL 不是 RESOLVED
+
+`pol-380bb050f1`，**登記簿十八筆裡第一筆不是 OPEN 的**。
+
+被推翻的那句話是「全套 1758 passed 證明磁碟上這一版程式碼是綠的」。
+機制是：把「測試綠」直接當成「這一版程式碼綠」，中間少了「跑的是不是
+這一版」這一步 —— 而那一步平常不用檢查，於是它變成一個從來沒有被說
+出口的前提，沒被說出口就沒有人會去驗。
+
+不是 RESOLVED 的理由寫在 `radius_basis`：算不出有幾個下游結論被污染，
+因為要知道每一次記下「全套 N 綠」那一刻 pyc 是不是陳舊的，而那個資訊
+當時沒有人記，事後也還原不回來（舊 bytecode 已經被覆蓋）。
+
+### 驗證結果
+
+    tests/test_checkpoint.py          9 → 13 條，全綠
+    tests/test_contract.py          107 → 111 條，全綠
+    tests/test_stale_pyc.py           新檔 5 條，全綠
+    §40 登記簿                       17 → 18 筆（OPEN 17、PARTIAL 1）
+    §39.1 帶得出值                   14/31（45%），**沒有變**
+    全套第二次                       1782 passed / 0 failed / 343.66 秒
+
+三次全套的數字不一樣，而且**這個工作區這一輪不是我一個人在用**
+（見下面那一節，23:14:20 有人 commit，同一筆改了
+`tools/literal-restate-check.py`）。所以下面這段只是照實記，
+不是把哪一次當定論。
+
+第一次跑全套是 1778 passed / 4 failed，四條分別是
+`test_literal_restate` 兩條、`test_tempdir_cleanup` 一條、
+`test_ui_render::test_功能那一頁` 一條。四條單獨重跑全部綠，
+第二次全套也全綠。**成因沒有查明，所以這裡不歸因** —— 不寫成
+「跟這一輪無關」，也不寫成「是 pyc 造成的」。可以查核的只有這句：
+連續兩次可重現的狀態是 1782 綠，而那四條在單跑與第二次全套都是綠的。
+
+收集到的案例數 1758 → 1782，差 24，其中 13 條是這一輪直接新增的。
+**另外 11 條的來源沒有查明。** 查過的一件事是它不是參數化帶檔名造成
+的（`--collect-only` 裡沒有任何帶 `stale_pyc` 或 `conftest` 的參數化
+案例），其餘沒查。
+
+### 沒有動畫面，也沒有開關 App
+
+`git status --porcelain desktop/` 空的。全程沒有 `open`、沒有 `pkill`、
+沒有設 `FORSETI_OPEN`。沒有 build，因為這一輪沒碰 `app.js` 與 `app.css`。
+
+### 動到的檔
+
+    apps/forseti-cli/checkpoint.py   加 elsewhere() 與 _why_no_lg()
+    apps/forseti-cli/contract.py     Recovery 那兩欄的理由
+    tests/conftest.py                陳舊 pyc 偵測，模組層就跑
+    tests/test_checkpoint.py         + 4 條
+    tests/test_contract.py           + 4 條
+    tests/test_stale_pyc.py          新檔，5 條
+    .forseti/pollution.jsonl         第 18 筆
+    .forseti/ROADMAP.md              這一項那一節
+    .forseti/AUTO_CONTINUE_LOG.md    這一節
+    .forseti/NEXT.md                 重新產生
+
+### 這個工作區這一輪不是我一個人在用
+
+收尾的時候發現 `git status --porcelain` 只剩 2 個檔案有改動，而
+兩小時前是 23 個。查 `git log`：**23:14:20 有人 commit 了**
+（`0b60113`，作者 norika1207-lab），而那一筆把我這一輪還在改的檔案
+一起帶進去了 —— `checkpoint.py` +55、`contract.py` +280、
+`conftest.py` +152、`test_stale_pyc.py` +97、`test_checkpoint.py` +43、
+`test_contract.py` +225。同一筆還改了 `desktop/ui/app.js` +33、
+`desktop/ui/app.css` +27、`tools/literal-restate-check.py` -2。
+
+所以這一輪的原話「沒有 commit」要更正成:**我沒有 commit，但這些改動
+已經被別人 commit 進去了。** 現在工作區只剩這一輪收尾寫的兩份文件。
+
+這件事直接影響上面每一個數字的可信度:那三次全套是在一個**同時有
+別人在改**的工作區上跑的。尤其 `tools/literal-restate-check.py` 那
+-2 行，跟第二次全套裡 `test_literal_restate` 那兩條紅、以及它們單獨
+重跑就綠，時間上對得起來。**但這只是時間對得上，不是證據** ——
+我沒有那一刻的檔案內容，所以不把它寫成因果。
+
+### 還缺什麼
+
+- **那 11 條多出來的測試案例沒有查明來源。** 這是這一輪自己留下的缺口，
+  不是既有的。下一輪要查的話，方向是「哪些測試的案例數依賴 import
+  進來的常數」——如果有，那就是同一個 pyc 問題的另一個面向
+- 第一次全套那四條紅**成因沒有查明**。它們可能是時間敏感（全套跑很久，
+  期間有外部 Stop hook 寫正本，`conftest` 的模組說明寫過這個形狀），
+  也可能是 pyc 換掉之後短暫露出來的東西。沒有證據就不挑一個說法
+- `checkpoint.elsewhere()` 只被 `summary()` 用。畫面上沒有這一節，
+  跟 metrics 與 failed_attempts 同一個狀態
+- `release()`（§39.1 failed_attempts）仍然沒有人走過一次，條件沒成立
+- **正本 `.forseti/NEXT.md` 這一輪被測試用合成資料覆蓋過。** 收尾的時候
+  讀到裡面寫「工作區跟 HEAD 不一致的：0 個」與「checkpoint 2 個」，
+  而實測工作區有二十幾個檔案有改動、這條 session 的 checkpoint 是 0 個。
+  兩個數字都不是真的，是某條測試走 `strands()` 帶合成 transcript 時
+  寫進去的。`conftest.py` 的模組說明早就記著「測試會寫正本 NEXT.md」，
+  但記的是 **mtime 會動**，沒有記 **內容會被合成資料取代** ——
+  差別在於前者是雜訊，後者是交接檔對接手的人說假話。
+  這一輪的處置只是等節流窗過去之後重寫一次，**沒有修根因**。
+  根因的修法是讓測試路徑的 `handoff.OUT` 指到暫存目錄
+- 陳舊 pyc 的偵測只在 pytest 底下跑。直接跑 `python3 apps/forseti-cli/xxx.py`
+  或 `forseti` CLI 的時候沒有人守 —— 而這一輪撞到的第一個症狀正是
+  在那條路徑上（我自己手跑 contract.py）
+- 其餘在等 owner 的那一串沒有變：`hooks/event-ledger.mjs:159` 的
+  `runtime_node_id: ''`、三條放錯區段怎麼處理、兩支程式的數字要一致
+  得先挑邊、`_CLOSED_WORDS` 撞 B-05、`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  B-17 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`

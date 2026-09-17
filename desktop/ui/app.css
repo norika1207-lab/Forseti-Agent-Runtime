@@ -131,8 +131,13 @@ button{font:inherit;cursor:pointer;color:inherit}
    owner 2026-09-14 把那塊流動顏料拿掉了。理由不用她講:
    一個抽象的色斑看久了只會變成裝飾，而一句
    「下一則對話請他貼出那個檔案」是可以照做的。 */
+/* 【頂部有硬上限】上面那一條修的是已經發生過的那一個，
+   這一條擋的是下一個 —— 任何一塊新內容都可能再把它撐爆一次，
+   而症狀(主要內容看不到、捲軸在 0)看起來不像是高度的問題。
+   一半視窗高是刻意的:頂部再有用，它也不該吃掉主畫面。 */
 .top{padding:38px 20px 0;user-select:none;position:relative;z-index:10;
-  background:var(--surface)}
+  background:var(--surface);
+  max-height:50vh;overflow-y:auto;overscroll-behavior:contain}
 
 .bar{display:flex;align-items:center;gap:9px;pointer-events:none}
 
@@ -723,8 +728,11 @@ button{font:inherit;cursor:pointer;color:inherit}
    跟上面那份用同一個 .fi 版型，不另做一套 ——
    兩份長得不一樣的話，人會以為它們在講兩件不同的事。
    差別只在標籤的顏色與多出來的「擋住的是」那一行。 */
-.fGap.miss{display:flex;align-items:baseline;gap:10px;
+/* 標題不准被壓縮。380 寬底下 flex 會把它當成可縮的項目，
+   於是「還沒做的」被拆成「還沒做」加下一行一個「的」。 */
+.fGap.miss{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
   margin-top:22px;color:var(--ink-2);font-size:12px}
+.fGapT{flex:0 0 auto;white-space:nowrap}
 .fGap.miss b{font:300 16px/1 var(--display);color:var(--ink);
   font-variant-numeric:tabular-nums}
 .fKinds{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;
@@ -894,9 +902,18 @@ button{font:inherit;cursor:pointer;color:inherit}
 .card2.hot{border-color:rgba(255,149,0,.45)}
 .card2 .t{font-size:13.5px;font-weight:600;letter-spacing:-.01em;
   color:var(--ink);line-height:1.4}
+/* 【內文要有上限】2026-09-17 實測:rehydration 那張卡的內文 1204px，
+   往上把 .card2 撐到 1289、.cards 1326、.panel 1567、.top 1627，
+   而視窗只有 900 —— 主要內容整個被推出畫面，
+   捲軸還停在 0，看起來像整個 Widget 卡住了。
+
+   這段文字本來就不是拿來讀的，它是按「用這句」複製走的
+   (§11.4:提示要能直接照做，不是描述問題)。
+   所以給它上限加捲動，而不是讓它決定整個畫面有多高。 */
 .card2 .say{margin:8px 0 0;font-size:12px;line-height:1.5;
   color:var(--ink-2);padding:8px 10px;border-radius:var(--r-md);
-  background:var(--surface-3)}
+  background:var(--surface-3);
+  max-height:132px;overflow-y:auto;overscroll-behavior:contain}
 .card2 .row{display:flex;gap:7px;margin-top:9px;align-items:center}
 .card2 button{border:0;font-size:11.5px;padding:4px 11px;
   border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-2)}

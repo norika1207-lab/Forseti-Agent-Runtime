@@ -3386,3 +3386,63 @@ loaded 模式的填充。`run` 沒有 `--yes` 只會印乾跑不會花錢。
 因為 `summary()` 自己算了一次），補測試之後 1 紅。另外反向驗證腳本
 自己崩在解析 pytest 輸出那一行，導致注入沒還原留在碟上，
 下一條測試才把它抓出來。兩件都記在 `AUTO_CONTINUE_LOG.md` 那一輪。
+
+---
+
+### 跑的到底是不是磁碟上那一版程式碼（2026-09-17 23:xx）
+
+那條兩步規則第三次走到第二步。上一輪的「還缺什麼」四條裡三條要
+owner（重新登入、畫面 build、那一串決定），剩下那條（登記簿第二筆
+材料）沒有親自驗過的來源，所以往下看 `contract.py` 的缺口表，
+挑了 Recovery 那兩欄（`recovery_status` 與 `last_good_pointer`）。
+
+挑它的理由是實測出來的，不是看表猜的：`.forseti/checkpoints.jsonl`
+碟上有 3 筆、全部被人標成 `last_good`、分屬兩條舊 session，而這一條
+session 是 0 筆。於是交接檔對接手的人說的是「一個 checkpoint 都沒有」
+加「沒有任何 checkpoint 被標成 last_good」。兩句話各自都對（主詞是
+這條 session），合起來讀卻是「這台機器上完全沒有可以回去的點」。
+
+**完成的定義**：
+
+| 要件 | 怎麼算做完 | 現在 |
+|---|---|---|
+| 碟上別條 session 的那些算得出來 | `checkpoint.elsewhere()`，不併進 `total` | 做完 |
+| 沒有 last_good 那句話要有主詞 | 「這條 session 沒有任何⋯」，原本的理由不准掉 | 做完 |
+| 講事實不等於跨 session 挑一個 | `last_good()` 的政策一個字沒改，測試釘住 | 做完 |
+| 交接檔兩欄帶出這個事實 | 判定仍是 EMPTY，變的是理由 | 做完 |
+| 碟上沒有別的就不多講一句 | 沒有的東西不准提，正反兩面都有測試 | 做完 |
+
+§39.1 的數字**沒有變**（仍然 14/31）。這一輪改的不是有沒有值，
+是那兩句沒有值的理由講得對不對。
+
+#### 做到一半撞到一件更嚴重的事，而它會讓所有「全套 N 綠」失去根據
+
+改完 `contract.py` 之後兩條測試紅，而磁碟上的原始碼是對的。查下去是
+**跑的不是那一版 bytecode**：
+
+    pyc header   mtime 1789656105   size 78671
+    原始檔       mtime 1789656105   size 78671
+
+兩個數字完全一致，而 `_recovery_status.__code__.co_consts` 裡沒有
+新加的那幾個常數。NewDrive 是 exFAT，mtime 解析度 2 秒，而 Python
+判斷 pyc 過期沒看的就是這兩個數字 —— 同一個 2 秒窗裡「先 import 過、
+再改檔、而改完大小不變」，舊 bytecode 就被當成有效。
+
+這台機器還設了 `sys.pycache_prefix`
+（`/Users/norikaoda/Library/Caches/com.apple.python`），所以 pyc 不在
+專案底下：`git status` 看不到它，刪專案的 `__pycache__` 也刪不到它。
+症狀長得像「我剛才改錯了」，不像「跑的不是我改的那一版」。
+
+修的方式是 `tests/conftest.py` 在被 import 的當下（任何測試 import
+專案模組之前）把每個 `.py` 重編一次，跟 pyc 裡的 code 物件比結構摘要，
+對不上就刪掉。**比的不是 mtime 也不是大小** —— 被騙的正是那兩個數字。
+
+第一次跑就抓到另外兩個：`apps/forseti-cli/handoff.py` 與
+`apps/forseti-cli/tracker.py` 也在用陳舊 bytecode。所以這不是單一
+檔案的意外。
+
+這一筆登進 §40（`pol-380bb050f1`，**登記簿第一筆非 OPEN 的**，狀態
+PARTIAL）。不是 RESOLVED 的理由寫在 `radius_basis`：機制擋住了，
+但過去每一次記下「全套 N 綠」那一刻 pyc 是不是陳舊的，事後還原不回來。
+
+細節、反向驗證八組、以及還缺什麼，在 `AUTO_CONTINUE_LOG.md` 那一輪。
