@@ -354,3 +354,87 @@ def test_act其餘四種動作沒有target一律拒絕而且不寫東西(kind):
         f"`act({kind})` 被拒絕了卻寫了 {sorted(spy.paths())}。"
         "拒絕就要什麼都不留 —— 不然畫面說失敗、檔案說成功。"
     )
+
+
+def test_標記那一下碰得到正本交接檔_所以它在冊(tmp_path, monkeypatch):
+    """`act("checkpoint")` 會走到正本 `NEXT.md` 的寫入閘門。
+
+    **這一條釘的是 `test_zz_forseti_write_attribution.py` 那張名單裡
+    這個檔的登記理由**，不是行為本身。登記的話是「這個檔碰得到正本」，
+    而一個沒有人守的登記理由，哪天路徑變了就會變成過期的說法。
+
+    ## 為什麼這個檔以前不在冊，而這件事是怎麼查出來的
+
+    2026-09-17 18:4x 到 18:5x 查那兩條間歇紅的成因時量出來的。
+    那張名單有兩個來源，**兩個的盲區重疊在這個檔上**：
+
+    一，觀測（跑一輪看誰動到正本）。`NEXT.md` 的節流是 240 秒，
+        所以一輪裡最多一兩條寫得成，看得見的永遠是贏了競速的那一條。
+
+    二，`_scan_strands_callers()`。它掃的是**直接**呼叫 `strands()` 的
+        地方，而這一條隔著兩層：`act("checkpoint")`
+        （`desktop_api.py:2308`）→ `_checkpoint_now:1892` → `:1901` 的
+        `_safe(strands, {})`。那支掃描器自己的 docstring 就寫著
+        看不到間接一層以上的呼叫，所以這不是它壞了，是它的範圍。
+
+    兩邊都看不到的結果是：節流窗剛好開在這一條測試身上的那幾輪，
+    `test_NEXT_md的寫入次數不超過節流窗開過的次數` 會紅在
+    「寫了 NEXT.md 但不在冊」，其餘的輪次全綠。
+    **2026-09-17 18:5x 讓窗開著重跑兩個檔，紅的正是那一條、
+    理由正是那一句** —— 不是推論出來的形狀。
+
+    ## 走到閘門的是三條路，不是一條
+
+    第一次寫這條測試的時候，理由寫的是
+    「`_checkpoint_now:1901` 的 `_safe(strands, {})`」，一條。
+    **反向驗證當場推翻了它**：把那一行改成 `snap = {}`，
+    這一條照樣全綠。印出堆疊之後才看到真正的形狀：
+
+        _checkpoint_now:1901 → strands:3441 → _write_handoff:1807
+        _checkpoint_now:1926 → audit:733 → strands:3441 → 同上
+        _checkpoint_now:1926 → audit:739 → strands:3441 → 同上
+
+    三條共用的出口是 `strands()` 尾段 `:3441` 的 `_write_handoff(snap)`。
+    **所以這一條的反向驗證要斷在那裡**，斷任何一條上游都紅不起來 ——
+    斷 `:3441` 實測只紅這一條，同檔另外 12 條全綠。
+
+    記下來是因為這個形狀會再犯：一次觀測看到一條路，就把它寫成那條路。
+    量到的是「走得到」，不是「怎麼走到的」。
+
+    ## 這一條自己不寫正本
+
+    `should_write` 被換成「記下目標、回 False」。回 False 是
+    `write()` 那一層的擋法（`handoff.py:265`），所以整條路照樣走完，
+    只是最後不落檔。**不改成攔 `write()`**：那樣就分不出
+    「走到了閘門但被節流擋住」跟「根本沒走到」，而這一條要驗的正是前者。
+    """
+    import checkpoint as CP
+    import desktop_api as D
+    import handoff as HO
+
+    monkeypatch.setattr(CP, "LOG", tmp_path / "checkpoints.jsonl")
+
+    seen: list[str] = []
+    orig = HO.should_write
+
+    def spy(path=None, *a, **k):
+        seen.append(str(path) if path is not None else str(HO.OUT))
+        return False
+
+    monkeypatch.setattr(HO, "should_write", spy)
+    try:
+        D.act("checkpoint")
+    finally:
+        monkeypatch.setattr(HO, "should_write", orig)
+
+    assert seen, (
+        "`act('checkpoint')` 一次都沒走到交接檔的寫入閘門。"
+        "路徑變了的話，`test_zz_forseti_write_attribution.py` 那張名單裡"
+        "`tests/test_state_changing_writes.py` 那一筆的登記理由就過期了 —— "
+        "回去改那裡的說明，不要改這一條讓它閉嘴"
+    )
+    assert str(HO.OUT) in seen, (
+        f"走到閘門了，但目標不是正本：{seen}　期望裡面有 {HO.OUT}。"
+        "目標換成別的路徑的話它就不再碰正本，那時候該做的是"
+        "把它從名單上拿掉，不是留著一筆不成立的登記"
+    )

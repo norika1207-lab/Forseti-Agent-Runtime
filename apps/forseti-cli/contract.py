@@ -476,12 +476,27 @@ def _recovery_status(snap: dict | None) -> object:
     total = cps.get("total") or 0
     if total:
         return f"checkpoint {total} 個"
+    # 【2026-09-17 加】碟上別條 session 的那些要講出來。
+    #
+    # 先前這一欄在 0 個的時候只寫「這條線上沒有可以回去的那一刻」，
+    # 那句話對，但接手的人讀完會以為這台機器上什麼都沒有。實測
+    # `.forseti/checkpoints.jsonl` 有 3 筆、全部被人標成 last_good、
+    # 分屬兩條舊 session。**判定不變**（這條線上仍然是 EMPTY），
+    # 變的是理由裡有沒有把碟上的事實一起講。
+    els = cps.get("elsewhere") or {}
+    extra = ""
+    if els.get("total"):
+        extra = (f"。碟上另有 {els['total']} 個 checkpoint（其中 "
+                 f"{els.get('last_good', 0)} 個被標成 last_good），"
+                 f"分屬 {els.get('sessions', 0)} 條別的 session。"
+                 "**它們不算這條線上的點** —— 要不要接過來是 owner 的決定")
     return Empty(
         "`checkpoint.py`（§17）就是這一欄的來源，而這一條 session 此刻"
         "**0 個 checkpoint**。要有值得落一個："
         "`checkpoint.create(session=..., n=..., reason=...)`，"
         "或走畫面上那個按鈕。"
-        "**0 個不等於沒有備份** —— 它只說這條線上沒有可以回去的那一刻")
+        "**0 個不等於沒有備份** —— 它只說這條線上沒有可以回去的那一刻"
+        + extra)
 
 
 def _last_good_pointer(snap: dict | None) -> object:
@@ -504,10 +519,20 @@ def _last_good_pointer(snap: dict | None) -> object:
     if lg:
         return lg
     if not (cps.get("total") or 0):
+        # 【2026-09-17 加】同 `_recovery_status`：0 個的時候要順帶說
+        # 碟上有沒有別條 session 的。不講的話這一句讀起來是全稱否定。
+        els = cps.get("elsewhere") or {}
+        extra = ""
+        if els.get("last_good"):
+            extra = (f"。碟上另有 {els['last_good']} 個被標成 last_good 的"
+                     f" checkpoint，分屬 {els.get('sessions', 0)} 條別的"
+                     " session。**這裡不替 owner 決定它們算不算數** —— "
+                     "跨 session 挑一個回去是一次狀態轉換，"
+                     "跟 `last_good()` 不自己挑最近的那一個是同一條政策")
         return Empty(
             "這一條 session 一個 checkpoint 都沒有，所以談不上哪一個是"
             "已知良好的點。**下一步是先落一個**，不是去標記"
-            "（`recovery_status` 那一欄是同一個來源）")
+            "（`recovery_status` 那一欄是同一個來源）" + extra)
     why = (cps.get("why_no_last_good") or "").strip()
     if why:
         return Empty(
@@ -517,6 +542,120 @@ def _last_good_pointer(snap: dict | None) -> object:
         "而 `checkpoint.summary()` 這一次沒有帶 `why_no_last_good`。"
         "**這裡不自己補一句理由** —— 那會變成第二個說法")
 
+
+
+def _metrics_field(*, path: Path | None = None) -> object:
+    """§39.1 Metrics 那一欄。來源是 `metrics.py` 的 §33.1 登記簿。
+
+    ## 空的時候是 EMPTY 不是 NO_SOURCE，而且那不是壞消息
+
+    登記簿空的意思是「有地方可以登記，此刻沒有人登記」，
+    跟「這個系統沒有出處契約這個東西」差一整條實作。
+    `Empty` 帶著的那句話要指得出誰去做什麼它才會有值，
+    不然一個空欄位跟一個死路長得一模一樣。
+
+    ## 為什麼不在這裡自動登記一筆
+
+    這一欄最容易的作弊方式是拿手邊現成的數字（測試通過數）
+    配一組猜出來的欄位登記上去，數字立刻從 0 變 1。
+    `metrics.py` 的模組說明寫了為什麼不做：材料類別歸不了類的數字
+    照 §33.1 本來就登記不了，硬歸一類就是 §8.3 的填空。
+
+    ## 只算 releasable 的那些嗎？不
+
+    **總數與夠格數兩個都報。** 只報夠格數的話，一筆登記了但血緣
+    不齊的記錄會從畫面上消失，而那一筆正是要有人去補提供端的那一筆。
+    """
+    try:
+        import metrics as MT                      # 延後 import，同 claims
+        d = MT.by_distribution(path=path)
+    except Exception as exc:                      # pragma: no cover - 防禦
+        return NoSource(f"讀不到 §33.1 登記簿：{type(exc).__name__}: {exc}")
+    if not d.get("total"):
+        return Empty(
+            "`metrics.py`（§33.1 Metric Provenance Contract）就是這一欄的"
+            "來源，而 `.forseti/metrics.jsonl` 此刻 0 筆。"
+            "要有值得有人把尺與材料寫下來登記一筆："
+            "`forseti metric template` 產模板，填完 "
+            "`forseti metric register --from <檔案>`。"
+            "**這一支不自動登記** —— 拿現成數字配一組猜出來的欄位"
+            "就是 §8.3 的填空")
+    return d
+
+
+def _failed_attempts_field(*, path: Path | None = None) -> object:
+    """§39.1 failed_attempts 那一欄。來源是 `attempts.py` 的登記簿。
+
+    ## 空的時候是 EMPTY 不是 NO_SOURCE
+
+    跟 `_metrics_field()` 同一條。登記簿空的意思是「有地方可以登記，
+    此刻沒有人登記」，跟「這個系統沒有失敗嘗試這個物件」差一整條實作。
+
+    ## 為什麼不在這裡自動萃取
+
+    這一欄最容易的作弊方式是去掃 `AUTO_CONTINUE_LOG.md` 的散文，
+    抓「試了……沒好」那類句型湊出幾筆，數字立刻從 0 變好幾。
+    `attempts.py` 的模組說明寫了為什麼不做（B-05）:
+    抓到的會是符合句型的句子，不是真的失敗嘗試。
+
+    ## 報的是還在擋路的那些，總數也一起報
+
+    放掉的那些不從畫面上消失。「這件事以前試過，後來條件變了」
+    正是下一個人需要知道的東西，只報還在擋路的話那件事會不見。
+    """
+    try:
+        import attempts as AT                     # 延後 import，同 metrics
+        s = AT.summary(path=path)
+    except Exception as exc:                      # pragma: no cover - 防禦
+        return NoSource(f"讀不到失敗嘗試登記簿：{type(exc).__name__}: {exc}")
+    if not s.get("total"):
+        return Empty(
+            "`attempts.py`（§39.1 failed_attempts）就是這一欄的來源，"
+            "而 `.forseti/attempts.jsonl` 此刻 0 筆。"
+            "要有值得有人把一次失敗的嘗試寫下來："
+            "`forseti attempt template` 產模板，填完 "
+            "`forseti attempt record --from <檔案>`。"
+            "規格要的是三件事（試了什麼、看到什麼、為什麼不重試），"
+            "**這一支不自動萃取散文** —— 抓句型抓到的是符合句型的句子，"
+            "不是真的失敗嘗試（B-05）")
+    return s
+
+
+def _runtime_node() -> object:
+    """§39.1 Reality 的第二欄：現在跑在哪台機器。
+
+    ## 這一欄先前是 NO_SOURCE，理由已經不成立了
+
+    那句理由寫著「§12.1 的 RuntimeNode 沒有實作」，
+    2026-09-17 `apps/forseti-cli/runtimenode.py` 之後不再是真的。
+    **一句當初查過、後來才變假的理由**，正是 `Recheck` 那個 class
+    整個存在的原因，所以這一欄不留著那句話等人來複查，直接接上來源。
+
+    ## 接的是 `reference()` 不是 `describe()`
+
+    §39.1 那一欄問的是「active machine/runtime node」 ——
+    指得出是哪一台就答完了，不是要那個實體的六個欄位。
+    `runtimenode.describe()` 回的是完整實體（六欄裡三欄是空的，
+    各自帶著為什麼），那是另一個問題的答案。
+    **在這裡接 `describe()` 會讓這一欄變成 DEGRADED，
+    而那個降級的理由來自另一張表** —— §5 的實體完整度，不是 §39.1
+    的這一欄有沒有答出來。兩張表混在一起，讀的人會以為
+    「不知道跑在哪台機器」，實情是知道。
+
+    ## `basis` 一起帶著走
+
+    退回 hostname 算出來的 node_id 會在改機器名字的那天變掉，
+    而那件事在畫面上跟「換了一台機器」長得一模一樣。
+    只帶 node_id 不帶 basis 的話，沒有人分得出來。
+    """
+    try:
+        import runtimenode                   # noqa: PLC0415  故意延後
+        return runtimenode.reference()
+    except Exception as e:                   # noqa: BLE001
+        # 量不到就說量不到。**不退回 hostname 假裝量到了** ——
+        # 這一支自己失敗跟這台機器沒有識別碼是兩件事。
+        return NoSource(
+            f"`runtimenode.reference()` 這一次沒跑成：{type(e).__name__}: {e}")
 
 
 def _hcache_file(base: Path) -> Path:
@@ -1126,6 +1265,113 @@ def invalidated_lines(ctx: dict | None, limit: int = 6) -> list:
     return lines
 
 
+#: 「這一份是在哪裡寫的」那一節印哪幾欄。**這是白名單，不是「所有 PRESENT」。**
+#: 產出、已推翻的結論、阻塞各自有自己那一節，全部 PRESENT 一起印會印兩次，
+#: 然後兩個地方開始不一致。
+#:
+#: 這幾欄的共同點不是「比較重要」，是**其他每一節都要靠它們才解釋得了**:
+#: 一條 `apps/forseti-cli/contract.py` 只有在某一台機器的某一個正本底下
+#: 才指得到東西，而這份檔案會被另一台機器上的人讀到。
+COORDINATE_FIELDS: tuple = (
+    "project_id", "canonical_root", "runtime_node",
+    "session_id", "logical_agent_id", "model_identity",
+)
+
+
+def coordinate_lines(report: dict | None) -> list:
+    """交接檔「這一份是在哪裡寫的」那一節的行文。`handoff.py` 只排版。
+
+    ## 為什麼要有這一節
+
+    先前 `NEXT.md` 的契約那一節**只印缺口，填得出來的欄位一個字都不印**。
+    所以 2026-09-17 那一輪把 `runtime_node` 從「沒有資料來源」接成有值
+    之後，那份交接檔照樣答不出「這一份是在哪台機器上寫的」——
+    值算出來了，讀的人看不到。
+
+    **一個從缺口清單上消失的欄位，跟一份真的說得出座標的交接，
+    不是同一件事。** 這句話是 `artifact_lines` 那一節先撞到的
+    （2026-09-16 18:2x），這裡是同一個形狀第二次出現，
+    所以它是這個檔案的一種慣性，不是一次意外。
+
+    ## 只印 PRESENT，缺的不在這裡
+
+    白名單裡不是 PRESENT 的那幾欄不在這一節出現 —— 它們已經在
+    「這份交接照規格少了什麼」那一節裡，連理由一起。結尾那一句
+    負責講清楚沒列出來的去哪裡找，不然讀的人會把「沒列」讀成「沒有」。
+
+    ## `basis` 要跟著 node_id 走
+
+    退回 hostname 算出來的 node_id 會在改機器名字的那天變掉，
+    而那件事在畫面上跟「換了一台機器」長得一模一樣
+    （`runtimenode` 檔頭）。所以 basis 不是硬體識別碼的時候，
+    這一節多印一句，**不是把那個 id 藏起來**。
+
+    值本身一律走 `check()` 算好的 `shown`，這一支不自己格式化任何值 ——
+    自己格式化就會變成第二個渲染路徑，然後同一個值在兩個地方長得不一樣。
+    """
+    rep = report or {}
+    bykey = {}
+    for g in (rep.get("groups") or []):
+        for f in (g.get("fields") or []):
+            bykey[f.get("key")] = f
+
+    rows = [(k, bykey[k]) for k in COORDINATE_FIELDS
+            if bykey.get(k, {}).get("status") == STATUS_PRESENT
+            and str(bykey[k].get("shown") or "").strip()]
+    if not rows:
+        # 一欄都答不出來的時候整節不印。**不印一句「座標不明」** ——
+        # 那一行會被讀成系統查過了，實情是這一節沒有東西可講，
+        # 而缺了哪幾欄、為什麼缺，缺口那一節講得比這裡準。
+        return []
+
+    lines = [
+        "接手的人第一眼要確認的是**這一份講的東西跟你在的地方是不是同一個**。",
+        "底下每一條路徑、每一個雜湊，都只有在這組座標底下才指得到東西。",
+        "",
+    ]
+    for k, f in rows:
+        lines.append(f"- {f.get('note') or k}（`{k}`）：{f.get('shown')}")
+    lines.append("")
+
+    ctx = rep.get("ctx") or {}
+    rn = ctx.get("runtime_node")
+    basis = rn.get("basis") if isinstance(rn, dict) else None
+    if basis and basis != _basis_uuid_name():
+        lines += [
+            f"**`node_id` 這一次是從 {basis} 算出來的，不是硬體識別碼。**",
+            "改機器名字的那天它會跟著變，而那在畫面上跟「換了一台機器」",
+            "長得一模一樣。要分辨得看這一行，不是看 id 本身。",
+            "",
+        ]
+
+    listed = {k for k, _ in rows}
+    missing = [k for k in COORDINATE_FIELDS if k not in listed]
+    if missing:
+        lines += [
+            "這一節沒列到的座標（"
+            + "、".join(f"`{k}`" for k in missing)
+            + "）**不是沒有這一欄**，是這一刻答不出來。",
+            "為什麼答不出來，在下面「這份交接照規格少了什麼」那一節，連理由一起。",
+            "",
+        ]
+    return lines
+
+
+def _basis_uuid_name() -> str:
+    """硬體識別碼那個 basis 叫什麼。**跟 `runtimenode` 拿，不寫死字面值。**
+
+    寫死的話那邊改一個字，這裡的警告會靜默地永遠不成立 ——
+    而少印一句警告不會讓任何測試變紅，所以沒有人會發現。
+    拿不到就回空字串，那會讓警告永遠印出來:**多印一句警告是安全的方向**，
+    少印那一句才會讓人把換機器誤判成沒換。
+    """
+    try:
+        import runtimenode                   # noqa: PLC0415  故意延後
+        return runtimenode.BASIS_UUID
+    except Exception:                        # noqa: BLE001
+        return ""
+
+
 def artifact_lines(ctx: dict | None, limit: int = 10) -> list:
     """交接檔那一節的行文。**算在這裡，`handoff.py` 只排版。**
 
@@ -1309,13 +1555,13 @@ def collect(snap: dict | None, work: dict | None = None, *,
         "session_id": snap.get("session") or "",
         # -- Reality
         "canonical_root": str(r),
-        "runtime_node": NoSource(
-            "`events` 表有 `runtime_node_id` 欄位，但 hooks 一律寫空字串"
-            "（`hooks/event-ledger.mjs:159`），實測 42 筆 0 筆有值。"
-            "§12.1 的 RuntimeNode 沒有實作"),
+        "runtime_node": _runtime_node(),
         "target_environment": NoSource(
-            "沒有任何地方記錄目標環境。§12.1 的 Project → RuntimeNode "
-            "那一層沒有實作，所以「這份工作要落到哪裡」無處可讀"),
+            "沒有任何地方記錄目標環境。`runtimenode.py`（2026-09-17）"
+            "答的是「現在跑在哪」，不是「要落到哪裡」——**兩件事**。"
+            "§12.1 那一層現在有 RuntimeNode 這一端，"
+            "Project → RuntimeNode 的綁定仍然沒有，"
+            "所以「這份工作要落到哪裡」無處可讀"),
         # -- Model
         "model_identity": mi.get("model", ""),
         "model_config": (
@@ -1339,11 +1585,11 @@ def collect(snap: dict | None, work: dict | None = None, *,
             "`watchdog.py` 算的是 heartbeat 的停滯評估，不是程序清單。"
             "§12.2 要的「程序管理器加健康端點」這條線沒有接"),
         # -- Metrics
-        "metrics_by_distribution": NoSource(
-            "Metric Provenance Contract 沒有實作"
-            "（`grep -rn 'Metric Provenance' apps/ src/` 零命中）。"
-            "有數字不等於有出處契約，照 §39.1 沒有出處的數字不算帶得出去",
-            recheck=Recheck("Metric Provenance")),
+        # 2026-09-17 接上。先前是 NO_SOURCE，理由寫著「Metric Provenance
+        # Contract 沒有實作（grep 零命中）」，而 `metrics.py` 之後
+        # 那句話不再是真的 —— 又一次「當初查過、後來才變假」的理由，
+        # 所以不留著等 `Recheck` 來複查，直接接上來源。
+        "metrics_by_distribution": _metrics_field(),
         # -- Artifacts
         # git 量不到的時候這一欄是 DEGRADED，不是 EMPTY。
         # EMPTY 讀起來是「量過了，沒有產出」，而這裡的實情是
@@ -1366,9 +1612,11 @@ def collect(snap: dict | None, work: dict | None = None, *,
         "blockers": _blockers_field(work),
         "known_limits": (str(blockers_file) if blockers_file.exists()
                          else NoSource("`.forseti/BLOCKERS.md` 不存在")),
-        "failed_attempts": NoSource(
-            "試過而且失敗的做法只寫在 `.forseti/AUTO_CONTINUE_LOG.md` 的敘述裡，"
-            "那是散文不是可查詢的狀態，沒有欄位也沒有 id"),
+        # 2026-09-17 22:xx 接上。先前是 NO_SOURCE，理由寫著「只寫在
+        # AUTO_CONTINUE_LOG 的敘述裡，那是散文不是可查詢的狀態」。
+        # 現在 `attempts.py` 在了，所以那個理由不再為真 ——
+        # 空的時候是 EMPTY（有地方登記，此刻沒人登記），不是 NO_SOURCE。
+        "failed_attempts": _failed_attempts_field(),
         # 2026-09-16 19:2x 接上。先前是 NOT_CARRIED，理由寫著
         # 「§40 的 PollutionRegistry 沒有實作」。現在 `pollution.py` 在了。
         # 空清單的時候這一欄是 EMPTY 不是 NO_SOURCE ——

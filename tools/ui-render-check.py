@@ -903,8 +903,13 @@ TABS = (
         Probe("nums", ("fBig", "aBig"),
               lambda f: [str(f["features"]["alive"]),
                          str(f["features"]["total"])], "活的／全部"),
+        # 2026-09-17: 這一頁現在畫兩份 —— 做好的（items）與還沒做的
+        # （missing）。只數 items 的話，加了第二份之後這一條會紅，
+        # 而紅的原因不是畫錯，是它不知道有第二份。
         Probe("count", ("fi",),
-              lambda f: len(f["features"].get("items") or []), "功能列"),
+              lambda f: (len(f["features"].get("items") or [])
+                         + len(f["features"].get("missing") or [])),
+              "功能列（做好的加還沒做的）"),
     )),
     Tab("spec", "讀文件", (
         Probe("nums", ("aBig", "fBig"),

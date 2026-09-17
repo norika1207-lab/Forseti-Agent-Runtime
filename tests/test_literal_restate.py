@@ -590,7 +590,14 @@ class 這個repo現在的小寫狀態(unittest.TestCase):
         # 帶進來的（§15 模型軸的九題與它的常數）。這個 class 的
         # docstring 寫著「會隨開發變動，那正是它存在的目的」，
         # 所以這裡更新數字，不是放寬判準。
-        self.assertEqual((up.enums, up.members), (72, 290))
+        #
+        # 2026-09-17 22:xx: 72/290 → 73/292。`apps/forseti-cli/attempts.py`
+        # 的 `KINDS`（ATTEMPT / RELEASE）帶進來的，**只有它一個**。
+        # 同一支的 `SPEC_FIELDS` 與 `EVIDENCE_FIELDS` 落在小寫那一側，
+        # 不影響這個數字。查法是把那支暫時移開再掃一次：72/290 回來了。
+        # 2026-09-17: 73/292 → 75/296。desktop_api.MISSING 與 KIND_LABEL
+        # 帶進來的（功能盤點那一頁「還沒做的」那一區）。
+        self.assertEqual((up.enums, up.members), (75, 296))
         self.assertEqual(up.unexempted, [])
 
     def test_stale_total與stall_total是兩個活的東西(self):

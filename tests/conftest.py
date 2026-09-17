@@ -81,6 +81,18 @@ _RECORD: dict[str, list[str]] = {}
 # 當時在跑的那一條頭上，不管寫的人是不是它。
 # 要分得出來，唯一的路是讀寫進去的內容，因為內容自己帶著來源。
 _APPENDED: dict[str, dict[str, str]] = {}
+# nodeid -> 這條測試期間**新出現**的相對路徑。
+#
+# **跟 `_APPENDED` 拿不到內容是兩件事。** 新出現的檔沒有「之前」
+# 可以比，`_appended()` 對它必然回 None，於是它跟「整檔覆寫」
+# 「太大不擷取」在判斷層眼裡同形 —— 而三者要查的方向不一樣:
+# 新出現的要問「誰建的」，覆寫的要問「原本那段去哪了」，
+# 太大的要問「限制是不是訂太低」。
+#
+# 2026-09-17 實測看到這個混淆:同一個檔在兩條測試各被記一次，
+# 第一次印「沒有擷取到新增段（不是 append，或太大）」、
+# 第二次印出內容，而第一次的真正原因是那一刻它剛被建出來。
+_CREATED: dict[str, list[str]] = {}
 # 掃描期間 stat 不到的路徑，不靜默吞掉（§5ai 那一輪的教訓）
 _SCAN_ERRORS: list[str] = []
 # 這一輪從什麼時候開始跑。守門那一組要拿它算「節流窗開過幾次」。
@@ -95,6 +107,119 @@ _T0: float | None = None
 #: 那個判斷在 `test_zz_forseti_write_attribution._allowed()`。
 #: 兩邊各寫一份會分歧，而分歧的那天沒有人會發現。
 SKIP_PREFIX = "._"
+
+
+# ── 這一次跑的到底是不是磁碟上那一份程式碼（2026-09-17）─────────
+#
+# NewDrive 是 exFAT，mtime 的解析度是 2 秒。Python 判斷 pyc 過期沒
+# 看的是「原始碼的 mtime 與大小」這兩個數字，兩個都對得上就直接用
+# 快取。於是「同一個 2 秒窗裡先 import 過一次、接著改檔、而改完
+# 大小剛好不變」這個組合，會讓舊 bytecode 被判成有效。
+#
+# **2026-09-17 實測真的發生了。** 改完 `contract.py` 之後兩條測試紅，
+# 而磁碟上的原始碼是對的:`_recovery_status.__code__.co_consts` 裡
+# 沒有新加的那幾個字串，跑的是 22:41 那一版。pyc header 記的
+# mtime 1789656105、size 78671，跟原始檔**完全一致**。
+#
+# 這台機器還設了 `sys.pycache_prefix`
+# （`/Users/norikaoda/Library/Caches/com.apple.python`），所以 pyc
+# 不在專案底下 —— `git status` 看不到它，刪專案的 `__pycache__`
+# 也刪不到它。兩件事疊起來，症狀是「原始碼明明改了，行為沒變」。
+#
+# **這件事會讓任何「全套 N 綠」失去意義**，綠的可能是上一版。
+# 所以這裡在收集測試之前先比一次，比的不是那兩個數字，是 marshal
+# 之後的 bytecode 本身:對不上就把 pyc 刪掉，讓 import 重編。
+#
+# 刪掉是安全的:pyc 是衍生物，刪了下一次 import 自己重建。
+# 這一支**不修 exFAT 也不改 Python 的判斷規則**，它只保證
+# 「這一輪跑的是磁碟上這一版」這個前提在跑之前成立。
+STALE_PYCS: list[str] = []
+
+
+def _pyc_is_stale(py: Path) -> str | None:
+    """這個 .py 的 pyc 是不是舊的。是就回它的路徑，不是就回 None。
+
+    比對方式是把磁碟上的原始碼重編一次，跟 pyc 裡存的 code 物件
+    比一份結構摘要（bytecode、名字、常數，內嵌的 code 遞迴進去）。
+    **不比 mtime 也不比大小** —— 被騙的正是那兩個數字。
+
+    **也不比 marshal 之後的位元組。** 第一版是那樣寫的，結果連
+    沒改過的檔都判成陳舊:`marshal.dumps` 預設帶 ref 旗標，
+    同樣的 code 物件在不同的 interning 狀態下 dump 出來不一樣
+    （實測長度都是 93 而位元組不同）。那種誤判的代價是每跑一次
+    全套就把整個專案重編一次。
+
+    讀不到、解不開、header 不是 timestamp 式的，一律回 None:
+    這一支只負責抓「確定不一致」的，拿不準的不准當成壞的刪掉。
+    """
+    import importlib.util
+    import marshal
+
+    try:
+        cache = Path(importlib.util.cache_from_source(str(py)))
+    except (NotImplementedError, ValueError):
+        return None
+    if not cache.is_file():
+        return None
+    try:
+        raw = cache.read_bytes()
+        if len(raw) < 17 or raw[4:8] != b"\x00\x00\x00\x00":
+            # flags 不是 0 的是 hash-based pyc（PEP 552），
+            # 那一種本來就不靠 mtime，不在這個陷阱裡。
+            return None
+        cached = marshal.loads(raw[16:])
+        src = importlib.util.decode_source(py.read_bytes())
+        fresh = compile(src, str(py), "exec", dont_inherit=True)
+    except Exception:              # noqa: BLE001
+        return None
+    return None if _code_sig(fresh) == _code_sig(cached) else str(cache)
+
+
+def _code_sig(co):
+    """code 物件的結構摘要。內嵌的 code（函式、類別）遞迴進去。
+
+    **不含 `co_filename` 與行號表。** pyc 裡存的檔名是編譯當時給的
+    那一個，跟這一次傳進去的可能不同（相對 ／ 絕對），而那不是
+    「程式碼變了」。行號表同理:只有排版動過的時候會變，
+    而這一支要抓的是行為變了沒有。
+    """
+    import types
+    return (
+        co.co_code,
+        co.co_names,
+        co.co_varnames,
+        co.co_argcount,
+        co.co_flags,
+        tuple(_code_sig(c) if isinstance(c, types.CodeType) else repr(c)
+              for c in co.co_consts),
+    )
+
+
+def _drop_stale_pycs() -> list[str]:
+    """把陳舊的 pyc 刪掉，回傳刪掉哪些。
+
+    **在 conftest 被 import 的時候跑**，也就是在任何一條測試
+    `import contract` 之前。晚一步就來不及 —— 模組一旦載入，
+    刪 pyc 不會把記憶體裡那一份換掉。
+    """
+    dropped = []
+    for sub in ("apps/forseti-cli", "tools", "tests", "hooks"):
+        d = ROOT / sub
+        if not d.is_dir():
+            continue
+        for py in sorted(d.rglob("*.py")):
+            stale = _pyc_is_stale(py)
+            if not stale:
+                continue
+            try:
+                Path(stale).unlink()
+            except OSError:
+                continue
+            dropped.append(f"{py.relative_to(ROOT)} ← {stale}")
+    return dropped
+
+
+STALE_PYCS = _drop_stale_pycs()
 
 
 def _skip(rel: str) -> bool:
@@ -144,6 +269,19 @@ def _diff(
     return sorted(changed)
 
 
+def _created(
+    before: dict[str, tuple[int, int]], after: dict[str, tuple[int, int]]
+) -> list[str]:
+    """`after` 有、`before` 沒有的那些，也就是這段時間新出現的。
+
+    **跟 `_diff` 分開一支，不寫在呼叫點裡。** 寫在呼叫點的話
+    測不到，而這一支要是算成「改過內容的也算新出現」，
+    訊息會把每一個變動都講成「要查誰建的」，
+    把讀的人送去錯的方向 —— 那正是它要修的東西。
+    """
+    return [k for k in sorted(after) if k not in before]
+
+
 #: 讀回來的新增段最多留這麼多位元組。超過就整段不留 ——
 #: 留一半會讓判斷層讀到切斷的 JSON，而切斷的 JSON 跟「格式不對」
 #: 長得一模一樣，於是一個量得到的東西會被誤判成量不到。
@@ -185,6 +323,15 @@ def _appended(rel: str, before_size: int, after_size: int,
 def append_record() -> dict[str, dict[str, str]]:
     """給判斷層讀的。回傳複本，讀的人改不到正本。"""
     return {k: dict(v) for k, v in _APPENDED.items() if v}
+
+
+def created_record() -> dict[str, list[str]]:
+    """這一輪裡，每條測試期間新出現的路徑。回傳複本。
+
+    判斷層拿它把「擷取不到」分成兩種說法。**不拿來放行任何東西** ——
+    新出現一樣算動到正本，這一支只改訊息講得準不準。
+    """
+    return {k: list(v) for k, v in _CREATED.items() if v}
 
 
 def write_record() -> dict[str, list[str]]:
@@ -236,6 +383,10 @@ def pytest_runtest_protocol(item, nextitem):
     changed = _diff(before, after)
     _RECORD[item.nodeid] = changed
 
+    created = _created(before, after)
+    if created:
+        _CREATED[item.nodeid] = created
+
     # 變動的檔裡面，純粹長大的那些，把長出來的那一段留下來。
     # 判斷層要拿它分辨「這條測試寫的」跟「別人在這段時間寫的」。
     caps: dict[str, str] = {}
@@ -258,6 +409,7 @@ def pytest_sessionfinish(session, exitstatus):
     payload = {
         "writers": write_record(),
         "appended": append_record(),
+        "created": created_record(),
         "scan_errors": scan_errors(),
         "total_tests": len(_RECORD),
     }

@@ -92,3 +92,46 @@ def test_id_穩定而且不同筆不撞(log):
     b = C.create(session="s", n=2, reason="OWNER_MARK", at=2.0, path=log)["checkpoint"]
     assert a["id"] != b["id"]
     assert a["id"].startswith("cp-")
+
+
+# ── 碟上別條 session 的那些（2026-09-17）──────────────────────────
+#
+# 起因是實測:`.forseti/checkpoints.jsonl` 有 3 筆、全部被人標成
+# last_good、分屬兩條舊 session，而當下這條 session 是 0 筆。於是
+# `summary()` 回的兩句話（total=0、「沒有任何 checkpoint 被標成
+# last_good」）各自都對，合起來讀卻是「這台機器上完全沒有可以回去
+# 的點」。這一組守的是**主詞要講出來**，以及**講事實不等於替人決定**。
+
+
+def test_別條session的不併進total(log):
+    C.create(session="舊", n=1, reason="OWNER_MARK", last_good=True, path=log)
+    C.create(session="新", n=2, reason="HANDOFF", path=log)
+    s = C.summary("新", log)
+    assert s["total"] == 1, "total 只算這條線上的"
+    assert s["elsewhere"]["total"] == 1
+    assert s["elsewhere"]["last_good"] == 1
+    assert s["elsewhere"]["sessions"] == 1
+
+
+def test_沒有last_good那句話要有主詞(log):
+    C.create(session="舊", n=1, reason="OWNER_MARK", last_good=True, path=log)
+    s = C.summary("新", log)
+    why = s["why_no_last_good"]
+    assert "這條 session" in why, "沒有主詞的全稱否定正是那個誤導"
+    assert "最近的那一個常常正是出事的那一個" in why, "原本的理由不准掉"
+    assert "碟上另有 1 個" in why, "碟上有被標記的，事實要講出來"
+
+
+def test_碟上沒有別的就不多講一句(log):
+    C.create(session="新", n=1, reason="HANDOFF", path=log)
+    s = C.summary("新", log)
+    assert s["elsewhere"]["total"] == 0
+    assert "碟上另有" not in s["why_no_last_good"], "沒有的東西不准提"
+
+
+def test_講事實不等於跨session挑一個(log):
+    C.create(session="舊", n=1, reason="OWNER_MARK", last_good=True, path=log)
+    s = C.summary("新", log)
+    # 這一條是政策，不是措辭：`last_good()` 絕不跨 session。
+    assert C.last_good("新", log) is None
+    assert s["last_good"] is None, "elsewhere 有值也不准補進 last_good"

@@ -1118,8 +1118,6 @@ def _report_shadow(a: ShadowAudit) -> None:
 #: 它空著是一個結果不是一個佔位 —— 第一條進來的時候，
 #: `why` 要指得回一個查得到的位置，跟那一支同一條規則。
 EXEMPT: dict[tuple[str, str, str], str] = {}
-
-
 def _exempt(module: str, literal: str, member: str, why: str) -> None:
     EXEMPT[(module, literal, member)] = why
 

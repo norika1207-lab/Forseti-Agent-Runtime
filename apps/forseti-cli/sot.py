@@ -180,11 +180,13 @@ BINDINGS: tuple[dict, ...] = (
              "CREATE TABLE IF NOT EXISTS tasks"),
             ("apps/forseti-cli/ledger.py", 157,
              "CREATE TABLE IF NOT EXISTS steps"),
-            ("apps/forseti-cli/contract.py", 1369, '"failed_attempts": NoSource'),
+            ("apps/forseti-cli/attempts.py", 93, "def record("),
         ),
-        "note": "耐久存放區有了，但「試過而且失敗的做法」這一類進度"
-                "只活在 AUTO_CONTINUE_LOG 的散文裡，"
-                "那正是這一行明寫不准當來源的東西",
+        "note": "耐久存放區有了。「試過而且失敗的做法」這一類進度"
+                "2026-09-17 22:xx 之前只活在 AUTO_CONTINUE_LOG 的散文裡，"
+                "現在 attempts.py 是它的來源（contract.py 那一欄從 "
+                "NO_SOURCE 變成 EMPTY）。仍然是接了一半，因為登記簿"
+                "此刻 0 筆 —— 缺的是有人去登記，不是缺一個系統",
     },
     {
         "key": "external_api_object",

@@ -2282,6 +2282,39 @@ async function renderFeat() {
       lane.appendChild(el);
     });
   }
+
+  // 還沒做的。owner 2026-09-17:「到底有做哪些，沒做那些，全部列出清單來」
+  //
+  // 【為什麼一定要跟上面那份一起出】
+  // 只列做好的那一份是 21/21 全綠，看起來像做完了。
+  // 而實際上八個 X-Ray 視圖只有三個、紫點下不了判決、
+  // 換模型會不會變差一次都沒量過。
+  // 一張只列成功的表，跟一張造假的表在讀的人眼裡是一樣的。
+  const miss = r.missing || [];
+  if (miss.length) {
+    const h = document.createElement("div");
+    h.className = "fGap miss";
+    const by = r.missing_by_barrier || {};
+    h.innerHTML = `還沒做的　<b>${miss.length}</b> 項` +
+      '<span class="fKinds">' +
+      Object.entries(by).filter(([, n]) => n)
+        .map(([k, n]) => `<span>${esc(k)} <b>${n}</b></span>`).join("") +
+      "</span>";
+    lane.appendChild(h);
+
+    miss.forEach((m) => {
+      const el = document.createElement("div");
+      el.className = "fi miss b-" + esc(m.barrier || "");
+      el.innerHTML =
+        '<div class="fiTop">' +
+        `<span class="fiTag miss">${esc(m.barrier_label || "")}</span>` +
+        `<span class="fiName">${esc(m.name)}</span></div>` +
+        `<div class="fiWhat">${esc(m.what)}</div>` +
+        `<div class="fiBlock">擋住的是：${esc(m.blocked)}</div>` +
+        `<div class="fiSpec">${esc(m.spec)}</div>`;
+      lane.appendChild(el);
+    });
+  }
 }
 
 /* ── 自我審計 §39 ─────────────────────────────

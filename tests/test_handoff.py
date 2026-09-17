@@ -447,3 +447,84 @@ def test_snapshot不寫交接檔寫的只有strands():
         f"strands() 沒有走到 handoff.write，攔到的是 {from_strands}。"
         "那表示唯一的寫入點斷了，`.forseti/NEXT.md` 會從此停止更新 ——"
         "而停止更新要到下一次停機才有人發現")
+
+
+# ---------------------------------------------------------------------------
+# 「這一份是在哪裡寫的」那一節。v5.0 §39.1 Identity + Reality
+# ---------------------------------------------------------------------------
+#
+# 2026-09-17 21:xx 加。在這之前這份檔案只印缺口 ——
+# **填得出來的欄位一個字都不印**。所以同一天稍早把 `runtime_node`
+# 從「沒有資料來源」接成有值之後，這份交接照樣答不出
+# 「現在是在哪台機器上寫的」，而它自己的「已經發生過的決定」
+# 第一條就是「換機器」。
+
+def test_座標那節印得出來():
+    t = H.render({"goal": "G", "n": 9,
+                  "coordinate_lines": ["- 現在跑在哪台機器（`runtime_node`）：node-abc"]})
+    assert "這一份是在哪裡寫的" in t
+    assert "node-abc" in t
+
+
+def test_算不出座標的時候整節不出現():
+    """跟契約那一節同一條理由：空殼看起來像「已經答出來了」。"""
+    assert "這一份是在哪裡寫的" not in H.render(
+        {"goal": "G", "n": 9, "coordinate_lines": []})
+    assert "這一份是在哪裡寫的" not in H.render({"goal": "G", "n": 9})
+
+
+def test_座標排在其他每一節之前():
+    """座標決定底下每一條路徑該不該被相信，所以不能排在後面。
+
+    讀的人先看到一串路徑、最後才知道那是另一台機器上的路徑，
+    跟先知道機器再看路徑，是兩種不一樣的閱讀。
+    """
+    t = H.render({"goal": "G", "n": 9,
+                  "coordinate_lines": ["- 在這裡"],
+                  "artifact_lines": ["產出那一節"],
+                  "contract_lines": ["缺口那一節"]})
+    assert t.index("## 北極星") < t.index("## 這一份是在哪裡寫的")
+    assert t.index("## 這一份是在哪裡寫的") < t.index("## 下一步")
+    assert t.index("## 這一份是在哪裡寫的") < t.index("## 產出在哪裡")
+
+
+def test_加了座標那節還是不准把交接撐大():
+    """§3.2 的非目標。這一節是座標，不是把整張表倒進來。"""
+    t = H.render({"goal": "G", "n": 9,
+                  "coordinate_lines": [f"- 第 {i} 行" for i in range(40)]})
+    assert len(t) < 8000
+
+
+def test_desktop_api真的把座標那幾行傳過來():
+    """釘住上游那一段。少了它，上面幾條照樣綠而正文永遠是空的。"""
+    from pathlib import Path
+    import desktop_api as D
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    assert "CT.coordinate_lines(" in src, "算的那一行"
+    assert '"coordinate_lines": crd_lines' in src, "傳給 handoff 的那一行"
+
+
+def test_座標傳的是整份report不是ctx():
+    """傳 ctx 的話這一節會什麼都印不出來，而且不會報錯。
+
+    它要的是每一欄的狀態（只印 PRESENT），狀態在 `check()` 那一半算，
+    ctx 裡沒有。一個什麼都不做又不報錯的接線，是這個專案
+    寫在 ROADMAP「不做的事」第一條的那種白工。
+    """
+    from pathlib import Path
+    import desktop_api as D
+    src = Path(D.__file__).read_text(encoding="utf-8")
+    assert "CT.coordinate_lines(_rep)" in src, "傳的必須是整份 report"
+    import contract as CT
+    assert CT.coordinate_lines(CT.report({}, None).get("ctx")) == [], \
+        "傳 ctx 的話回空清單 —— 這正是那條接線壞掉時的樣子"
+
+
+def test_座標是必要欄位不是可有可無():
+    """從 `REQUIRED_KEYS` 拿掉的話，這一節會安靜地消失。
+
+    `write()` 守的是鍵在不在。這個鍵不在必要清單裡的時候，
+    上游哪天不再供它，`NEXT.md` 照樣寫得出來、照樣沒有人會紅 ——
+    只是從此答不出它是在哪台機器上寫的，跟 2026-09-17 之前一樣。
+    """
+    assert "coordinate_lines" in H.REQUIRED_KEYS

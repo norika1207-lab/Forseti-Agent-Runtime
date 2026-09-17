@@ -59,7 +59,7 @@ REQUIRED_KEYS = frozenset({
     "next_actions", "awaiting_finish", "stuck", "unknowns",
     "decisions", "verified", "last_good",
     "blocker_lines", "contract_lines", "artifact_lines",
-    "invalidated_lines", "recheck_lines",
+    "invalidated_lines", "recheck_lines", "coordinate_lines",
 })
 
 
@@ -106,6 +106,22 @@ def render(state: dict) -> str:
         f"出處 `.forseti/NORTH_STAR.md`",
         "",
     ]
+
+    # 這一節回答的是「這一份是在哪裡寫的」。v5.0 §39.1 Identity + Reality
+    #
+    # 2026-09-17 21:xx 加。在這之前這份檔案只印缺口，**填得出來的欄位
+    # 一個字都不印** —— 所以同一天稍早把 `runtime_node` 接成有值之後，
+    # 這份交接照樣答不出「現在是在哪台機器上寫的」，而它自己的
+    # 「已經發生過的決定」第一條就是「換機器」。
+    #
+    # 排在北極星底下、其他所有節之前，因為它決定底下每一條路徑
+    # 該不該被相信 —— 座標不同的話，下面那些路徑指到的是別的東西。
+    #
+    # 行文由 `contract.coordinate_lines()` 算好，這裡只排版，
+    # 理由跟底下每一節同一條:判斷放在排版這一支就會變成第二個事實來源。
+    coord = state.get("coordinate_lines") or []
+    if coord:
+        lines += ["## 這一份是在哪裡寫的", ""] + list(coord)
 
     nxt = state.get("next_actions") or []
     fin = state.get("awaiting_finish") or []

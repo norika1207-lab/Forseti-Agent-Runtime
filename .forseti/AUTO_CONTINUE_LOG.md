@@ -8141,3 +8141,1747 @@ ROADMAP P0 第 1 項（真的救回一次）那個 `dry_run=False`。
 動到的檔兩個新增（`apps/forseti-cli/antianchor.py`、
 `tests/test_antianchor.py`）、一個修改（`tests/test_module_write_targets.py`）。
 沒有 commit。
+
+---
+
+## 2026-09-17 18:0x-18:3x　那個沒有入口的模組接上了，接的時候撞到兩個會讓它永遠空轉的東西
+
+### 挑這一項的理由，以及為什麼它不是「再守一層」
+
+`ROADMAP.md` 17:51 那一節寫著「真的沒有可以自己往下做的產品功能了」，
+三件都要 owner 開口。**那一節漏了一件。** 上一輪（13:3x）自己在
+「還缺什麼」裡寫著：
+
+    這一支沒有接 CLI，也沒有接畫面。⋯⋯
+    所以它現在是一個可呼叫但沒有入口的模組。這是缺口，不是設計。
+
+而 `forseti.py` 模組說明的最後一句是「一個沒有入口的機制等於不存在」，
+那句話底下記的正是同一個形狀的事故（`auto_dispatch()` 寫好也測過，
+從來沒被真正的工作呼叫過一次，continuity 長期是 0）。
+
+上一輪不接的理由是 `forseti.py` 正被另一個 session 改，同時動會衝突。
+那個理由這一輪不成立了：`forseti.py` 的 mtime 是 13:47，
+`probemodel.py` 13:47，四個多小時沒動。
+
+**畫面那一半仍然沒接**，理由跟上一輪一樣而且是 ROADMAP 自己寫的：
+沒有人真的走過一次流程之前，那一格會是空的。
+
+### 先確認過沒有重做
+
+    grep -rn "antianchor" --include="*.py" --include="*.js" --include="*.rs"
+
+`forseti.py` 一次都沒提到它，`desktop/` 底下也沒有。確定是缺入口，
+不是入口在別的地方。
+
+### 做了什麼
+
+`antianchor.py` 尾段加 CLI，六個 sub-command，全部是上面那六支的轉接，
+**這一節沒有任何新判斷**：
+
+    antianchor status                  這條線走到第幾步
+    antianchor open                    第 3 步，出一張不帶答案的卷
+    antianchor submit <did>            第 4 步，stdin 收 JSON
+    antianchor reveal <did>            第 5 步，揭曉並比對
+    antianchor classify <did> <欄> <類> --by <誰>    第 6 步
+    antianchor show <did>              和解到哪裡
+
+`forseti.py` 接 dispatch 並在用法那一段列出來。**不併進 `gate`**：
+那一支做的是 §39 第 2 步與第 7 步（考讀懂沒有、給不給寫入權），
+這一支做的是中間那段獨立推導與和解。共用一個指令名會讓「考過了」
+變成兩種意思。
+
+### 接的時候撞到第一件：`state` 那一欄永遠是空的
+
+`antianchor.canonical()` 的模組說明寫著
+
+    | `state` | `snap["verified"]`，`desktop_api._write_handoff` 算的那一份 |
+
+實測 `strands()` 的 snap **沒有 `verified` 這個 key**。
+那個 key 只存在於 `_write_handoff()` 的區域變數裡。所以照模組說明
+去拿的呼叫端，拿到的永遠是空清單，四欄全部 unanswerable，
+一場什麼都沒驗到的接手考試。
+
+量出來的：
+
+    canonical(strands(), work())["answerable"]        []
+    四欄狀態                     state EMPTY / priority_order NO_SOURCE
+                                 / blockers EMPTY / next_action EMPTY
+
+**這個形狀在同一個檔案裡已經被抓到過一次。** `desktop_api.py`
+`_write_handoff()` 裡 `blk_lines` 那一段的註解自己寫著：
+
+    **自己叫 `_blockers()`，不從 snap 拿。** `snap["blockers"]` 只存在於
+    `snapshot()`⋯⋯從 snap 拿的版本跑起來不會壞，只會永遠給空清單 ——
+    一個什麼都不做而且不報錯的接線，正是⋯⋯那種白工。
+
+修法不是在 CLI 裡重算一份 —— 那會變成第二個事實來源，兩份遲早分歧，
+而分歧那天不會有錯誤訊息。做法是把 `_write_handoff()` 裡那四行抽成
+`desktop_api.verified_lines(snap)`，`_write_handoff()` 改成叫它，
+CLI 的 `_live()` 也叫它。**一份算法，兩個呼叫端。**
+
+抽出來之後實測：
+
+    verified_lines(strands())                ['必讀文件 20/30 讀完']
+    canonical(...)["answerable"]              ['state']
+
+那一行跟 `NEXT.md` 的「已驗證的狀態」那一節逐字一致，
+因為它就是同一支算的。
+
+`blockers` 與 `next_action` 這兩欄仍然 EMPTY，**那不是 bug**：
+帳本裡被標成 blocked 的步驟此刻 0 筆、兩件任務的步驟全部驗證完成
+所以沒有東西可以派。那是真實狀態，報得對。
+
+### 撞到第二件：考卷把答案印在上面
+
+對真正的 repo 跑一次 `open`，印出來的是
+
+    ○ next_action　下一個安全的動作（next safe action）
+        這一欄此刻是空的：2 件任務（T-7da5ef2183、T-b95303aaa2）的步驟
+        **全部驗證完成**了，所以沒有東西可以派 ——⋯⋯
+
+**那句話就是答案。** §39 第 3 步要受測者自己推出「下一個安全的動作
+是什麼」，而考卷直接告訴他「沒有東西可以派，在等收尾」。
+
+區分在哪裡量得出來：`NO_SOURCE` 的理由是結構性的
+（§41 的 triage 引擎沒有實作），講出來不漏答案，而且不講的話
+受測者會白推導一欄；`EMPTY` 的理由講的是「為什麼此刻是空的」，
+那是內容，屬於第 5 步。
+
+所以 `NO_SOURCE` 照印，`EMPTY` 只印一句「這一欄此刻是空的，
+為什麼空是答案的一部分，揭曉的時候才說」。
+
+**先前那條測試抓不到這個。** `test_考卷上不准出現任何一欄的正典值`
+找的是正典的 `value`，而空欄位的 value 是 None，字串比對永遠找不到
+東西 —— 那條測試會一路綠著讓答案漏出去。所以另外加一條守理由那一段。
+
+### 考卷上也印出這道門擋不住的兩件事
+
+一，防不了偷看。讀得到 `.forseti/` 的人自己叫一次 `canonical()`
+就看到全部答案。模組說明本來就這樣寫，但寫在模組說明裡而沒印在
+用的人眼前，等於沒寫。
+
+二，`open` 這個動作本身會叫 `strands()`，而它尾段的 `_write_handoff()`
+會重寫 `.forseti/NEXT.md` —— 那份裡面就有這四欄的答案。
+**這是這個入口自己造成的漏，不是繼承來的**，所以印在考卷上。
+
+### 驗證結果
+
+    tests/test_antianchor_cli.py          20 條，全綠
+    全套                                  1632 passed / 0 failed / 284.66 秒
+
+六組反向驗證，六組都紅得對，而且紅的是對的那一條：
+
+    考卷印出正典的 value              → test_考卷上不准出現任何一欄的正典值 紅
+    考卷印回 EMPTY 的理由             → test_空欄位的理由不准印在考卷上 紅
+    拿掉 forseti.py 的 dispatch       → test_forseti_antianchor轉得到這一支 紅
+    _write_handoff 自己再算一份       → test_verified_lines跟交接檔用的是同一支 紅
+    submit 把壞 JSON 當白卷收下       → test_讀不懂的推導不准當成白卷收下 紅
+    classify 的 --by 自己補預設值     → test_沒有by的分類CLI要擋 紅
+
+每一組跑完都還原並比對 sha256，三個檔逐位元組跟反向驗證前一致。
+
+寫測試的時候有一條預期寫錯了：`test_一次完整的流程走得完`
+只分類了 `state` 一欄就斷言和解完成。實際要分類三欄 ——
+**沒答的欄也是差異**（有正典、受測者沒答），不分類就算和解完成的話，
+交白卷是最快的過關法。改的是測試不是程式，而且改成逐欄斷言
+「分到第 n 欄的時候還不准說完成」，這樣以後有人把那條放寬會紅。
+
+### 全套第二次跑出過兩條紅，第三次同一份程式碼全綠，成因沒有定論
+
+    18:0x 第一次      1631 passed / 0 failed / 245 秒
+    18:1x 第二次      1630 passed / 2 failed / 346 秒
+    18:2x 第三次      1632 passed / 0 failed / 284 秒
+
+兩條都在 `test_zz_forseti_write_attribution.py`
+（`test_NEXT_md的寫入次數不超過節流窗開過的次數` 與
+`test_動到的路徑全部在允許範圍內_而且這是最後一條`）。
+單獨跑那個檔 20 條全綠。
+
+**沒有定論，不填成因。** 查得到的事實兩件：一，第二次跑之前我對
+真正的 repo 跑過兩次 `antianchor open`，而 `open` 會叫 `strands()`、
+`strands()` 尾段會寫 `NEXT.md`，也就是在全套之外動過正本；
+二，那個檔自己的訊息寫著「這個量法分不出寫入者，全套跑的期間有人
+動正本的話會被記在當時在跑的那一條頭上」。
+
+第一件是我做的，時序上對得上，**但我沒有量過它就是成因** ——
+節流窗被我關掉的話方向應該是寫得更少不是更多，跟「寫入次數超過」
+反過來。查過同一段時間沒有別的 session 在動這個 repo
+（`find -newermt "17:30"` 只列出我自己動的檔與測試自己寫的快取）。
+
+留給下一輪的具體做法：對真正的 repo 跑一次 `antianchor open`
+之後立刻跑全套，看得不得到同樣兩條。復現得到就是我造成的，
+復現不到就是那個量法本身間歇。
+
+### 沒有動畫面，也沒有開關 App
+
+`desktop/ui/` 三個檔一個位元組都沒動（最新 mtime 12:25，早於這一輪），
+所以沒有 build 也沒有 deploy。全程沒有 `open`、沒有 `pkill`、
+沒有設 `FORSETI_OPEN`。`ps aux | grep Forseti.app` 是 0。
+
+### 這一輪刻意沒做的一件
+
+**沒有對真正的帳本走一次 §39 流程。** 技術上跑得動，但這一輪我已經
+讀完 `NEXT.md` 才開始工作，所以我的「獨立推導」是被錨定的 ——
+拿它去登記一次 PASS，記下來的會是一筆假的接手紀錄，
+而 §39 開頭那一句要防的正是這個。
+
+第一次真的走這個流程，該是一條還沒讀過 `NEXT.md` 的 session。
+`--root` 指到別的地方跑過（正典來自真 repo、帳本落在暫存），
+所以畫面上那個渲染是真的看過的，不是想像的。
+
+### §40 登了兩筆，而且登記簿自己擋了我第一次的寫法
+
+兩筆都是這一輪被推翻的、原本以斷言句型寫在檔案裡的話：
+
+    antianchor 的 state 借 snap["verified"]   → strands() 沒有那個 key
+    P0-P4 查過了真的沒有下一項                → 漏了不需要 owner 的那一件
+
+第一次呼叫 `pollution.record()` 兩筆都被退回，訊息是
+「propagation_radius 沒給就要講 radius_basis」。**這是它該做的事** ——
+規格沒有定義那個欄位的單位，所以不准留一個沒有說明的空值。
+補上界線之後才收：第一筆的界線是量出來的（被修之前 grep 全 repo
+沒有任何呼叫端，所以沒有下游數字吃過它），第二筆的界線寫明沒量
+（要判斷每一輪是不是因為那句話才停手，得讀每一輪的推理過程）。
+
+登記簿 9 → 11 筆，有守的 6 → 8。`NEXT.md` 18:34 重生成，那一節跟著變成 11。
+
+### 動到的檔
+
+    apps/forseti-cli/antianchor.py      513 → 752 行，加 CLI
+    apps/forseti-cli/forseti.py         dispatch 一段、用法一行
+    apps/forseti-cli/desktop_api.py     抽出 verified_lines()
+    tests/test_antianchor_cli.py        新增 334 行 20 條
+    .forseti/pollution.jsonl            兩筆
+    .forseti/ROADMAP.md                 記下那一句被推翻，以及怎麼避免再犯
+
+沒有 commit。
+
+收尾時全套再跑一次確認：**1632 passed / 0 failed / 273.94 秒**。
+
+### 還缺什麼
+
+- **畫面那一半**。等有人真的走過一次流程，那一格才有東西可看。
+- **`AXES_COVERED` 仍然只有 `versions`**，`claude` CLI 的 OAuth
+  要 owner 自己重新登入，這一輪沒有動它。
+- 上面那兩條間歇紅的成因。
+- 其餘仍然在等 owner 的：`scope_match`、§12.2 五個病症對應、
+  兩件 workflow 的 `commit_boundary`、`B-17` 的 `RAW_INLINE_LIMIT`、
+  `renderVitals` 目標那格寫死、B-15、B-03 與 B-04 訊號打架、
+  `event_ledger.jsonl` 要不要進 `ALLOWED_TOP_LEVEL`、
+  ROADMAP P0 第 1 項那個 `dry_run=False`。
+- §40 九筆全部 OPEN。
+
+---
+
+## 2026-09-17 18:4x-19:1x　兩條間歇紅查出一條的成因，另一條證明了它不可能是同一件事
+
+### 挑了什麼，怎麼挑的
+
+照 `ROADMAP.md` 自己寫的那一步做：讀 `AUTO_CONTINUE_LOG.md` 上一輪的
+「還缺什麼」，逐項問「這一項要 owner 開口嗎」。五項裡四項要她
+（畫面那一半要有人先走過流程、`AXES_COVERED` 要她重新登入、
+`scope_match` 那一串、§40 九筆），剩下一項不要：
+**那兩條間歇紅的成因**，而且上一輪已經寫好復現做法。
+
+### 上一輪寫的復現做法跑了，沒有復現
+
+    18:44:50  antianchor open 兩次（正本），NEXT.md 寫到 18:44:56
+    18:44:58  全套開跑
+    18:49:22  1632 passed / 0 failed / 264.26 秒
+
+所以「我上一輪在全套之外動過正本」這個時序上對得起來的嫌疑，
+**復現不出來**。上一輪自己標明沒量過它是成因，這一輪的結果跟那個
+保留一致。
+
+### 換一種量法：不要再擲骰子，去量「誰碰得到」
+
+觀測「這一輪誰真的寫成了」看到的永遠是贏了 240 秒節流競速的那一條。
+所以改量另一件事：**哪些測試碰得到 `handoff` 的寫入閘門**，
+這一組跟節流窗與執行順序無關。
+
+做法是一個不改變行為的 pytest 外掛（暫存檔，沒有進 repo）：
+`handoff.should_write` 與 `handoff.write` 照原樣呼叫、照原樣回傳，
+只記下當下是哪一條測試在跑、目標是哪一個路徑。
+
+    碰到閘門的測試 16 條，呼叫 52 次，依檔案：
+
+        34  tests/test_ui_render.py                  在冊
+         6  tests/test_handoff.py                    在冊
+         4  tests/test_forseti_dir_writes.py         在冊
+         3  tests/test_state_changing_writes.py      不在冊 ←
+         3  tests/test_zz_forseti_write_attribution.py  目標是暫存路徑，不算
+         1  tests/test_claims_wiring.py              在冊
+         1  tests/test_sot.py                        在冊
+
+`test_zz` 那三次的目標印出來是 `pytest-of-norikaoda/pytest-567/...`，
+碰的不是正本，所以它不進名單。**這一步是分得出來的關鍵** ——
+只數次數的話它跟真正的寫入者長得一樣。
+
+### 決定性復現：讓窗開著，紅的正是那一條
+
+    NEXT.md 齡 246 秒（> MIN_GAP_S 240，窗開著）
+    pytest tests/test_state_changing_writes.py tests/test_zz_forseti_write_attribution.py
+
+    FAILED test_NEXT_md的寫入次數不超過節流窗開過的次數
+    AssertionError: tests/test_state_changing_writes.py::test_act標記checkpoint
+                    只落一筆而且不碰控制檔以外的東西 寫了 NEXT.md 但不在冊
+    1 failed, 31 passed
+
+不是推論出來的形狀，是讓條件成立之後紅出來的。
+
+### 它為什麼躲得掉，兩個來源的盲區剛好重疊
+
+那張名單有兩個來源，兩個都看不到這個檔：
+
+一，**觀測**。節流 240 秒，一輪最多一兩條寫得成，
+    看得見的永遠是贏了競速的那一條。
+
+二，**`_scan_strands_callers()`**。它掃的是直接呼叫 `strands()` 的地方，
+    而這一條隔著 `act()` 與 `_checkpoint_now()` 兩層。那支掃描器自己的
+    docstring 第二條就寫著看不到間接一層以上的呼叫 —— 不是它壞了，是範圍。
+
+**兩個盲區重疊在同一個檔上**，於是它兩邊都不在。上一輪補的 AST 掃描
+關掉的是第一個洞，這個檔落在第二個洞裡。
+
+### 第二條紅：證明它不可能跟第一條同因
+
+`NEXT.md` 在 `ALLOWED_TOP_LEVEL` 裡（`test_zz:164`），
+所以 `_allowed("NEXT.md")` 回 True，`_bad_paths` 永遠跳過它。
+**一次 `NEXT.md` 的寫入紅得了第一條，紅不了第二條。**
+
+決定性復現那一次也印證了：只紅第一條，第二條從頭到尾是綠的。
+
+所以上一輪把兩條紅寫成一件待查的事，那個綁法本身是錯的。
+第一條的成因這一輪結了，**第二條仍然未知，不准算結**。
+
+### 改了什麼
+
+名單加一筆 `tests/test_state_changing_writes.py`，附上量到的理由。
+不改成「不碰正本」：那一條測的正是「按一下標記會不會偷偷動到別的東西」，
+走的必須是真的那一條路。
+
+它不進 `STRANDS_CALLERS`，因為那一組的定義是直接呼叫點，
+塞進去會讓它跟掃描結果對不起來，而那正是它守的東西。
+
+新增一條測試釘住登記理由：
+`test_state_changing_writes.py::test_標記那一下碰得到正本交接檔_所以它在冊`。
+它自己不寫正本 —— `should_write` 換成「記下目標、回 False」，
+整條路照樣走完只是不落檔。不攔 `write()`：那樣就分不出
+「走到了閘門但被節流擋住」跟「根本沒走到」，而要驗的正是前者。
+
+### 反向驗證第一次失敗，而失敗本身是這一輪最重要的產出
+
+第一次的反向驗證是把 `_checkpoint_now:1901` 的 `_safe(strands, {})`
+改成 `snap = {}`，預期新測試會紅。**結果 13 條全綠。**
+
+印堆疊才看到真正的形狀，是三條路不是一條：
+
+    _checkpoint_now:1901 → strands:3441 → _write_handoff:1807
+    _checkpoint_now:1926 → audit:733 → strands:3441 → 同上
+    _checkpoint_now:1926 → audit:739 → strands:3441 → 同上
+
+三條共用的出口是 `strands()` 尾段 `:3441` 的 `_write_handoff(snap)`。
+斷在那裡重跑：**只紅新的那一條，同檔另外 12 條全綠**，
+還原後 `desktop_api.py` 的 sha256 跟動之前逐位元組一致
+（`0ee711601490f25d…`）。
+
+寫錯的那段註解當場改掉了。**要是沒做反向驗證，
+檔案裡會留下一段讀起來很具體、指得出行號、而且是錯的因果。**
+
+### 驗證結果
+
+    登記前，窗開著        1 failed / 31 passed　紅的是「不在冊」
+    登記後，窗開著        33 passed　同樣條件不再紅
+    全套                  1633 passed / 0 failed / 181.70 秒
+
+全套從 1632 變 1633，多的一條是新加的那條。
+
+### §40 登了兩筆
+
+    act('checkpoint') 走正本的路是 :1901 那一條    → 是三條，:1901 與 audit 的 :733/:739
+    那兩條間歇紅是同一件事                          → NEXT.md 在白名單裡，第二條紅不了
+
+第一筆的 radius 是量出來的 0（那句話只活在同一輪寫下的兩段註解裡，
+兩段都改掉了，grep 全 repo 沒有下游讀過它）。
+第二筆是 1（上一輪的「還缺什麼」把兩條綁成一項，這一輪照那一項開工）。
+
+登記簿 11 → 13 筆，有守的 10 筆。
+
+### 沒有動畫面，也沒有開關 App
+
+`desktop/ui/` 一個位元組都沒動，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    tests/test_zz_forseti_write_attribution.py   名單加一筆加理由
+    tests/test_state_changing_writes.py          新增一條測試
+    .forseti/pollution.jsonl                     兩筆
+
+沒有 commit。
+
+### 還缺什麼
+
+- **第二條間歇紅（`test_動到的路徑全部在允許範圍內_而且這是最後一條`）
+  的成因還是未知。** 這一輪只證明了它不可能是 `NEXT.md` 造成的。
+  下一輪的具體做法：它紅的時候訊息裡會帶「寫進去的是什麼」，
+  要的是那一段原文 —— 所以下次看到它紅，**先把完整訊息留下來再做別的**，
+  不要只記「兩條紅」。可疑的路徑是 `.forseti/` 底下不在
+  `{NEXT.md} ∪ cache/` 裡的那些（`event_ledger.jsonl` 的 append
+  已經被內容歸因放行了，`declarations.json` 那種整檔覆寫沒有）。
+- **間接呼叫者仍然只能靠觀測或人去發現。** 這一輪是用外掛量出來的，
+  那個外掛沒有進 repo —— 刻意的：ROADMAP 自己寫著不要再守一層
+  （設計演進史 §2、Vol4 §12 第一條 Kill Criteria）。
+  這是已知的洞，不是遺漏。
+- 其餘仍然在等 owner 的那一串沒有變：`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  `B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、`event_ledger.jsonl` 要不要進 `ALLOWED_TOP_LEVEL`、
+  ROADMAP P0 第 1 項那個 `dry_run=False`、畫面那一半。
+- §40 十三筆全部 OPEN。
+
+### 收尾時那個「App 開著」的假警報，以及查它的指令本身有問題
+
+收尾檢查跑 `ps aux | grep -c '[F]orseti.app'` 回 **2**，而同一輪開頭
+（18:44）回 0。我沒有開過 App，所以先當成有人開了。
+
+查出來是假的：`pgrep -fl "Forseti.app/Contents"` 一個都沒有。
+那個 2 是**這道檢查自己的兩行 shell 命令列**，因為命令列裡就帶著
+`Forseti.app` 這串字，`ps aux` 看得到它自己。
+`[F]orseti` 這種寫法躲得掉單一 grep 程序，躲不掉外層 zsh 把整條
+指令原文帶在命令列上。（另外 `.` 沒跳脫，會多吃一個任意字元，
+所以 `Forseti/apps` 這種路徑也算命中，這是第二個洞。）
+
+**這件事要記下來的理由**：owner 明令不准開關 App，而
+「`ps aux | grep Forseti.app` 是 0」正是用來證明有遵守的那句話。
+一個會在沒開的時候回非零的量法，讓「我沒開」跟「我開了」看起來一樣。
+方向是假陽性不是假陰性，所以上一輪那個 0 仍然成立 ——
+但下一輪要證明「沒開」，用 `pgrep -fl "Forseti.app/Contents"`，
+不要用 `ps aux | grep`。
+
+這一輪全程沒有開也沒有關 App。
+
+
+## 2026-09-17 19:2x-19:4x　第二條間歇紅的成因查出來了，用的是決定性復現不是推論
+
+挑這一項的理由照 ROADMAP 那一節寫的辦法：讀上一輪「還缺什麼」，
+逐項問一句「這一項要 owner 開口嗎」。第一項不要她開口，所以是它。
+
+### 上一輪交代的做法沒有照做，換了一個能拿到更多東西的
+
+上一輪寫的是「下次看到它紅，先把完整訊息留下來」。那是等它自己紅，
+而它是間歇的 —— 這一輪第一次全套（19:22 開跑，1633 passed / 177 秒）
+就是全綠，等不到。
+
+換的做法是 `conftest.pytest_sessionfinish` 那個出口：
+設 `FORSETI_WRITE_ATTRIBUTION_OUT` 就把整輪的變動記錄與新增段全部倒出來。
+**它比紅訊息多的東西是沒觸發紅的那些也留著**，而紅訊息只印犯規的。
+
+第一次全套倒出來的結果乾淨得可疑：
+
+    25  cache/artifact_hashes.json
+     3  cache/identity.json
+     1  NEXT.md
+
+三個路徑全部在白名單內，27 條測試有變動，0 個犯規。
+**所以正常情況下沒有測試會寫白名單外的路徑** —— 那條紅要紅，
+需要的是別的東西。
+
+### 決定性復現：外部在全套跑的期間往 `.forseti/` 放一個新檔
+
+做法：背景開跑全套（19:27:33），跑到 79% 左右（19:28:4x）從外部
+建 `.forseti/probe_second_red.jsonl`，幾秒後再讓它長大一行。
+全套跑完 `1 failed, 1632 passed / 174.28 秒`，紅的正是第二條：
+
+    AssertionError: 有測試動到不該動的正本：
+    {'tests/test_state_changing_writes.py::test_act標記checkpoint只落一筆而且不碰控制檔以外的東西':
+        ['probe_second_red.jsonl'],
+     'tests/test_state_changing_writes.py::test_標記那一下碰得到正本交接檔_所以它在冊':
+        ['probe_second_red.jsonl']}
+
+    寫進去的是什麼（先看這個再判斷是不是這條測試寫的）：
+    probe_second_red.jsonl: 沒有擷取到新增段（不是 append，或太大）　
+    probe_second_red.jsonl 接上去的是:{"probe":"second-red-repro","step":2,...}
+
+**那兩條被點名的測試完全無辜**，它們連 `probe_second_red.jsonl`
+這個名字都不知道。這就是那個檔自己訊息裡寫的那句話成真：
+「這個量法分不出寫入者，全套跑的期間有人動正本的話會被記在
+當時在跑的那一條頭上」。
+
+所以第二條紅的成因是：**在全套跑的期間，有東西在 `.forseti/` 底下
+寫了白名單外的路徑。** 不是測試寫的，是外部寫的。
+
+探測檔跑完刪掉了，`.forseti/` 頂層清單比對回原狀。
+全程沒有改任何既有正本檔（試過對 `advice_ledger.jsonl` append 再還原，
+被權限擋下來，改成建新檔這條不碰既有檔的路）。
+
+### 18:1x 那一次是不是同一個成因，**不寫成定論**
+
+18:1x 那一輪的紀錄寫著：第二次全套之前對真正的 repo 跑過兩次
+`antianchor open`。讀原始碼確認 `antianchor.py:247` 的
+`self.path = Path(root) / ".forseti" / LOG_NAME`，寫的是正本
+`antianchor.jsonl` —— 白名單外路徑，形狀對得上。
+
+**但那一次的紅訊息原文沒有留下來**，所以對得上的只有形狀，不是同一件事。
+這一輪證明的是機制可重現，不是 18:1x 那一次的身份。
+
+### 同一個機制的第三個實例，而且它現在防不了
+
+`hooks/forseti-declare.mjs:27` 與 `hooks/forseti-stop-hook.mjs:75`
+都會寫 `.forseti/declarations.json`。那個檔此刻不存在（`find` 找不到），
+但兩支 hook 在，條件到了就會建。
+
+它跟 `event_ledger.jsonl` 的差別是形狀：後者是 append，
+內容歸因 `_written_by_external_hook()` 放得了行；
+`declarations.json` 是整檔覆寫，從 `before_size` 讀起會切在行中間，
+解不出 JSON，判斷層的規則是解不出就不放行。
+**所以它一旦被寫就是一條紅，而且是無辜的紅。**
+這是已知的洞，這一輪不修 —— 修它要決定「hook 寫的正本要不要一律放行」，
+那是 owner 的決定（跟 `event_ledger.jsonl` 要不要進
+`ALLOWED_TOP_LEVEL` 是同一題）。
+
+### 改了什麼：訊息裡那句窮舉是錯的
+
+復現那一次的訊息裡，**同一個檔印了兩種話**：前一條測試印
+「沒有擷取到新增段（不是 append，或太大）」，後一條印出內容。
+兩句都對，但前一句的真正原因不在那兩個選項裡 ——
+那一刻這個檔剛被建出來，新出現的檔沒有「之前」可以比。
+
+這個差別會改變下一個人去查什麼：新出現的要問「誰建的」，
+整檔覆寫的要問「原本那一段去哪了」。混成一句，只會往後者找。
+
+    tests/conftest.py       `_created(before, after)` 純函式 + `_CREATED`
+                            + `created_record()`，dump 多一個 "created" 欄
+    tests/test_zz_...py     `_evidence` 多吃一個 created，擷取不到分兩種說法
+
+`_created` 抽成跟 `_diff` 同層級的純函式而不是寫在呼叫點裡，
+理由是寫在呼叫點測不到 —— 而它要是算成「改過內容的也算新出現」，
+訊息會把每一個變動都送去錯的方向，那正是它要修的東西。
+
+**`created` 只改措辭，不放行任何東西。** 新出現的檔一樣算動到正本，
+外部把東西放進 `.forseti/` 正是要紅的那件事。有一條測試專門守這件事。
+
+### 新增三條測試，四組反向驗證都紅得對
+
+    test_新出現的路徑算得出來_而且跟改過內容的分得開
+    test_擷取不到的兩種原因在訊息裡分得出來
+    test_created不准放行任何東西
+
+反向驗證：
+
+    `_created` 改成回 `_diff` 的結果          → 第一條紅
+    `_evidence` 忽略 created                  → 第二條紅
+    `_evidence` 永遠用新建那句                → 第二條紅
+    `_bad_paths` 有內容就放行                 → 第三條紅 + 既有的 hook 那條紅
+
+每組還原後比對 sha256，兩個檔逐位元組跟動之前一致
+（`f88a44998c53a44a…` / `61fe66dbdd1c8277…`）。
+
+### 驗證結果
+
+    tests/test_zz_forseti_write_attribution.py   23 條全綠（原 20 + 新 3）
+    全套                                          1636 passed / 0 failed / 164.92 秒
+
+全套從 1633 變 1636，多的三條是新加的。
+
+### §40 登了一筆
+
+    擷取不到新增段的原因是「不是 append，或太大」
+    → 還有第三種：這個檔是在那條測試期間新出現的，
+      呼叫端的 `if b is None or a is None: continue` 讓 `_appended()`
+      根本沒被呼叫到，它的兩個 return None 路徑一個都沒走
+
+機制是：**把函式的 return 點當成結果的全部可能性**。
+讀完 `_appended()` 的人會覺得原因已經數完了，而第三條路在呼叫端，
+是一個 continue，不在那支函式的視野裡。
+
+radius 量出來是 0（grep 全 repo，那句話只活在 `_evidence` 自己那一行，
+沒有下游吃過它）。**radius 0 說的是沒有人吃過它，不是它無害** ——
+復現那一次要不是同一份訊息裡另一條印出了內容可以對照，
+它會把人送去查「原本那一段去哪了」。
+
+登記簿 13 → 14 筆，有守的 10 → 11 筆。
+
+### 沒有動畫面，也沒有開關 App
+
+`desktop/ui/` 一個位元組都沒動，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+照上一輪查出來的辦法用 `pgrep -fl "Forseti.app/Contents"` 驗，
+不用 `ps aux | grep`（那個量法會數到自己的命令列）。
+
+### 動到的檔
+
+    tests/conftest.py                            `_created` + `_CREATED` + `created_record()`
+    tests/test_zz_forseti_write_attribution.py   `_evidence` 分兩種說法 + 3 條測試
+    .forseti/pollution.jsonl                     1 筆
+
+沒有 commit。
+
+### 還缺什麼
+
+- **`declarations.json` 被寫的那一天會是一條無辜的紅**，上面寫了理由。
+  要修得先決定「hook 寫的正本要不要一律放行」，那是 owner 的決定。
+  跟 `event_ledger.jsonl` 要不要進 `ALLOWED_TOP_LEVEL` 是同一題，
+  兩個一起問比較省她一次開口。
+- **18:1x 那一次的身份仍然未知**，這一輪只證明了機制可重現。
+  要結它得有那一次的紅訊息原文，而那個沒有留下來。
+  **建議不要再追**：機制已經知道，成本高而拿得到的只是身份。
+- **間接呼叫者仍然只能靠觀測或人去發現**，跟上一輪一樣，是已知的洞。
+- 其餘在等 owner 的那一串沒有變：`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  `B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`、畫面那一半。
+- §40 十四筆全部 OPEN。
+
+---
+
+## 2026-09-17 19:5x　阻塞身上的第三個訊號：它被放在哪一段
+
+**挑了什麼，以及為什麼不是「再守一層」。** ROADMAP 自己寫的規則是
+「判斷清單空了之前，先讀 `AUTO_CONTINUE_LOG.md` 最後一輪的『還缺什麼』，
+逐項問一句這一項要 owner 開口嗎」。逐項問完的結果是全部要她開口，
+或者上一輪自己寫著「建議不要再追」。所以這一輪不是從那張清單長出來的，
+是從一件對不上的事長出來的。
+
+### 對不上的那件事
+
+`.forseti/BLOCKERS.md` 有一個一級標題 `# 已解除`，底下第一句寫著
+
+    放在這裡的不再是阻塞，`forseti doctor` 不會算進去。
+
+而 B-17（`RAW_INLINE_LIMIT` 宣稱的行為沒有人執行）就在那一句下面 6 行，
+它自己的本文寫著「**擋住：** worker 隔離層那句『packet 擋得住巨大原始輸出』」，
+結尾寫著「選哪一個是 owner 的決定」。一條在等 owner 決定的阻塞，
+被放在「不再是阻塞」的區段裡。
+
+實測兩支程式對同一個檔案回不同的數字，兩邊都不報異常：
+
+    forseti.extract_blockers（forseti doctor 用的）      8 條
+    desktop_api._blockers                               open 11 條
+
+差的三條是 B-17、B-14、B-13，全部放在 `# 已解除` 底下而本文還寫著擋住什麼。
+`forseti.py:196` 在 `# 已解除` 那一行 `re.split` 把檔案切掉，所以那邊數不到；
+`desktop_api._blockers` 完全不看區段，逐條判本文，所以那邊數得到 ——
+**但它也看不出有任何不一致**，那三條在它眼裡是三條乾淨的未解除。
+
+### 機制：位置是一個沒有文字的宣告
+
+`_blocker_sections` 是逐行掃的，`# 已解除` 那一行每一輪都被讀進來，
+然後當成一行普通文字丟掉。資料流經過它，判斷層沒有問過它。
+
+訊號的清單當初是照著「一條阻塞自己寫了什麼」列出來的，
+於是只列得出本文裡的東西。而區段不是這一條自己寫的，是它被放在哪裡。
+
+### 改了什麼
+
+    apps/forseti-cli/desktop_api.py
+      _blocker_sections()   每一節多一個 in_resolved_section
+      _blockers()           第三個訊號 by_section；多回一個 misfiled
+      _blocker_lines()      多一行講後果；「兩個訊號」那句改掉
+
+**區段單獨不准關掉任何一條。** 關閉的條件還是標題與擋住欄兩邊都說結束，
+跟 2026-09-16 那一版一樣。理由是區段是三個訊號裡最弱的：它記的是
+「有人把這一段搬到哪裡」，而搬動是一次手動動作，本文一個字都不必改。
+讓它有關閉權等於「搬過去就算解除」，那正是要抓的東西。
+
+所以數字一個都沒有變：open 還是 11、closed 還是 6。變的是打架的
+從 2 條變 5 條，以及多出一行講出後果。**沒有自動降級，照舊。**
+
+`said_closed_by` 從單一字串改成多個用「、」串。單一訊號的時候字串
+跟改之前一模一樣（`"標題"` / `"擋住欄"`），所以既有兩條斷言不用動。
+
+### 驗證結果
+
+    tests/test_blockers.py     22 條全綠（原 15 + 新 7）
+    全套                        1643 passed / 0 failed / 227.63 秒
+                               （基線 1636，多的 7 條是新加的）
+    修完檔頭之後再跑一次全套      1643 passed / 0 failed / 231.20 秒
+
+五組反向驗證，每一組都紅在該紅的那一條：
+
+    in_resolved_section 永遠 False      → 放在哪一個區段抽得出來 紅（共 4 條）
+    讓區段單獨就能關掉                    → 區段單獨不准關掉任何一條 紅（共 4 條）
+    misfiled 永遠空                      → 放錯區段的另外列出來 紅（共 2 條）
+    said_closed_by 只回第一個訊號         → 單一訊號的字串沒有變 紅
+    「兩個訊號」那句寫回去                 → 打架那句話不准寫死是兩個訊號 紅
+
+五次還原後 sha256 逐位元組一致
+（`063c13f216b73a4d…` / `5e6e0f74abf27a45…`）。
+
+### 寫測試的時候撞到一個順帶的發現
+
+第一版 fixture 的標題寫成「放在已解除底下，本文還寫著擋住什麼」，
+測試紅了，因為 `_CLOSED_WORDS` 是子字串比對，那個標題裡的「已解」
+被讀成「這一條宣告自己解除了」。**一個在描述解除區的標題，
+被判成在宣告解除。** 這一輪沒有修它（改比對規則會動到數字，
+那是 owner 的地盤），只把 fixture 標題換掉，記在這裡。
+
+### §40 登了一筆
+
+    pol-25d1775e5f　radius 2
+
+被推翻的是「打架的訊號有兩個，而打架的是 B-03 與 B-04 兩條」。
+radius 量法跟上一輪一樣，grep 全 repo 找誰吃過這個結論，兩處：
+`.forseti/NEXT.md` 產生出來的那一行、`AUTO_CONTINUE_LOG.md:1904`。
+**兩個數字本身不是錯的**，錯的是它們被當成窮舉。
+
+登記簿 14 → 15 筆，有守的 11 → 12 筆。
+
+### 第一次全套有兩條紅，成因是我自己，而且是上一輪剛記錄過的那個機制
+
+    FAILED test_動到正本的測試全部在冊
+    FAILED test_動到的路徑全部在允許範圍內_而且這是最後一條
+    2 failed, 1641 passed
+
+點名的是 `tests/test_owner.py::TestFlaggedLinesReachTheRound::...`，
+而那條測試完全無辜 —— 全套跑到一半的時候，我在外面用
+`pollution.record()` 寫了 `.forseti/pollution.jsonl`。
+紅訊息自己就印著那句話：
+
+    提醒：這個量法分不出寫入者，全套跑的期間有人動正本的話
+    會被記在當時在跑的那一條頭上。
+
+這正是 2026-09-17 19:3x 那一輪刻意復現出來的機制，
+只是那一次是人為注入探測檔，這一次是自動接續自己踩的。
+**重跑一次、期間不碰 repo，1643 全綠。**
+
+順帶一件值得記下來的：登記 §40 是自動接續每一輪都會做的動作，
+而跑全套也是。兩件事撞在一起就會生一條無辜的紅。
+目前的辦法只有「不要同時做」，沒有人守著這件事不再發生。
+
+### 收尾時另外兩處過期的敘述也修了
+
+`_blocker_sections` 的檔頭寫著「**兩個訊號分開讀，不合成一個。**」，
+`_blockers` 的檔頭寫著「兩個訊號打架的時候我不挑一邊」。
+訊號變三個之後這兩句都是錯的，而且錯得跟這一輪登記的污染同形 ——
+**把當時數得出來的數量寫成窮舉**。兩處都改了，
+`_blockers` 那一處另外指回 `pol-25d1775e5f`。
+
+改完跑過所有會去讀 `desktop_api.py` 原始碼的測試檔（9 個，305 條），
+除了一條因為我把檔案順序排錯而紅的（`test_zz_` 那條守的正是
+「它必須是整個 session 的最後一條」，我把 `test_forseti_cli.py`
+排在它後面），其餘全綠；那一條單獨跑 23 條全過。
+
+### 沒有動畫面，也沒有開關 App
+
+`desktop/ui/` 一個位元組都沒動，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+順帶查到一件跟這條規則有關的：`desktop/deploy.sh` 第 57 行自己會
+`pkill -9 -f "Forseti.app/Contents/MacOS"`。所以「跑 deploy.sh」
+跟「不准殺 App」不是兩件無關的事 —— 在她開著視窗的時候部署，
+會關掉她的視窗而且不再開回來。ROADMAP 寫「build 要她說」是對的，
+理由跟它寫的那個不完全一樣。
+
+### 動到的檔
+
+    apps/forseti-cli/desktop_api.py     三支函式
+    tests/test_blockers.py              7 條測試 + 一份 fixture
+    .forseti/pollution.jsonl            1 筆
+
+沒有 commit。
+
+### 還缺什麼
+
+- **那三條放錯區段的要搬回去，還是要把本文改成真的解除，是 owner 的決定。**
+  B-17 的本文自己就寫著在等她決定三選一。現在系統講得出這件事，
+  講不出的是該挑哪一邊。
+- **兩支程式仍然回不同的數字。** 這一輪只讓其中一支說得出差在哪、
+  差幾條、後果是什麼。要讓它們一致得先挑一邊，那也是上面那個決定的下游。
+- **`_CLOSED_WORDS` 的子字串比對會誤判標題**，上面那一段寫了怎麼撞到的。
+  改它會動到未解除數，所以沒改。
+- 其餘在等 owner 的那一串沒有變：`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  `B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`、畫面那一半。
+- §40 十五筆全部 OPEN。
+
+## 2026-09-17 20:1x-20:3x　讓 `forseti doctor` 講得出自己少算了哪幾條
+
+**挑了什麼，以及為什麼是它。** 照 ROADMAP 自己寫的規則，先讀上一輪的
+「還缺什麼」逐項問「這一項要 owner 開口嗎」。五項裡四項要她開口
+（三條放錯區段怎麼處理、兩支程式要一致得先挑邊、`_CLOSED_WORDS` 改了會動到
+未解除數、以及那一長串在等她的）。剩下的那一項是上一輪自己留下的後果：
+
+上一輪讓 `desktop_api._blockers` 說得出 `misfiled`，可是 `forseti doctor`
+那一支還是安靜地回 8。**而跑 doctor 的人看不到桌面版**，他不會知道
+有三條在 `# 已解除` 那個標題底下被切掉了。這一件不需要 owner 決定 ——
+要她決定的是「挑哪一邊」，不是「講不講得出差在哪」。
+
+### 動手之前先量的
+
+    forseti.extract_blockers（doctor 用的）    8 條
+    desktop_api._blockers                     open 11、closed 6、total 17
+    差的                                      B-17、B-14、B-13
+
+跟上一輪記錄的數字一致，不是沿用，是這一輪自己跑出來的。
+
+### 改了什麼
+
+    apps/forseti-cli/forseti.py
+      extract_misfiled()    新增。借 desktop_api._blockers 的 misfiled
+      Report.misfiled       新欄位，`None` 是數不出來、`[]` 是真的沒有
+      build_report()        接上；借不到的時候補一條 WARN
+      cmd_doctor()          阻塞那一段後面多六行，講出後果與誰決定
+      cmd_status()          少算的掛在阻塞那個數字旁邊，不另起一行
+
+**數字一個都沒有變。** `阻塞 8` 還是 8，`open 11` 還是 11。
+變的是 doctor 那一邊現在講得出「這個數字少算了 3 條　B-17、B-14、B-13」，
+以及少算的後果（兩支程式回不同的數字）與這是誰的決定。
+**沒有自動降級**，照舊 —— 把 misfiled 併進阻塞數等於替 owner 挑了一邊。
+
+三個刻意的選擇：
+
+- **借判準，不自己判。** 再寫一次區段與「擋住：」欄的解析，等於造出第三個
+  會跟前兩個對不上的數字，而對不上正是這一支要講出來的那件事。
+  有一條測試守著這一點（`test_doctor_不自己重寫一份解析`）
+- **借不到回 `None` 不回 `[]`。** 「數不出來」跟「沒有」長成同一個樣子，
+  是這個專案抓過很多次的形狀（`desktop_api._safe` 的檔頭寫著同一句）
+- **doctor 仍然一定跑得起來。** 借不到就降級成一條 WARN，不讓它掛掉
+
+### 驗證結果
+
+    tests/test_blockers.py     28 條全綠（原 22 + 新 6）
+    全套                        1649 passed / 0 failed / 252.86 秒
+                               （基線 1643，多的 6 條是新加的）
+
+六組反向驗證，每一組都紅在該紅的那一條：
+
+    extract_misfiled 永遠回 []          → 3 條紅
+    借不到的時候回 [] 而不是 None        → 數不出來回 None 不回空list 紅
+    build_report 把 misfiled 併進去      → 講出來但不准把它算進阻塞數 紅
+    doctor 那幾行不講後果                → 講得出後果與誰決定 紅
+    status 改成另起一行 / 完全不提        → 掛在阻塞旁邊 紅（兩種注入都紅）
+    extract_misfiled 自己重寫一份解析     → 4 條紅
+
+還原後 sha256 逐位元組一致（`65fab16efacfe45f…`），五次還原都對。
+
+### 兩條測試第一版是假綠的，成因不一樣但形狀一樣
+
+**這一段是這一輪最該留下來的東西，不是上面那個功能。**
+
+第一條，「不准把它算進阻塞數」第一版斷言在 `extract_blockers` 上。
+注入「在 extract_blockers 裡把 misfiled 接進去」之後，全套 28 條**全綠**。
+當下第一個念頭是「這條測試守不住」。實際不是：`extract_blockers` 進門
+第一行就 `re.split` 把 `# 已解除` 之後切掉（`forseti.py:196`），
+所以在它體內怎麼接都接到空的 —— **注入根本沒有生效**。
+直接印出來才看見：`extract_blockers` 長度 1、`misfiled` 是 `['B-83']`。
+會發生自動降級的位置是 `build_report` 把兩個結果組起來那一層，
+斷言搬過去之後，同一個意圖的注入立刻紅。
+
+第二條，status 那條第一版是 grep `cmd_status` 的原始碼找 `line +=`。
+反向驗證也是綠的 —— 因為 `line +=` 在同一支函式裡出現不只一次
+（還有 `elif rep.misfiled is None` 那一支），把要守的那一處換成 `print`，
+斷言在另一處照樣成立。改成跑一次 `cmd_status` 抓真實輸出，
+斷言「阻塞」與「放錯區段」落在同一行，兩種注入都紅了。
+
+共用的機制：**反向驗證的綠有兩種成因 —— 測試守不住，或注入沒生效 ——
+而它們在畫面上長得一模一樣，我只讀出了第一種。**
+少掉的那一步是先確認注入真的改變了被測函式的輸出。
+附帶一條：在原始碼裡找字串，找到的可能不是你要守的那一個。
+
+### §40 登了一筆
+
+    pol-6701655574　radius 0
+
+radius 量法跟前幾輪一樣，grep 全 repo 找誰吃過這個結論：沒有。
+從發現到推翻都在同一輪之內，沒有寫進任何檔案，**所以 0 是量出來的不是沒量**。
+regression_probe 填的是改好之後的那兩條測試。
+登記簿 15 → 16 筆，有守的 12 → 13 筆。
+
+登記在跑全套**之前**做，因為上一輪記錄過「登記 §40 與跑全套撞在一起
+會生一條無辜的紅」。這一輪照那個順序走，全套一次就 1649 全綠，沒有紅。
+
+### 沒有動畫面，也沒有開關 App
+
+`desktop/` 一個位元組都沒動（`git status --porcelain desktop/` 空的），
+所以沒有 build、沒有 deploy。全程沒有 `open`、沒有 `pkill`、
+沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    apps/forseti-cli/forseti.py         一個新函式 + 四處接線
+    tests/test_blockers.py              6 條測試
+    .forseti/pollution.jsonl            1 筆
+    .forseti/NEXT.md                    重新產生（走 desktop_api strands）
+
+沒有 commit。
+
+### 還缺什麼
+
+- **兩支程式仍然回不同的數字，這一輪沒有讓它們一致。** 現在是兩邊都講得出
+  差在哪，挑哪一邊還是 owner 的決定。**這是刻意的**，不是沒做完
+- **`forseti doctor` 那六行沒有人看過。** 它印得出來（這一輪跑過），
+  但沒有人真的在接手的時候讀到它。零次跟一次的差別在這裡也成立
+- **`_CLOSED_WORDS` 的子字串比對會誤判標題**，上一輪記過，這一輪沒碰。
+  順帶查到一件可以寫下來的：此刻 `BLOCKERS.md` 的 17 個標題裡
+  **沒有任何一個會被誤判**（`B-08` 的「解法方向已改」不含 `已解` 也不含
+  `解除`）。所以上一輪那句「改它會動到未解除數」對現在這份檔案**未驗證** ——
+  會不會動要看新規則怎麼寫，而寫新規則正面撞上 B-05。這一筆沒有登進 §40，
+  因為我沒有推翻它，只是查出它在此刻的資料上沒有實例
+- 其餘在等 owner 的那一串沒有變：三條放錯區段怎麼處理、`AXES_COVERED`
+  要她重新登入、`scope_match`、§12.2 五個病症對應、兩件 workflow 的
+  `commit_boundary`、`B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格
+  寫死、B-15、B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`、
+  畫面那一半
+- §40 十六筆全部 OPEN
+
+---
+
+## 2026-09-17 20:4x-20:5x　交接檔終於答得出「這一份是在哪台機器上寫的」
+
+**挑了什麼，以及為什麼是它。** 照 ROADMAP 自己寫的規則，先讀上一輪的
+「還缺什麼」逐項問「這一項要 owner 開口嗎」。四項裡三項要她開口
+（兩支程式的數字要一致得先挑邊、`_CLOSED_WORDS` 的新規則正面撞上 B-05、
+以及那一長串在等她的）。剩下那一項（doctor 那六行沒有人看過）不是
+一件寫得出來的工作，是一次閱讀。
+
+所以這一輪不是從上一輪的尾巴接的，是從 `contract.py` 的缺口表挑的。
+挑中的理由不是它排第一，是這一條：
+
+    .forseti/NEXT.md「已經發生過的決定」第一條
+    → 換機器：舊機器硬碟不穩，工作移往新電腦
+
+    同一份檔案的 §39.1 缺口表
+    → runtime_node（active machine/runtime node）沒有資料來源
+
+**一份記錄過換機器的交接檔，答不出現在這一份是在哪台機器上寫的。**
+
+### 動手之前先查它不存在
+
+    ls apps/forseti-cli/ | grep -i node        沒有
+    grep -rln 'node_id|hostname|uname' apps src tools
+      → event_ledger.py（只有 schema 欄位）、migrate.py、contract.py
+        （只有那句「沒有實作」的理由）、sot.py（§12.2，是另一節）
+
+`sot.py` 做的是 §12.2 該信哪個來源，§12.1 的 RuntimeNode 這一端沒有人做。
+`hooks/event-ledger.mjs:159` 那一行 `runtime_node_id: ''` 也還在。
+
+### 規格六欄，做出三欄，另外三欄空著而且說得出為什麼
+
+§5 那張表寫 `node_id, host, process, service, version, health`。
+
+    node_id   有　從 IOPlatformUUID 算 sha256 前 16 碼
+    host      有　socket.gethostname()
+    process   有　pid 加 executable
+    service   空　人登記的事實。從行程名稱的長相推斷是 B-05 擋住的做法
+    version   空　§5 只寫 version，沒說是誰的版本
+    health    空　§12.2 的來源一個都沒接
+
+**`version` 那一欄是這一輪最該留下來的決定。** 作業系統版本量得到，
+而且就躺在同一個 dict 裡（`measured['host']['os_version']`），接上去
+是最順手的動作。沒接，因為那正是 `contract.py` 已經記過一次的形狀：
+「jsonl 的 `version` 是 CLI 版本不是模型版本」。**名字對上不等於東西對上。**
+量到的放 `measured`，規格那一欄留 None，讓讀的人自己決定是不是同一個。
+
+`health` 不給燈，理由借 `sot.py` 檔頭那一句：一個沒有被檢查過的綠燈
+比沒有燈更糟，因為它會讓人不去看。
+
+### node_id 的穩定度，以及一句不准被讀錯的話
+
+取 IOPlatformUUID，取不到退回 hostname，**`basis` 那一欄一定帶著走** ——
+退回 hostname 的那個 id 會在改機器名字的那天變掉，而那件事在畫面上
+跟「換了一台機器」長得一模一樣。
+
+存的是 sha256 前 16 碼不是原值，因為原值是硬體序號等級的東西，
+而這一欄會被寫進 git 追蹤的檔案。
+
+**跨重開機這一輪沒有驗過。** 驗過的是跨行程：兩個獨立的 python 行程
+算出同一個值。跨重開機靠的是 IOPlatformUUID 自己的性質，不是我量到的。
+這兩件事不一樣，模組檔頭與測試檔頭都這樣寫。
+
+### contract 接的是 reference() 不是 describe()
+
+    §39.1 那一欄問「是哪一台」          → reference()，三個 key
+    §5 那張表問「這個實體有沒有六欄」    → describe()，六欄加 unfilled
+
+接 `describe()` 的話這一欄會變成 DEGRADED，**而那個降級的理由來自
+另一張表**。讀的人會以為系統不知道跑在哪台機器上，實情是知道。
+有一條測試釘住這一點。
+
+`target_environment` 那一欄的理由順手改了，沒有改狀態。它原本寫
+「§12.1 的 Project → RuntimeNode 那一層沒有實作」，RuntimeNode 這一端
+做出來之後那句話只剩一半是真的。它仍然是 NO_SOURCE ——
+「現在跑在哪」跟「要落到哪裡」是兩件事。
+
+### 數字變化，全部是這一輪自己跑出來的
+
+    §39.1 帶得出值的      12（39%）→ 13（42%）
+    沒有資料來源          12 → 11
+    測試                  1649 → 1665（新 16 條）
+    模組                  多一個 runtimenode.py
+    §40 登記簿            16 → 17 筆，有守的 13 → 14
+
+### 反向驗證：第一次有兩組的紅是假的，成因跟上一輪那一段是同一個形狀的反面
+
+**這一段比上面那個功能重要。**
+
+第一輪九組注入，九組全紅，第一眼的結論是「每一條都守得住」。
+實際不是：其中兩組（health 給一盞綠燈、空的三欄被省略掉）各自紅了
+**7 條**，而那七條裡有五條跟注入的意圖無關 ——
+連「量的時候一個檔都不寫」「原始 UUID 不會出現在輸出裡」都紅了。
+
+成因是那兩個注入改掉了 `_UNFILLED` 的 key 名稱，於是
+`return {k: out[k] for k in SPEC_FIELDS}` 直接 KeyError，
+**每一條碰到 `fields()` 的測試都跟著崩**。那不是測試抓到了，
+是注入把程式弄壞了。
+
+    上一輪記的：反向驗證的綠有兩種成因 —— 測試守不住，或注入沒生效
+    這一輪的反面：反向驗證的紅也有兩種 —— 測試抓到了，或注入把程式弄崩
+
+而它們在 pytest 的輸出上長得一模一樣，都是一行 FAILED。
+我讀過上一輪那句，只讀成「綠要小心」，沒翻到另一面。
+**「紅得多」被我讀成「守得緊」**，那個 7 本身就是訊號。
+
+重做成語意有效的注入之後，紅的分別是 2 條與 1 條，而且全部是
+`AssertionError`。登進 §40：`pol-240e178980`，radius 0
+（grep 全 repo，只命中上一輪那句，是來源不是下游；從發現到推翻都在
+同一輪之內，沒有寫進任何檔案，所以 0 是量出來的不是沒量）。
+
+防的規則寫進那一筆：每一組要看三件事 —— 紅了幾條、紅的是不是注入
+意圖那一條、失敗型別是不是 `AssertionError`。非 AssertionError
+代表注入改壞了程式，那一組不算驗過。
+
+**這條規則寫下來之後立刻用在自己身上**：`test_contract接的是reference不是describe`
+原本在注入 NoSource 的時候丟 `TypeError`（`set()` 吃到 dataclass），
+補了一行先問型別，重驗之後是 `AssertionError`。
+
+### 全部的反向驗證結果
+
+    第一輪（rev.py，九組）
+      version 被作業系統版本頂替        → 2 紅，對
+      node_id 回固定字串不理輸入        → 2 紅，對
+      原始 UUID 被放進輸出              → 1 紅，對
+      health 給一盞綠燈                 → 7 紅，**假的，程式崩了**
+      空的三欄被省略掉                  → 7 紅，**假的，程式崩了**
+      measure 順手寫一個檔              → 1 紅，對
+      contract 接 describe              → 2 紅，對
+      contract 失敗時退回 hostname      → 1 紅，對
+      target_environment 理由退回舊版   → 1 紅，對
+
+    重做（rev2.py，三組，全部 AssertionError）
+      health 給一盞綠燈（只改值）        → 2 紅
+      describe 宣稱六欄都填滿           → 1 紅
+      service 理由不再指得到 B-05       → 1 紅
+
+    contract 那一側（rev3/rev4，三組）
+      這一欄退回 NoSource / 回空 dict / 回空字串 → 各 4 紅，全部 AssertionError
+
+每一組還原後 sha256 逐位元組一致（`runtimenode.py` c346f4e550b84f9e、
+`contract.py` f771d62219dfa95a）。
+
+### 全套第一次跑有一條紅，而那條紅是對的
+
+`test_contract.py::test_collect不會把沒有來源寫成空清單` 把
+`runtime_node` 列在 NO_SOURCE 的例子裡。它紅的時候訊息印的是
+`{'basis': 'IOPlatformUUID', ...}` —— **它抓到的正是「有來源了還寫沒有來源」**。
+
+那條測試自己的 docstring 已經記過兩次同樣的事（`invalidated_conclusions`
+2026-09-16 19:2x、`logical_agent_id` 同日 22:5x），兩次都寫著
+「移出去不是為了變綠」。這是第三次，照同一個做法處理：移出清單，
+**同時在別處釘住新狀態**（`test_runtime_node有來源之後不准再標成沒有來源`），
+不是只是刪掉。那條 docstring 現在也寫著「這張清單只會變短不會變長，
+移出去的每一欄都要在別處被釘住」。
+
+### 驗證結果
+
+    tests/test_runtimenode.py   15 條全綠（新增）
+    tests/test_contract.py      新增 1 條，全檔全綠
+    全套                        1665 passed / 0 failed / 232.23 秒
+                               （基線 1649，多的 16 = 15 + 1）
+
+### 沒有動畫面，也沒有開關 App
+
+`git status --porcelain desktop/` 空的，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    apps/forseti-cli/runtimenode.py     新增，零寫入、零依賴
+    apps/forseti-cli/contract.py        `_runtime_node()` 加兩處接線
+    tests/test_runtimenode.py           新增 15 條
+    tests/test_contract.py              移一欄出清單 + 新增 1 條
+    .forseti/pollution.jsonl            1 筆
+    .forseti/NEXT.md                    重新產生（走 desktop_api strands）
+
+沒有 commit。
+
+### 還缺什麼
+
+- **值算出來了，交接檔的正文沒有印出來。** 這是這一輪最大的缺口，
+  而且它就是上一輪抱怨的那個形狀（「doctor 那六行沒有人看過」）。
+  `python3 apps/forseti-cli/contract.py` 看得到，`.forseti/NEXT.md`
+  的正文看不到 —— 那份檔案的契約那一節只列缺口，填得出來的欄位不印。
+  **下一輪就做這一件，路徑是確定的**：`handoff.REQUIRED_KEYS` 加一個鍵、
+  `desktop_api._write_handoff()` 產生它、`handoff.render()` 排版。
+  三處都有守門（`missing_keys()` 那組），所以要一起改。
+  這一輪沒做的理由是它是第二件工作不是第一件的收尾，不是因為卡住
+- **`service` / `version` / `health` 永遠是空的，沒有登記簿。**
+  要讓 `service` 有值得先有人工登記簿（形狀照 `identity.py`），
+  而那會多一個寫入點，要同時登進 `tests/test_module_write_targets.py`
+  的三張表。這一輪刻意沒做：**沒有人在等那一欄**，硬接一個沒人用的
+  寫入點只會多一個要守的東西
+- **跨重開機的穩定性沒有驗過。** 驗過的是跨行程。這一條要真的重開機
+  才驗得到，所以它會一直是未驗證，除非有人在重開機之後跑一次
+  `python3 apps/forseti-cli/runtimenode.py` 比對 node_id
+- **`hooks/event-ledger.mjs:159` 那行 `runtime_node_id: ''` 沒有動。**
+  現在有 node_id 可以填了，但那是 hook 那一側的改動，會影響每一筆
+  新事件的形狀，而且改完之後舊的 42 筆跟新的會不一樣。
+  **這一項要 owner 開口**，理由是它動的是帳本 schema 的實際內容
+- 其餘在等 owner 的那一串沒有變：三條放錯區段怎麼處理、兩支程式的
+  數字要一致得先挑邊、`_CLOSED_WORDS` 的新規則撞 B-05、`AXES_COVERED`
+  要她重新登入、`scope_match`、§12.2 五個病症對應、兩件 workflow 的
+  `commit_boundary`、`B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標
+  那格寫死、B-15、B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個
+  `dry_run=False`、畫面那一半
+- §40 十七筆全部 OPEN
+
+## 2026-09-17 21:0x-21:1x　交接檔終於印得出座標，不再只印自己缺什麼
+
+**挑了什麼，以及為什麼是它。** 照 ROADMAP 自己寫的兩步規則，先讀上一輪的
+「還缺什麼」。第一條就指名了這一輪要做的事，而且寫著路徑是確定的：
+
+    值算出來了，交接檔的正文沒有印出來。
+    路徑：handoff.REQUIRED_KEYS 加一個鍵、
+          desktop_api._write_handoff() 產生它、handoff.render() 排版
+
+逐項問「這一項要 owner 開口嗎」，這一條不用（其餘三條要：`service` 那個
+登記簿沒有人在等、跨重開機要真的重開一次、`hooks/event-ledger.mjs:159`
+動的是帳本 schema）。所以不必走到第二步的 `contract.py` 缺口表。
+
+### 動手之前先查它不存在
+
+    grep -rn 'contract_lines' apps tests desktop/ui
+      → desktop_api.py:1926 一個產生點、handoff.py 兩處、test_handoff.py 三處
+    grep -rn 'HO\.write|handoff\.write' apps tools hooks
+      → 只有 desktop_api.py:1931 一個寫入者
+
+只有一個產生點，所以「三處一起改」是完整的，不會漏掉第二條路。
+
+### 這一輪做的是同一個形狀第二次出現，不是新發現
+
+先前 `NEXT.md` 的契約那一節**只印缺口**。所以一欄從 NO_SOURCE 接成有值
+之後，讀的人看到的差別是「少了一行缺口」，不是「多了一個答案」。
+
+同一件事 2026-09-16 18:2x 撞過一次（`artifact_paths` 早就 PRESENT，
+而交接檔上一個路徑都看不到，於是有了 `artifact_lines`）。這一次是
+`runtime_node`。**兩次都不是意外，是這個檔案的預設行為** ——
+它被寫成一份「自我檢討清單」，不是一份「說得出自己在哪」的交接。
+
+### 白名單不是「所有 PRESENT」
+
+`COORDINATE_FIELDS` 六欄：`project_id`、`canonical_root`、`runtime_node`、
+`session_id`、`logical_agent_id`、`model_identity`。
+
+收進來的標準不是「比較重要」，是**其他每一節都要靠它才解釋得了**：
+一條 `apps/forseti-cli/contract.py` 只有在某一台機器的某一個正本底下
+才指得到東西，而這份檔案會被另一台機器上的人讀到。
+
+`artifact_paths`、`invalidated_conclusions`、`known_limits` 刻意不收 ——
+它們各自有自己那一節，收進來會印兩次，然後兩個地方開始不一致。
+有一條測試釘住這件事。
+
+### 三個刻意的決定
+
+**只印 PRESENT，缺的那幾欄不在這裡印理由。** 理由歸缺口那一節管，
+兩個地方印同一欄就會開始不一致。但結尾要點名沒列到哪幾欄並指去那一節，
+不然「沒列」會被讀成「沒有這一欄」。這一條被三種寫法的注入各抓一次。
+
+**值一律走 `check()` 算好的 `shown`，這一支不自己格式化。** 自己格式化
+就是第二條渲染路徑，同一個值在兩節會長得不一樣，而讀的人分不出哪邊是真的。
+
+**`basis` 不是硬體識別碼的時候多印一句，不是把那個 id 藏起來。**
+退回 hostname 的 node_id 會在改機器名字的那天變掉，而那在畫面上
+跟「換了一台機器」長得一模一樣。那句警告的判斷跟 `runtimenode.BASIS_UUID`
+拿，**不寫死字面值** —— 寫死的話那邊改一個字，警告會靜默地永遠不成立，
+而少印一句警告不會讓任何測試變紅。為此在 `runtimenode.py` 把兩個
+basis 字面值命名成 `BASIS_UUID` / `BASIS_HOSTNAME`。
+
+### 排在哪一節之前，是有理由的
+
+排在北極星底下、其他所有節之前。讀的人先看到一串路徑、最後才知道那是
+另一台機器上的路徑，跟先知道機器再看路徑，是兩種不一樣的閱讀。
+有一條測試用三個 `index()` 釘住順序。
+
+### 驗證結果
+
+    tests/test_contract.py      新增 10 條，全檔 106 綠
+    tests/test_handoff.py       新增 7 條，全檔 35 綠
+    tests/test_runtimenode.py   新增 2 條，全檔 17 綠
+    全套                        1684 passed / 0 failed / 241.18 秒
+                               （基線 1665，多的 19 = 10 + 7 + 2）
+
+走真正那條路（`desktop_api.strands('')`）重新產生 `.forseti/NEXT.md`，
+那一節印出來了，`runtime_node` 那一行帶著 node_id、host、basis 三個值。
+
+§39.1 的數字**沒有變**（13/31，42%）。這一輪改的是印不印，不是算不算得出來，
+兩件事不要混在一起看。
+
+### 反向驗證：十二組，九組一次就對，一組是我自己注入失效
+
+    第一輪（rev.py，十組）
+      coordinate_lines 一律回空清單      → 5 紅，AssertionError，對
+      白名單收進 artifact_paths          → 1 紅，對
+      basis 名字寫死字面值               → 2 紅，對
+      沒列到的那幾欄不講去哪裡找          → **0 紅，注入沒生效**
+      順便把缺席的理由也印出來            → 1 紅，對
+      值不走 shown 自己格式化            → 1 紅，對
+      座標那一節排到最後面               → 2 紅，對
+      REQUIRED_KEYS 拿掉這個鍵           → 1 紅，對
+      desktop_api 傳的是 ctx 不是 report → 1 紅，對
+      BASIS_UUID 改一個字                → 2 紅，對
+
+    重做那一組（rev2.py，三種寫法）
+      整段拿掉                          → 1 紅，AssertionError
+      講了但不點名是哪幾欄               → 1 紅，AssertionError
+      點名了但不說去哪裡找理由            → 1 紅，AssertionError
+
+那個 0 紅的成因：注入插了一行 `missing = []`，而**四行之後同一個名字
+被重新賦值蓋掉**，所以那次跑的其實是原版程式。上一輪記的那一句
+（綠有兩種成因：測試守不住，或注入沒生效）這一輪直接用上了 ——
+差別在於上一輪是事後推翻，這一輪是當場就分得出來，因為那一組的紅數
+（0）跟旁邊九組（1 到 5）不同量級，而**不同量級本身就是要去看的訊號**，
+不管它是偏高還是偏低。
+
+**沒有為這一筆新增 §40 登記。** 機制上一輪已經登過，而這一次是那條
+已登記機制的一次正確應用，不是新的錯。每撞到一次就再加一條規則，
+正是 Vol4 §12 第一條 Kill Criteria 要 kill 的那種膨脹。
+
+每一組還原後 sha256 逐位元組一致：`contract.py` 3858279ffe7a6d66、
+`handoff.py` 72b5fd5783fa1426、`desktop_api.py` 07df40f5b5f99abe、
+`runtimenode.py` 63122d738a766246。
+
+### 沒有動畫面，也沒有開關 App
+
+`git status --porcelain desktop/` 空的，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    apps/forseti-cli/contract.py      新增 COORDINATE_FIELDS、coordinate_lines()、
+                                      _basis_uuid_name()
+    apps/forseti-cli/handoff.py       REQUIRED_KEYS 加一鍵、render() 加一節
+    apps/forseti-cli/desktop_api.py   _write_handoff() 產生並傳 crd_lines
+    apps/forseti-cli/runtimenode.py   兩個 basis 字面值命名成常數
+    tests/test_contract.py            新增 10 條
+    tests/test_handoff.py             新增 7 條
+    tests/test_runtimenode.py         新增 2 條
+    .forseti/NEXT.md                  重新產生（走 desktop_api.strands）
+
+沒有 commit。
+
+### 還缺什麼
+
+- **這一節只在 `NEXT.md` 上，畫面上沒有。** 桌面版讀的是同一份 snap，
+  但 `app.js` 沒有對應的區塊。這一項**不做不是因為卡住，是因為
+  owner 明令不准自己開關 App**，而畫面改了不 build 等於沒改
+- **`logical_agent_id` 仍然是這六欄裡唯一答不出來的。** 它的來源
+  （`identity.py`）在，`.forseti/identity.jsonl` 0 條登記。要有值得有人
+  去登記，**不准從 alias 的長相推斷**（B-05 擋住的做法）
+- **`model_identity` 印的是 `claude-opus-5`，而 `model_config` 仍然
+  DEGRADED**（jsonl 只有 effort，沒有 temperature / top_p / system prompt
+  版本）。座標那一節印得出「哪個模型」，印不出「什麼設定」，
+  兩者對輸出的影響不是同一個量級
+- **跨機器沒有實測。** 這一節存在的理由是「另一台機器上的人讀到這份」，
+  而驗的是同一台機器上兩個行程。要真的驗得有第二台機器跑一次
+- 其餘在等 owner 的那一串沒有變：`hooks/event-ledger.mjs:159` 的
+  `runtime_node_id: ''`、三條放錯區段怎麼處理、兩支程式的數字要一致
+  得先挑邊、`_CLOSED_WORDS` 撞 B-05、`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  `B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`
+- §40 十七筆全部 OPEN
+
+---
+
+## 2026-09-17 21:5x　§33.1 Metric Provenance Contract，第四個「理由後來才變假」的欄位
+
+### 挑這一項的路徑
+
+照 `ROADMAP.md`「所以接手的人現在該做什麼」那兩步規則走：
+
+第一步，上一輪的「還缺什麼」四條，逐條問「要 owner 開口嗎」——
+畫面那一節要她（不准自己開關 App）、`logical_agent_id` 要有人登記、
+跨機器要第二台機器、`model_config` 的提供端不在我這邊。**四條全要她**。
+
+第二步，`contract.py` 缺口表裡標著「沒有資料來源」的那 11 欄，
+逐條問「這個理由現在還成立嗎」。`metrics_by_distribution` 那一條寫著
+
+    Metric Provenance Contract 沒有實作
+    （`grep -rn 'Metric Provenance' apps/ src/` 零命中）
+
+這句話此刻仍然為真（實測零命中），而規格 §33.1 把那個物件定義得
+**完整到不用任何人決定**：25 個欄位、三組枚舉、外加一句對畫面的硬要求。
+不需要 owner 開口，所以是它。
+
+### 做了什麼
+
+`apps/forseti-cli/metrics.py`，§33.1 逐字。
+
+**25 欄不是 24。** 第一版模組說明寫 24，是我自己數的，沒有數規格 ——
+規格那一段第一行就是 `metric_id`，它不是這一支生成的額外欄位。
+`test_欄位名逐字對得上規格` 第一次跑就把這件事抓出來，因為那一條
+去讀規格原文而不是讀我寫的數字。**這正是那條測試該做的事**：
+一條拿我自己寫的常數去對我自己寫的另一個常數的測試，
+不管我數錯幾次都會是綠的。
+
+### 缺席分兩種，理由不是這裡新編的
+
+| 缺席 | 用在哪幾欄 | 理由來源 |
+|---|---|---|
+| `NOT_APPLICABLE` | `dataset_manifest_hash`、`split_hash`、`overlap_score` | 措辭對齊 `contract.py` 的 dataset 三欄 |
+| `UNKNOWN` | `model_hash`、`config_hash`、`target_environment`、`seed` | 前三個對齊 `contract.py` 已查過的實情 |
+
+`seed` 那一條是這一輪親自驗的：最近一份 transcript jsonl 的欄位表
+只有 `effort` 與 `perTurnEffort`，沒有 seed、沒有 temperature、
+沒有 top_p。所以那句「提供端沒有給」是量出來的，不是沿用的。
+
+**模板不留空格給人自己編理由。** `forseti metric template` 印出來的
+那四欄直接帶 `contract.py` 已經查過的那句話 —— 留空格的話人現場補的
+那一句會跟 `contract.py` 分歧，而分歧那天不會有錯誤訊息。
+有一條測試斷言模板裡那幾欄的 `why` 不含 `<`。
+
+### 這一支不自動登記任何東西，而且這是主要設計
+
+最容易的作弊路徑是拿現成的數字（測試通過數）配一組猜出來的欄位
+登記上去，缺口表的數字立刻從 0 變 1。**不做**，理由是 §8.3：
+一筆欄位齊全而材料類別是編的記錄，在畫面上跟一筆真的記錄長得一模一樣。
+
+實例就在眼前，而且已經寫成測試釘住：這個專案最常報的數字是
+「全套 1730 綠」，它照 §33.1 **登記不了**。`material_class` 規格只收
+六種（real / synthetic / public / consented / blind / red-team），
+而 pytest 那一套混著人工構造的輸入與拿真實 jsonl 跑的案例，
+硬歸成其中一種就是編。要登記得先照分佈拆開，而拆開要靠人去讀
+每一條測試用的是什麼材料 —— 語意判斷，B-05 擋住自動做。
+
+`test_全套測試通過率照規格登記不了` 釘住的是**它登記不了**，
+不是它登記得了。下一個人想讓這個數字進登記簿，會先撞到這一條。
+
+### 夠不夠格是算出來的，六項缺一項就不夠
+
+規格最後那句話（`must not display an unqualified percentage as a
+release claim` ⋯ `ruler, material, layer, denominator, plus environment
+and lineage`）變成六項檢查。**一項裡面缺一欄，整項就不齊，不算
+「大部分有」** —— 血緣缺 `model_hash` 的意思是換一組權重重跑會得到
+另一個數字而沒有人分得出來，那不是程度問題。
+
+在這個專案裡幾乎每一筆都會是「不夠格」，因為 `model_hash`、
+`config_hash`、`seed`、`target_environment` 全部 UNKNOWN。
+**那是量出來的實情，不是門檻訂太嚴。**
+
+`by_distribution()` 同時報總數與夠格數。只報夠格數的話，一筆登記了
+但血緣不齊的記錄會從畫面上消失 —— 而那一筆正是要有人去補提供端的那一筆。
+
+### 降級的值寫進 jsonl 再讀回來仍然判得出
+
+`code_commit` 拿得到 HEAD 但工作區跟它不一致的時候，`contract.git_head()`
+回的是 `Degraded` 實例。那個實例寫進 jsonl 再讀回來只剩一個普通 dict，
+**降級的理由那一刻就不見了**，於是一個「HEAD 指不到現在跑的程式碼」
+的記錄，重讀之後會看起來像一個乾淨的 commit。
+
+所以這一支用 `degraded()` 這個 dict 形狀存，`_degraded_why()` 兩種
+形狀都認。有一條測試走完整條路（build → register → load → qualification）
+釘住重讀之後仍然判得出 DEGRADED。
+
+### 接上交接契約：第四次同一個形狀
+
+`contract.py` 的 `metrics_by_distribution` 從 `NoSource` 改成
+`_metrics_field()`。空登記簿的時候是 `Empty`，理由指得出下一步
+（`forseti metric template` → `register --from`）。
+
+`test_collect不會把沒有來源寫成空清單` 立刻紅了 —— **第四次**，
+前三次是 `invalidated_conclusions`、`logical_agent_id`、`runtime_node`。
+四次都是同一個方向：那張清單只會變短。移出去的每一欄都在別處被釘住，
+這一次是 `test_metrics有來源之後不准再標成沒有來源`，它多問一句
+**「讀一次不准長出登記簿」**，守的是上面那條「不自動登記」。
+
+§39.1 的數字：NO_SOURCE 11 → 10，EMPTY 5 → 6。
+**帶得出值的仍然是 13/31（42%），沒有變** —— 這一輪改的是
+「有沒有地方算」，不是「此刻算不算得出來」，兩件事不要混著看。
+
+### 兩個守門自己紅了，那是它們該做的事
+
+`test_declared_only`：`metrics.VERSION` 定義了沒人讀。接到
+`by_distribution()` 的回傳裡 —— 契約版本跟著那一份答案走，
+不塞進記錄（那 25 欄是規格的，多一欄就不是那張表了）。
+
+`test_module_write_targets`：新增的第十五個寫入點沒有任何地方守它。
+照 `antianchor` 那一輪的做法加進 `GUARDED_HERE`、`WRITERS`、
+`DEFAULT_NAMES`。`_w_metrics` 走 `build()` 再 `register()`，不直接餵
+手組的 dict —— 手組的會在寫檔前被擋掉，那樣量到的零是提早 return
+的零，跟「它不寫」長得一樣（那個檔頭記著的假陰性）。
+
+### 驗證結果
+
+    tests/test_metrics.py               新增 43 條，全綠
+    tests/test_contract.py              新增 1 條，全檔 107 綠
+    tests/test_module_write_targets.py  多 2 條 parametrize，全檔 28 綠
+    全套                                1730 passed / 0 failed / 253.64 秒
+                                       （基線 1684，多的 46 = 43 + 1 + 2）
+
+走真正那條路（`desktop_api.strands('')`）重新產生 `.forseti/NEXT.md`，
+那一欄從「沒有資料來源」那一節移到「來源在，此刻空的」，
+帶著登記的兩個指令。
+
+### 反向驗證：十二組，十二組全部有紅
+
+    枚舉檢查拿掉                 → 3 紅
+    一項缺一欄仍算齊             → 5 紅
+    空的時候回 NoSource          → 2 紅
+    不分組全部塞一組             → 1 紅
+    register 不擋非 build 的東西 → 1 紅
+    degraded_why 不認 dict       → 2 紅
+    FIELD_NAMES 少一欄           → 2 紅
+    沒宣告缺席的靜默補 None       → 1 紅
+    結構性缺席改成 UNKNOWN        → 1 紅
+    模板留佔位符給人自己編         → 1 紅
+    缺席沒理由也放行             → 1 紅
+    build 問題一次只報一條        → 2 紅
+
+沒有 0 紅的那一組。上一輪記著「綠有兩種成因：測試守不住，或注入
+沒生效」，這一輪十二組的紅數落在 1 到 5，**沒有出現不同量級的離群值**，
+所以不需要回頭去分辨是哪一種。
+
+每一組還原後 sha256 逐位元組一致：`metrics.py` fcdea3765420fc66、
+`contract.py` 4112c9617369f05a。
+
+### 沒有動畫面，也沒有開關 App
+
+`git status --porcelain desktop/` 空的，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    apps/forseti-cli/metrics.py         新增（§33.1，25 欄、三組枚舉、
+                                        兩種缺席、六項合格檢查、登記簿、CLI）
+    apps/forseti-cli/contract.py        _metrics_field()，那一欄接上來源
+    apps/forseti-cli/forseti.py         `forseti metric` 指令 + 用法那一行
+    tests/test_metrics.py               新增 43 條
+    tests/test_contract.py              新增 1 條，那張清單少一欄
+    tests/test_module_write_targets.py  metrics 進三張表 + _w_metrics
+    .forseti/NEXT.md                    重新產生（走 desktop_api.strands）
+
+沒有 commit。
+
+### 還缺什麼
+
+- **登記簿此刻 0 筆，而且不該由我去填。** 要有第一筆，得有人把一個
+  數字的尺與材料寫下來。這一支刻意不自動產生任何記錄，
+  所以「0 筆」會一直是 0 筆直到有人登記 —— 那是設計不是卡住
+- **畫面上沒有這一節。** 桌面版讀的是同一份 snap，`app.js` 沒有對應
+  區塊。這一項**不做不是因為卡住，是因為 owner 明令不准自己開關 App**，
+  而畫面改了不 build 等於沒改
+- **`by_distribution()` 只按 `material_class` 分組。** §39.1 那句
+  `by distribution` 有沒有別的分佈維度（例如 `execution_environment`
+  或 `system_layer`），規格沒有講。**沒有講的不自己補一個**，
+  現在這樣是照 §33.1 唯一列成枚舉的那一欄分的
+- **`applicability_scope` 收的是自由字串。** 規格沒有給它枚舉，
+  所以這裡不發明一組。代價是它擋不住一句沒有意義的話，
+  而那件事 `claims.py` 那一條線才管得到
+- 其餘在等 owner 的那一串沒有變：`hooks/event-ledger.mjs:159` 的
+  `runtime_node_id: ''`、三條放錯區段怎麼處理、兩支程式的數字要一致
+  得先挑邊、`_CLOSED_WORDS` 撞 B-05、`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  `B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`
+- §40 十七筆全部 OPEN
+
+## 2026-09-17 22:0x-22:3x　§39.1 failed_attempts 那一欄接上來源了
+
+**挑了什麼，以及為什麼是它。** 照 ROADMAP 那條兩步規則，先讀上一輪
+（§33.1 metrics）的「還缺什麼」，逐項問「這一項要 owner 開口嗎」:
+
+    登記簿 0 筆不該由我填　　→　設計不是缺口，不是可做的事
+    畫面上沒有 metrics 這一節　→　沒有人在等那一格，接了也是白工
+    by_distribution 只分一維　→　規格沒定義別的維度，§8.3 禁止自己補
+    applicability_scope 自由字串 → 規格沒給枚舉，同上
+
+四條都不是往下做的方向，所以走第二步看 `contract.py` 的缺口表。
+NO_SOURCE 那十條逐條看，`failed_attempts` 是唯一一條「理由此刻已經
+不再為真而且規格定義完整」的:
+
+- 它的理由寫著「只寫在 AUTO_CONTINUE_LOG 的敘述裡，那是散文不是
+  可查詢的狀態」。那句話一直是真的，但它描述的是缺一個物件，
+  不是缺一個決定
+- 規格把它定義完了（AI-First 工程書 v1.0 第 975-977 行，逐字
+  `attempt + observed result + why not repeat`），三欄，不用任何人決定
+- 其餘九條要 owner 或結構性不適用: `claims_allowed` / `claims_prohibited`
+  要政策物件（那是她的政策）、`owner` 要她說她是誰、`process_status`
+  撞 §12.2 五個病症對應（她擋著）、`dataset_manifest` / `leakage_result`
+  / `source_classes` 這專案不是訓練任務、`model_revision` 提供端沒給、
+  `target_environment` 要 Project → RuntimeNode 綁定
+
+### 動手之前先查它不存在
+
+    ls apps/forseti-cli/ | grep -i attempt      → 零命中
+    grep -rln 'failed_attempt|FailedAttempt|why_not_repeat' apps src tests
+      → contract.py（那一欄的 NoSource）、pollution.py（模組說明引用它）、
+        sot.py（一條憑據指著那一行），三處都是「引用」不是「實作」
+
+所以這一支是新的，不是第四次重做同一個東西。
+
+### 規格只有三欄，這裡多要兩個，理由寫在模組說明裡
+
+`source` 與 `verifier` 是必填。不是規格要的，是照 `pollution.py`
+已經付過代價的先例: 一筆查不回出處的失敗記錄本身就是一個沒有證據的
+宣稱，而不知道是誰觀察到的，這筆的可信度就沒有上限也沒有下限。
+
+### retry_condition 那一對，為什麼不發明一個分類器
+
+「why not repeat」在這個專案有兩種完全不同的實情。一種是條件沒變所以
+不要重試（認證過期、碟沒掛、額度用完），條件變了就該重試，而那一刻
+這筆記錄反而會擋路。另一種是這條路本身走不通，條件怎麼變都一樣。
+
+**沒有發明枚舉去分這兩種。** 規格沒有定義它們，照 §8.3 不編一個。
+改成照 `pollution.py` 的 `propagation_radius` / `radius_basis` 那個
+已經存在的形狀: 沒給 `retry_condition` 就要講 `no_retry_basis`。
+空的重試條件讀起來是「永遠不要再試」，跟「有條件但沒人寫下來」是
+兩件事，而後者常常才是實情。
+
+`release()` 只放得掉有重試條件的那些。沒有重試條件的放不掉，
+要推翻當初那個判斷走的是 §40 污染登記簿（那裡存的是「當初為什麼
+會這樣判」，這裡存不了）。有一條測試釘住這件事，它是這一組最重要的
+一條: 什麼都放得掉的話，這個登記簿就變成一個可以隨手清空的待辦清單，
+而它存在的理由正是「下一個 session 不要再試一次」。
+
+### 只增不改，而且原文要逐位元組留著
+
+放掉一筆是追加一行 `RELEASE`，`records()` 讀的時候折進去。
+有一條測試比對放掉前後的原始檔案內容 —— `raw_after.startswith(raw_before)`
+——，不是只看折完的結果。折完的結果正確而底下偷偷改了原文的話，
+前者看不出來。
+
+### 反向驗證：十四組，十四組全部有紅
+
+    why_not_repeat 不擋空的        → 1 紅
+    source 不擋空的                → 2 紅
+    verifier 不擋空的              → 1 紅
+    兩個重試欄都空也放行             → 1 紅
+    沒有重試條件的也放得掉           → 1 紅
+    放掉不必講理由                  → 1 紅
+    放過的可以再放一次              → 1 紅
+    id 把理由也算進去               → 1 紅
+    load 不跳過壞行                → 1 紅
+    summary 不報 total 只報 active → 1 紅
+    records 不折 RELEASE 進去      → 4 紅
+    空登記簿回 NoSource            → 1 紅
+    放掉之後仍然算還在擋路           → **第一次 0 紅**，補測試之後 1 紅
+
+**那個 0 紅是這一輪唯一真的抓到東西的一組。** `active()` 改成「全部
+都回」的時候全綠，因為 `summary()` 內部自己算了一次還在擋路的數，
+沒有走 `active()`。兩支各算各的，就要各守各的。補了
+`test_active只回還在擋路的那些`，注入之後 1 紅。
+
+每一組還原後 sha256 逐位元組一致: `attempts.py` f3f6511402a1b777、
+`contract.py` c86abea8091dd7ea。
+
+### 反向驗證腳本自己出過一次事，記在這裡
+
+第一輪十二組跑到最後一組，解析 pytest 輸出的那一行崩了
+（`int("C._")`，因為錯誤訊息裡也有 "failed" 這個字），
+**而還原寫在崩掉的那一行後面，所以 `contract.py` 帶著注入留在碟上**。
+下一條測試立刻紅，才發現。第二輪改成 `try/finally` 還原，並且用
+`re.search` 取最後一行。
+
+這件事的形狀跟這個專案已經記過好幾次的是同一個: 量到的是「動作發生了」
+（腳本跑完了）不是「事情做成了」（還原成功了）。還原的斷言本來就在，
+只是它排在會崩的那一行後面。
+
+### 接上交接契約：第五次同一個形狀
+
+`contract.py` 的 `failed_attempts` 從 `NoSource` 改成
+`_failed_attempts_field()`。空登記簿是 `Empty`，理由指得出下一步。
+
+前四次是 `invalidated_conclusions`、`logical_agent_id`、`runtime_node`、
+`metrics_by_distribution`。五次都是同一個方向: 那張「這個系統沒有
+資料來源」的清單只會變短。
+
+§39.1 的數字: NO_SOURCE 10 → 9，EMPTY 6 → 7。
+**帶得出值的仍然是 13/31（42%），沒有變** —— 這一輪改的是
+「有沒有地方算」，不是「此刻算不算得出來」。
+
+### 兩個守門自己紅了，那是它們該做的事
+
+`test_module_write_targets`: 新增的第十六個寫入點沒有任何地方守它。
+照前例加進 `GUARDED_HERE` / `WRITERS` / `DEFAULT_NAMES`，
+`_w_attempts` 走 `record()` 五個必填全部餵真值 —— 少餵任何一個會在
+寫檔之前就 return，那樣量到的零是提早 return 的零。
+
+`test_sot`: `sot.py` 的 `workflow_progress` 那一條憑據指著
+`contract.py` 的 `"failed_attempts": NoSource`，那一行被我改掉了，
+所以它從 OK 變 STALE（**不是 DRIFTED** —— 原文找不到了，
+不是行號漂了）。改指 `attempts.py:93 def record(`，note 也跟著改:
+state 仍然是 PARTIAL，因為登記簿此刻 0 筆，缺的是有人去登記。
+
+`test_literal_restate` 的回歸釘子: ALL_CAPS 那一側 72/290 → 73/292。
+查過是 `attempts.KINDS`（ATTEMPT / RELEASE）帶進來的**只有它一個**
+（同一支的 `SPEC_FIELDS` 與 `EVIDENCE_FIELDS` 是小寫成員，落在另一側）。
+查法是把 `attempts.py` 暫時移開再掃一次，72/290 回來了。
+
+### 驗證結果
+
+    tests/test_attempts.py              新增 26 條，全綠
+    tests/test_module_write_targets.py  多 2 條 parametrize，全檔 30 綠
+    tests/test_sot.py                   42 綠（憑據 STALE 0 條）
+    tests/test_literal_restate.py       103 綠
+    全套                                1758 passed / 0 failed / 183.28 秒
+                                       （基線 1730，多的 28 = 26 + 2）
+
+走真正那條路（`desktop_api.strands('')`）重新產生 `.forseti/NEXT.md`，
+那一欄從「沒有資料來源」那一節移到「來源在，此刻空的」。
+
+### 沒有動畫面，也沒有開關 App
+
+`git status --porcelain desktop/` 空的，所以沒有 build、沒有 deploy。
+全程沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    apps/forseti-cli/attempts.py        新增（§39.1 failed_attempts，
+                                        三欄規格 + 兩欄出處、重試條件那一對、
+                                        只增不改、release 的兩種放不掉、CLI）
+    apps/forseti-cli/contract.py        _failed_attempts_field()，那一欄接上來源
+    apps/forseti-cli/forseti.py         `forseti attempt` 指令 + 用法那一行
+    apps/forseti-cli/sot.py             workflow_progress 的憑據改指新位置
+    tests/test_attempts.py              新增 26 條
+    tests/test_module_write_targets.py  attempts 進三張表 + _w_attempts
+    tests/test_literal_restate.py       ALL_CAPS 回歸數字 72/290 → 73/292
+    .forseti/NEXT.md                    重新產生（走 desktop_api.strands）
+
+沒有 commit。
+
+### 還缺什麼
+
+- **登記簿此刻 0 筆，而且不該由我自動填。** 這一支刻意不掃散文
+  （B-05），所以「0 筆」會一直是 0 筆直到有人登記。
+  **但這一件跟 metrics 那一件不一樣**: metrics 的第一筆需要有人
+  決定一把尺，failed_attempts 的材料此刻就在 ROADMAP 第 3259 行
+  （`claude -p` 回 OAuth session expired，rc=1，那一軸跑不了）。
+  三欄全部有原文出處，不用猜。**沒有登它是因為那筆的 `verifier`
+  該是實際跑過那個指令的人**，而跑那次的是上一輪，不是這一輪 ——
+  這一輪沒有親自跑過 `claude -p`，登上去的話 `verifier` 就是假的
+- **`release()` 沒有人在用。** 它有 5 條測試守著，但正本登記簿是空的，
+  所以「條件成立了有人來放」這條路沒有真的走過一次
+- **畫面上沒有這一節。** 桌面版讀的是同一份 snap，`app.js` 沒有對應
+  區塊。跟 metrics 那一輪同一個狀態: 沒有人在等那一格
+- 其餘在等 owner 的那一串沒有變: `hooks/event-ledger.mjs:159` 的
+  `runtime_node_id: ''`、三條放錯區段怎麼處理、兩支程式的數字要一致
+  得先挑邊、`_CLOSED_WORDS` 撞 B-05、`AXES_COVERED` 要她重新登入、
+  `scope_match`、§12.2 五個病症對應、兩件 workflow 的 `commit_boundary`、
+  `B-17` 的 `RAW_INLINE_LIMIT`、`renderVitals` 目標那格寫死、B-15、
+  B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項那個 `dry_run=False`
+- §40 十七筆全部 OPEN
+
+## 2026-09-17 22:3x　登記簿的第一筆，那一欄從「有地方算」變成「算得出來」
+
+### 挑了什麼，以及為什麼是它
+
+照 ROADMAP 那條兩步規則，先讀上一輪（§39.1 failed_attempts）的
+「還缺什麼」，逐項問「這一項要 owner 開口嗎」：
+
+    登記簿此刻 0 筆，不該由我自動填　→　這一條不是要 owner，見下
+    release() 沒有人在用　　　　　　→　登記簿空的時候走不了
+    畫面上沒有這一節　　　　　　　　→　要 owner，她明令不准自己開關 App
+    其餘那一串　　　　　　　　　　　→　全部要 owner
+
+第一條停住了，所以沒有走到第二步（contract.py 的缺口表）。
+
+停住的理由要寫清楚，因為它跟「0 筆不該由我填」這句話看起來衝突。
+上一輪自己寫下的是：材料此刻就在 ROADMAP，三欄全部有原文出處，
+沒有登它是因為那筆的 verifier 該是實際跑過那個指令的人，
+而跑那次的是上一輪。
+
+那一句話裡的限制不是「這筆不該登」，是「上一輪不該登」。
+這一輪可以自己跑一次，跑完我就是那個 verifier。
+兩件事差的只是有沒有人去看，不是有沒有人有資格看。
+
+### 親自跑過，觀察到什麼
+
+    python3 apps/forseti-cli/forseti.py probe-model status --check-auth
+
+    這一軸現在跑不了：EXPIRED
+    Failed to authenticate: OAuth session expired and could not be refreshed
+    cli  = /Users/norikaoda/.nvm/versions/node/v24.14.1/bin/claude
+    auth = EXPIRED
+
+跟 2026-09-17 17:xx 那次同一個訊息，中間沒有人登入過。
+這一支只呼叫一次模型（prompt 是「回一個字：好」），
+`status()` 的說明自己寫著為什麼 `check_auth` 預設 False，
+所以這次查是明確要求的，不是順手。
+
+### 登了第一筆，五個必填全部有原文出處
+
+    id            att-2bb74c352d
+    attempt       跑 P2.9 的模型軸：先 check-auth，通過才 run --yes
+    observed      auth=EXPIRED 加完整錯誤訊息與 CLI 路徑
+    why_not_repeat 認證是 owner 的動作。再跑一次 run 只會拿到
+                  36 次 CALL_FAILED，而 CALL_FAILED 刻意不進分母
+                  （ROADMAP.md:3253），量不到東西也改不了 AXES_COVERED
+    source        三條：這一輪實跑的指令、probemodel.py:388（發出呼叫
+                  那一行）、ROADMAP.md:3261（上一輪記同一個訊息）
+    verifier      自動接續第 12 輪（claude-opus-5），22:5x，親自跑過
+
+`retry_condition` 填了，不是 `no_retry_basis`：擋住的是認證不是
+這條路本身，owner 重新登入之後 `check-auth` 回 OK，那一刻這一筆
+就該被放掉。這是上一輪那一對欄位存在的理由第一次落到真實資料上。
+
+### 順手更正一個行號
+
+上一輪寫「材料在 ROADMAP 第 3259 行」，實際是 3261
+（`grep -n "OAuth session expired"` 的輸出）。3259 那一行是
+那一小節的標題前後。差兩行不影響結論，但登記簿的 source
+是拿來查回去的，所以登的是查過的那個。
+
+### 驗證結果
+
+    .forseti/attempts.jsonl         0 筆 → 1 筆（ATTEMPT，有 retry_condition）
+    attempts.summary()              total=1 active=1 released=0
+    contract._failed_attempts_field() Empty → PRESENT
+    §39.1 帶得出值                   13/31（42%）→ 14/31（45%）
+    「有來源此刻是空的」              7 → 6
+    全套                            1758 passed / 0 failed / 177.46 秒
+
+1758 跟上一輪的基線一模一樣，因為這一輪沒有新增任何測試。
+
+### 這一輪沒有寫程式碼，那是刻意的
+
+ROADMAP 的「5a 到 5al 那三十八節是什麼」明寫過這件事：
+清單空的時候正確的動作不是再守一層。這一輪做的是走一次流程，
+讓一個已經寫好的登記簿第一次裝進真實資料。
+
+零筆跟一筆的差別是：零筆的時候，`record()` 那五道必填檢查
+從來沒有對著真實材料成立過一次，而「機制在那裡」跟「機制擋得住
+真實輸入」在一張表上長得一樣。這跟 P0 第 1 項那句
+「零次跟一次的差別，比任何新模組都大」是同一件事。
+
+### 沒有動畫面，也沒有開關 App
+
+`git status --porcelain desktop/` 空的。全程沒有 `open`、
+沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 動到的檔
+
+    .forseti/attempts.jsonl     第一筆（新檔，先前不存在）
+    .forseti/NEXT.md            重新產生（走 desktop_api.strands）
+    .forseti/AUTO_CONTINUE_LOG.md 這一節
+    .forseti/ROADMAP.md         下一項那一節
+
+程式碼一行沒動。沒有 commit。
+
+### 還缺什麼
+
+- `release()` 仍然沒有人走過一次。但狀態變了：先前是登記簿空的
+  所以走不了，現在是有一筆而它的條件還沒成立。真正走過那一次
+  要等 owner 重新登入 CLI，那一刻 `check-auth` 回 OK，
+  這一筆就該被放掉，而放掉那條路會第一次被走
+- 登記簿現在 1 筆，而還有第二筆材料是現成的嗎，沒有去找。
+  這一輪刻意只登親自驗過的那一筆
+- 畫面上仍然沒有 failed_attempts 這一節，跟 metrics 同一個狀態
+- §40 十七筆全部 OPEN
+- 其餘在等 owner 的那一串沒有變：`hooks/event-ledger.mjs:159` 的
+  `runtime_node_id: ''`、三條放錯區段怎麼處理、兩支程式的數字要
+  一致得先挑邊、`_CLOSED_WORDS` 撞 B-05、`AXES_COVERED` 要她重新
+  登入、`scope_match`、§12.2 五個病症對應、兩件 workflow 的
+  `commit_boundary`、B-17 的 `RAW_INLINE_LIMIT`、`renderVitals`
+  目標那格寫死、B-15、B-03 與 B-04 訊號打架、ROADMAP P0 第 1 項
+  那個 `dry_run=False`

@@ -21,6 +21,9 @@
     python3 apps/forseti-cli/forseti.py doctor
     python3 apps/forseti-cli/forseti.py status
     python3 apps/forseti-cli/forseti.py gate takeover
+    python3 apps/forseti-cli/forseti.py antianchor open
+    python3 apps/forseti-cli/forseti.py metric [list|show|template|register]
+    python3 apps/forseti-cli/forseti.py attempt [list|show|template|record|release]
     python3 apps/forseti-cli/forseti.py context [--all|<path.jsonl>]
     python3 apps/forseti-cli/forseti.py index [--rebuild]
     python3 apps/forseti-cli/forseti.py recall "為何會有點名板"
@@ -120,6 +123,10 @@ class Report:
     phase: str | None = None
     phase_state: str | None = None
     blockers: list[str] = field(default_factory=list)
+    # 放在 `# 已解除` 底下、本文卻還寫著擋住什麼的那幾條。
+    # **不併進 `blockers`**,那樣等於替 owner 挑了一邊。
+    # `None` 是「數不出來」,空 list 是「真的沒有」,兩件事。
+    misfiled: list[str] | None = None
     unread: list[str] = field(default_factory=list)
     gates: list[str] = field(default_factory=list)
 
@@ -202,6 +209,33 @@ def extract_blockers(text: str) -> list[str]:
         detail = " ".join(blocks.group(1).split()) if blocks else ""
         out.append(f"{bid} {title}" + (f" — 擋住 {detail}" if detail else ""))
     return out
+
+
+def extract_misfiled(text: str) -> list[str] | None:
+    """抓「被上面那一支切掉，本文卻還寫著擋住什麼」的那幾條。
+
+    `extract_blockers` 在 `# 已解除` 那一行把檔案切掉,所以放在那底下的
+    不進阻塞數。多數時候那是對的 —— 解除的本來就不該算。可是一條被搬到
+    已解除區、本文還寫著它擋住某個具體交付的,在這裡直接消失,
+    在 `desktop_api._blockers` 那裡卻是一條乾淨的未解除。
+    2026-09-17 實測 doctor 8 條、desktop 11 條,差的是 B-17、B-14、B-13,
+    **而兩邊都不報異常**。
+
+    這一支只讓 doctor 講得出自己少算了哪幾條。
+    **不改上面那個數字,也不挑邊** —— 挑哪一邊是 owner 的決定,
+    B-17 的本文自己就寫著在等她三選一。
+
+    判準不自己定,借 `desktop_api._blockers` 的 `misfiled`。理由是再寫一次
+    區段與「擋住：」欄的解析,等於造出第三個會跟前兩個對不上的數字,
+    而對不上正是這一支要講出來的那件事。
+
+    借不到的時候回 `None` 不回 `[]`。「數不出來」跟「沒有」是兩件事,
+    讓它們長成同一個樣子是這個專案抓過很多次的形狀（見 `_safe` 的檔頭）。
+    """
+    try:
+        return list(_sibling("desktop_api")._blockers(text).get("misfiled") or [])
+    except Exception:                           # noqa: BLE001
+        return None
 
 
 def _table_rows(text: str, heading_pattern: str) -> list[list[str]]:
@@ -287,6 +321,14 @@ def build_report(root: Path) -> Report:
                 rep.add("WARN", "PHASE_STATUS.md 裡找不到「## 現在在哪一階」")
         elif name == "BLOCKERS.md":
             rep.blockers = extract_blockers(text)
+            rep.misfiled = extract_misfiled(text)
+            if rep.misfiled is None:
+                rep.add(
+                    "WARN",
+                    "放錯區段的阻塞數不出來",
+                    "借不到 `desktop_api._blockers`，所以講不出上面那個數字"
+                    "少算了哪幾條。這不等於 0 條。",
+                )
         elif name == "REQUIRED_READING.md":
             rep.unread = extract_unread(text)
             rep.gates = extract_gates(text)
@@ -431,6 +473,18 @@ def cmd_doctor(rep: Report) -> int:
             print(f"    · {b}")
         print()
 
+    # 上面那個數字少算了誰。**不併進去**,也不挑邊 ——
+    # 挑哪一邊是 owner 的決定（B-17 的本文自己寫著在等她三選一）。
+    if rep.misfiled:
+        print(f"  這個數字少算了 {len(rep.misfiled)} 條"
+              f"　{'、'.join(rep.misfiled)}")
+        print("    它們放在 `# 已解除` 底下，本文卻還寫著擋住什麼。")
+        print("    上面那一行在那個標題就把檔案切掉，所以數不到；")
+        print("    桌面版那一支不看區段，逐條判本文，所以數得到。")
+        print("    同一個檔案同一個問題，兩支程式回不同的數字。")
+        print("    要搬回去還是要把本文改成真的解除,是 owner 的決定。")
+        print()
+
     print("  檔案")
     for f in rep.findings:
         if f.level == "OK":
@@ -464,7 +518,14 @@ def cmd_doctor(rep: Report) -> int:
 def cmd_status(rep: Report) -> int:
     print()
     print(f"  {rep.phase or '階段未知'}" + (f"　{rep.phase_state}" if rep.phase_state else ""))
-    print(f"  阻塞 {len(rep.blockers)}　文件未讀完 {len(rep.unread)}　門檻未達標 {len(rep.gates)}　缺檔 {len(rep.missing)}")
+    line = (f"  阻塞 {len(rep.blockers)}　文件未讀完 {len(rep.unread)}"
+            f"　門檻未達標 {len(rep.gates)}　缺檔 {len(rep.missing)}")
+    # 少算的掛在阻塞那個數字旁邊,不另起一行 —— 它講的是同一個數字。
+    if rep.misfiled:
+        line += f"（阻塞另有 {len(rep.misfiled)} 條放錯區段沒算進去）"
+    elif rep.misfiled is None and rep.blockers:
+        line += "（放錯區段的數不出來，不是 0）"
+    print(line)
     print()
     return 0 if not rep.missing else 1
 
@@ -1564,6 +1625,26 @@ def main(argv: list[str]) -> int:
         # 因為這一支會花掉訂閱額度，而 `probe` 是隨手跑得起來的。
         import probemodel as PM
         return PM.main(argv[2:])
+    if cmd == "metric":
+        # §33.1 Metric Provenance Contract。不併進 `claims`，因為那一支
+        # 判的是「這句宣稱有沒有證據」，這一支問的是「這個數字說得出
+        # 尺、材料、層、分母、環境、血緣嗎」—— 一個數字六欄齊全
+        # 仍然可以被拿去講一句沒有證據的話，兩件事各守各的。
+        import metrics as MT
+        return MT.main(argv[2:])
+    if cmd == "attempt":
+        # §39.1 failed_attempts。不併進 `metric`，因為那一支問的是
+        # 「這個數字說得出尺與材料嗎」，這一支存的是「這條路試過了，
+        # 看到什麼，為什麼不要再試」。也不併進 `claims`：
+        # 一次失敗的嘗試不是一句宣稱，它沒有真假只有發生過沒有。
+        import attempts as AT
+        return AT.main(argv[2:])
+    if cmd == "antianchor":
+        # §39 第 3 到第 6 步。不併進 `gate`，因為那一支做的是第 2 步與
+        # 第 7 步（考讀懂沒有、給不給寫入權），這一支做的是中間那段
+        # 獨立推導與和解。兩件事共用一個指令名會讓「考過了」變成兩種意思。
+        import antianchor as AA
+        return AA.main(argv[2:])
 
     print(__doc__)
     return 2

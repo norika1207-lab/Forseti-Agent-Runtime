@@ -78,26 +78,39 @@ _NO_BLOCK_WORDS = ("擋不住任何東西",)
 
 
 def _blocker_sections(text: str) -> list[dict]:
-    """把 BLOCKERS.md 切成一條一條，每條抽出它自己說的兩件事。
+    """把 BLOCKERS.md 切成一條一條，每條抽出宣告它結束了的三個訊號。
 
-    **兩個訊號分開讀，不合成一個。** 標題說的是「這條結束了沒」，
-    「擋住：」那一欄說的是「它現在擋住什麼具體交付」。
-    兩邊同時說結束才算結束；只有一邊說，那是一個要被看見的不一致，
+    **三個訊號分開讀，不合成一個。** 標題說的是「這條結束了沒」，
+    「擋住：」那一欄說的是「它現在擋住什麼具體交付」，
+    `in_resolved_section` 說的是「它被放在哪一段」。
+    前兩個同時說結束才算結束；只有一邊說，那是一個要被看見的不一致，
     不是一個可以由我挑一邊的問題。
 
     沒有「擋住：」那一行的，`blocks` 回 None 不回空字串 ——
     「沒有寫」跟「寫了無」是兩件事，而後者才是宣告解除。
+
+    `in_resolved_section` 是第三個訊號，2026-09-17 加。它記的是
+    「這一條被放在 `# 已解除` 底下」。先前這一支完全看不到區段，
+    於是一條放在已解除區底下、本文卻還寫著擋住什麼的阻塞，
+    在這裡是一條乾淨的未解除，看不出有任何不一致。
+    而 `forseti.extract_blockers` 只看區段，直接把它切掉不算 ——
+    **同一個檔案同一個問題，兩支程式回不同的數字，而兩邊都不報異常。**
     """
     out: list[dict] = []
     cur: dict | None = None
     take = False
+    resolved = False
     for ln in text.splitlines():
+        if re.match(r"^#\s*已解除\s*$", ln):
+            resolved = True
+            continue
         if ln.startswith("## B-"):
             if cur:
                 out.append(cur)
             title = ln.lstrip("# ").strip()
             bid = title.split("\u3000")[0].split(" ")[0].strip()
-            cur = {"id": bid, "title": title, "blocks": None}
+            cur = {"id": bid, "title": title, "blocks": None,
+                   "in_resolved_section": resolved}
             take = False
             continue
         if cur is None:
@@ -131,9 +144,17 @@ def _blockers(text: str | None = None) -> dict:
     二，B-03 的「擋住：」欄自己寫著「目前擋不住任何東西」，
     照 BLOCKERS.md 開頭的規則那不叫阻塞 —— 但標題沒有結案字樣。
 
-    **這兩條沒有被自動降級。** 兩個訊號打架的時候我不挑一邊，
+    **這兩條沒有被自動降級。** 訊號打架的時候我不挑一邊，
     照樣算進未解除，另外記成 `conflicting` 讓它被看見。
     自己挑一邊等於替 owner 做決定，而這份檔案是她維護的。
+
+    2026-09-17 多了第三個訊號：這一條被放在 `# 已解除` 底下。
+    先前這一支看不到區段，於是 B-17、B-14、B-13 那三條 ——
+    放在已解除區底下而本文還寫著擋住什麼 —— 在這裡是三條乾淨的
+    未解除，看不出有任何不一致。**這一段先前寫著「兩個訊號」，
+    而那個數字被當成窮舉用了兩處（`.forseti/NEXT.md` 與
+    `AUTO_CONTINUE_LOG.md`），登記在 §40 pol-25d1775e5f。**
+    第三個訊號單獨不准關掉任何一條，理由寫在下面迴圈裡。
     """
     if text is None:
         p = REPO / ".forseti" / "BLOCKERS.md"
@@ -142,6 +163,7 @@ def _blockers(text: str | None = None) -> dict:
 
     open_items, conflicting, undeclared = [], [], []
     closed = 0
+    misfiled = []
     for s in secs:
         by_title = any(w in s["title"] for w in _CLOSED_WORDS)
         blocks = s["blocks"]
@@ -151,28 +173,48 @@ def _blockers(text: str | None = None) -> dict:
         else:
             by_blocks = (blocks.startswith("無") or
                          any(w in blocks for w in _NO_BLOCK_WORDS))
+        by_section = bool(s.get("in_resolved_section"))
+        # **區段這個訊號不准單獨關掉任何一條。** 關閉的條件還是
+        # 標題與擋住欄兩邊都說結束，跟 2026-09-16 那一版一樣。
+        # 理由是區段是三個訊號裡最弱的那個:它記的是「有人把這一段
+        # 搬到哪裡」，而搬動是一次手動動作，本文一個字都不必改。
+        # 讓它有關閉權等於「搬過去就算解除」，那正是要抓的東西。
         if by_title and by_blocks:
             closed += 1
             continue
+        said = [n for n, v in (("標題", by_title),
+                               ("擋住欄", by_blocks),
+                               ("所在區段", by_section)) if v]
         item = {
             "id": s["id"],
             "title": s["title"],
             "blocks": blocks,
-            "said_closed_by": ("標題" if by_title else
-                               ("擋住欄" if by_blocks else None)),
+            # 單一訊號的時候字串跟改這一版之前一模一樣，
+            # 多個訊號才用「、」串起來 —— 不是為了好看，
+            # 是因為下游要知道打架的是哪幾邊才查得下去。
+            "said_closed_by": "、".join(said) if said else None,
+            "in_resolved_section": by_section,
         }
         open_items.append(item)
-        if by_title or by_blocks:
+        if said:
             conflicting.append(item)
+        if by_section:
+            misfiled.append(s["id"])
 
     return {
         "total": len(secs),
         "open": len(open_items),
         "closed": closed,
         "open_items": open_items[:10],
-        # 兩個訊號打架的：一邊說結束了，另一邊還寫著擋住什麼。
+        # 訊號打架的：其中一個說結束了，而這一條照樣算未解除。
         # **這個數字跟 open 不相減**，它們回答的不是同一個問題。
         "conflicting": conflicting,
+        # 放在 `# 已解除` 底下、卻沒被判成解除的。
+        # 這一組是 `conflicting` 的子集，另外列是因為它有一個
+        # 別人沒有的後果：`forseti.extract_blockers` 在那一行就把
+        # 檔案切掉，所以 `forseti doctor` 根本數不到這幾條。
+        # 同一個檔案同一個問題，兩支程式回不同的數字。
+        "misfiled": misfiled,
         # 連「擋住：」那一行都沒有的。照 BLOCKERS.md 的規則那是待辦，
         # 但沒有寫不等於沒有擋，所以只記下來不降級。
         "undeclared": undeclared,
@@ -211,8 +253,16 @@ def _blocker_lines(b: dict, *, limit: int = 8) -> list[str]:
     if conf:
         ids = "、".join(x["id"] for x in conf)
         lines.append("")
-        lines.append(f"其中 {len(conf)} 條的兩個訊號打架（{ids}）："
-                     "一邊宣告結束，另一邊還寫著擋住什麼。")
+        # 先前這一句寫死「兩個訊號」。訊號變三個之後那句話會是錯的，
+        # 而它錯得很安靜 —— 讀的人不會知道還有第三邊沒被講到。
+        lines.append(f"其中 {len(conf)} 條的訊號打架（{ids}）："
+                     "有一邊宣告結束，而它照樣算未解除。")
+    mis = b.get("misfiled") or []
+    if mis:
+        lines.append(f"其中 {len(mis)} 條（{'、'.join(mis)}）"
+                     "放在 `# 已解除` 底下，本文卻還寫著擋住什麼。"
+                     "**`forseti doctor` 數不到這幾條** —— 它在那一行就把檔案切掉了，"
+                     "所以那邊的阻塞數會比這裡少。挑哪一邊是 owner 的決定。")
         lines.append("**沒有自動降級**，因為挑哪一邊是 owner 的決定。")
     return lines
 
@@ -1768,6 +1818,34 @@ def _write_fork_meta(src_cli: str, new_cli: str, n: int) -> str:
     return new_ui
 
 
+def verified_lines(snap: dict) -> list[str]:
+    """交接檔「已驗證的狀態」那一節。**這裡是它唯一的算法。**
+
+    2026-09-17 抽出來，理由是外面有人要用而拿不到。`antianchor.canonical()`
+    的 `state` 那一欄寫著它借 `snap["verified"]`，但 `strands()` 的 snap
+    **沒有這個 key** —— 那個 key 只存在於 `_write_handoff()` 的區域變數裡。
+    所以任何照著模組說明去拿的呼叫端，拿到的永遠是空的。
+
+    這跟上面 `blk_lines` 那一段註解講的是同一個形狀（`snap["blockers"]`
+    只存在於 `snapshot()`），差別只在那一個已經被抓到過。
+    **不在呼叫端重算一份**，兩份會分歧的判斷遲早會分歧，
+    而分歧那天不會有錯誤訊息。
+
+    來源兩個都在 `strands()` 的 snap 裡：`spec`（必讀文件讀完幾份）
+    與 `checkpoints`（有幾個可以回去的點）。**兩個都沒有就回空清單**，
+    不補一句「沒有已驗證的狀態」—— 那句話會被讀成一個結論，
+    而它其實只代表這兩個來源此刻都沒東西。
+    """
+    sp = (snap or {}).get("spec") or {}
+    cps = (snap or {}).get("checkpoints") or {}
+    out: list[str] = []
+    if sp.get("has"):
+        out.append(f"必讀文件 {sp.get('full', 0)}/{sp.get('total', 0)} 讀完")
+    if cps.get("total"):
+        out.append(f"checkpoint {cps['total']} 個")
+    return out
+
+
 def _write_handoff(snap: dict) -> dict | None:
     """把此刻的狀態寫成 `.forseti/NEXT.md`。C4
 
@@ -1806,20 +1884,22 @@ def _write_handoff(snap: dict) -> dict | None:
     for m in (gg.get("missing_factors") or []):
         unknowns.append(f"GAC 算不出來，缺 {m.get('factor', '')}：{m.get('why', '')[:60]}")
 
-    sp = snap.get("spec") or {}
-    verified = []
-    if sp.get("has"):
-        verified.append(f"必讀文件 {sp.get('full', 0)}/{sp.get('total', 0)} 讀完")
-    if cps.get("total"):
-        verified.append(f"checkpoint {cps['total']} 個")
+    verified = verified_lines(snap)
 
     # 這份交接照 §39.1 少了什麼。算不出來就不寫那一節 ——
     # 寫一個算失敗的空殼比不寫更糟，它看起來像「沒有缺口」。
     con_lines, art_lines, inv_lines, rck_lines = [], [], [], []
+    crd_lines = []
     try:
         import contract as CT
         _rep = CT.report(snap, w)
         con_lines = CT.summary_lines(_rep, limit=8)
+        # 2026-09-17 21:xx 加。缺口清單只印缺的，所以 `runtime_node`
+        # 從 NO_SOURCE 變成有值之後，這份交接檔照樣答不出它在哪台機器上
+        # 寫的 —— 值算出來了，正文看不到。這一節印的是座標那幾欄。
+        # **傳的是整份 report 不是 ctx**，因為它要的是每一欄的狀態
+        # （只印 PRESENT），而狀態在 `check()` 那一半算，不在 ctx 裡。
+        crd_lines = CT.coordinate_lines(_rep)
         # 2026-09-16 19:2x 加。§39.1 把 invalidated_conclusions 放在
         # Limits 那一組，它的用途是「不要讓後繼者再帶著這句錯的話走」，
         # 而缺口清單只印缺的欄位，所以這一欄有值之後照樣看不到內容。
@@ -1836,6 +1916,7 @@ def _write_handoff(snap: dict) -> dict | None:
         rck_lines = CT.recheck_lines(_rep.get("recheck"))
     except Exception:                                  # noqa: BLE001
         con_lines, art_lines, inv_lines, rck_lines = [], [], [], []
+        crd_lines = []
 
     # BLOCKERS.md 那一半。`unknowns` 的來源是 blocked steps 與未讀文件，
     # 跟這個不是同一件事，所以是新的一節不是併進去。
@@ -1851,6 +1932,7 @@ def _write_handoff(snap: dict) -> dict | None:
         "at": time.time(),
         "blocker_lines": blk_lines,
         "contract_lines": con_lines,
+        "coordinate_lines": crd_lines,
         "artifact_lines": art_lines,
         "invalidated_lines": inv_lines,
         "recheck_lines": rck_lines,
@@ -2571,6 +2653,100 @@ FEATURES = [
 ]
 
 
+#: 還沒做的。**這一份跟上面那份一樣要指得回證據**,
+#: 每一筆的 `blocked` 講的是「被什麼擋住」,不是「還沒排到」。
+#:
+#: 四種擋法分開,因為處理方式完全不同:
+#:   NO_CODE    一行都沒有,要從頭寫
+#:   JS_ONLY    src/ 有實作,Python 這邊沒接。硬接會得到一排
+#:              NOT_APPLICABLE,因為那些吃的是結構化事件不是 transcript
+#:   NO_DATA    程式碼可以寫,但沒有資料它只會輸出噪音
+#:   OWNER      要 owner 決定,不是工程問題
+#:
+#: **把這四種混成一句「還沒做」,會讓人以為它們可以用同一種方式推進。**
+MISSING: tuple[dict, ...] = (
+    {"name": "因果 X 光", "spec": "v5.0 §16.1 八視圖之一",
+     "what": "一個壞掉的結果,往回追出是哪一個決定、哪一份證據、"
+             "哪一次 context 變動造成的。不是看那一輪做了什麼,"
+             "是看那一輪為什麼會那樣做",
+     "barrier": "NO_CODE",
+     "blocked": "沒有模組。§16.4 要求因果歸因除非有決定性連結"
+                "否則一律標成機率性,那需要一個 lineage 圖,現在沒有"},
+    {"name": "脈絡 MRI", "spec": "v5.0 §16.1 八視圖之一",
+     "what": "這個決定是被哪些脈絡、記憶、快取、證據促成的。"
+             "壓縮之後最該問的就是這個:它現在憑什麼還這樣想",
+     "barrier": "NO_CODE",
+     "blocked": "沒有模組。需要 ContextFragment 這個物件,Vol2 十五個"
+                "核心物件裡缺的那十個之一"},
+    {"name": "系譜瀏覽", "spec": "v5.0 §16.1 八視圖之一",
+     "what": "一個宣稱從哪裡來、被誰引用過、中途有沒有被改寫。"
+             "白點抓的是單點對不上,這個看的是一條鏈",
+     "barrier": "NO_CODE",
+     "blocked": "沒有模組。evidence lineage 是 v5.0 副標新增的兩個"
+                "概念之一,目前只有單點的 E0 到 E4,沒有鏈"},
+    {"name": "權限地圖", "spec": "v5.0 §16.1 八視圖之一",
+     "what": "誰有權改什麼、誰批准過什麼、哪兩個東西在爭同一個權威。"
+             "authority.py 算得出單次判定,這個要的是整張圖",
+     "barrier": "NO_CODE",
+     "blocked": "沒有模組。authority.py 有八級信任階層與衝突偵測,"
+                "但沒有把它畫成圖的那一層"},
+    {"name": "執行拓樸", "spec": "v5.0 §16.1 八視圖之一",
+     "what": "有幾個 agent 在跑、它們各自看到什麼版本的真實、"
+             "哪一個的世界觀跟別人不一樣",
+     "barrier": "JS_ONLY",
+     "blocked": "src/topology.js 203 行有實作,Python 這邊沒接。"
+                "它吃的是結構化事件不是 transcript,硬接會得到"
+                "一排 NOT_APPLICABLE,那比不接更糟"},
+    {"name": "金點", "spec": "WIDGET_SPEC §5.3",
+     "what": "你這次的決策跟過去不一樣,語氣是供你參考不是警告。"
+             "它不判對錯,只指出差異",
+     "barrier": "NO_DATA",
+     "blocked": "需要粉紅點當訓練資料,目前 0 則。規格明寫不要提前做:"
+                "沒有資料的分類器只會輸出噪音,而噪音會讓整個提示系統"
+                "失去信任"},
+    {"name": "北極星版本鏈", "spec": "v5.0 §6 Goal Evolution",
+     "what": "北極星換過幾版、每一版是誰拍板的、一個舊決定當時"
+             "對著哪一版。沒有它,所有舊決定都會被拿現在的標準評",
+     "barrier": "NO_DATA",
+     "blocked": "northstar.Chain 寫好了,但北極星到現在換版 0 次,"
+                "那條鏈是空的。adopt 是權威行為,要等第一次真的換版"},
+    {"name": "紫點下判決", "spec": "docs/spec-v2.0 §6.2",
+     "what": "偏離目標從「可疑」升成「確認」。現在只出得了 SUSPECTED,"
+             "因為下判決要四個條件,一個都還沒做",
+     "barrier": "OWNER",
+     "blocked": "GAC 算不出來,缺 scope_match 這個因子。那要你定義"
+                "什麼算離開北極星的範圍 —— 我定過兩次,兩次都誤判"},
+    {"name": "換模型會不會變差", "spec": "v5.0 §15 三軸的 models 與 contexts",
+     "what": "同一個判斷題餵給不同模型、在 context 被塞滿之後再問一次,"
+             "看它還做不做得對。這是唯一能回答「Forseti 自己有沒有"
+             "變差」的機制",
+     "barrier": "OWNER",
+     "blocked": "probemodel.py 九題與執行器做完了,一次都還沒跑成:"
+                "claude CLI 沒有登入(claude auth status 回 loggedIn "
+                "false)。登入之後跑一次就量得到"},
+    {"name": "五個病症分類", "spec": "docs/spec-v2.0 §12.2",
+     "what": "「需要注意」那一頁的第二層。現在照 registry 的 axis 分,"
+             "規格要的是問題、轉折、錯誤、飄移、欺騙五類",
+     "barrier": "OWNER",
+     "blocked": "規格列了五類但沒有給 FP 編號的對應表。"
+                "自己編一個等於發明分類"},
+    {"name": "團隊與方法論共享", "spec": "Vol2 L2 之後",
+     "what": "Workspace、Project、Methodology、Insight 四個實體。"
+             "多人協作、把一套協作方法分享出去",
+     "barrier": "OWNER",
+     "blocked": "Vol4 §1 明寫下一階要等前一階的核心假設被真實使用"
+                "驗證才解鎖,而九個 Stage 目前一階都沒過出口條件。"
+                "現在做這些就是用終極願景掩蓋目前產品不好用"},
+)
+
+BARRIER_LABEL = {
+    "NO_CODE": "一行都沒有",
+    "JS_ONLY": "有實作沒接上",
+    "NO_DATA": "等資料長出來",
+    "OWNER": "等你決定",
+}
+
+
 def features() -> dict:
     """功能說明加當場驗證。§36"""
     st = _safe(selftest, {}) or {}
@@ -2593,6 +2769,18 @@ def features() -> dict:
         # 藏起來的那一項，正是會被問到的那一項。
         # 2026-09-14 之後這裡是空的。全部接完了。
         "not_wired": [],
+        # 還沒做的。上面那份是「做了而且證明得了它是活的」，
+        # 這一份是「還沒做，以及被什麼擋住」。
+        #
+        # **兩份一起出才誠實。** 只列做好的那一份，21/21 全綠，
+        # 看起來像做完了 —— 而實際上八個 X-Ray 視圖只有三個、
+        # 紫點下不了判決、換模型會不會變差一次都還沒量過。
+        "missing": [dict(m, barrier_label=BARRIER_LABEL.get(m["barrier"], m["barrier"]))
+                    for m in MISSING],
+        "missing_by_barrier": {
+            BARRIER_LABEL[k]: sum(1 for m in MISSING if m["barrier"] == k)
+            for k in ("NO_CODE", "JS_ONLY", "NO_DATA", "OWNER")
+        },
     }
 
 

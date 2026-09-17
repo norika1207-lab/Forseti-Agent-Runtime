@@ -74,9 +74,9 @@ CLI = ROOT / "apps" / "forseti-cli"
 #: **那條紅是這個檔案唯一的用處**：其餘每一條都只看自己那一支，
 #: 新增的模組在它們眼裡不存在。
 GUARDED_HERE = frozenset({
-    "advicetrack", "antianchor", "blockread", "commit", "coverage",
-    "event_ledger", "gate", "identity", "pollution", "sufficiency",
-    "workflow",
+    "advicetrack", "antianchor", "attempts", "blockread", "commit",
+    "coverage", "event_ledger", "gate", "identity", "metrics",
+    "pollution", "sufficiency", "workflow",
 })
 
 #: 另外三支守在 `tests/test_state_changing_writes.py`，那裡是從
@@ -238,6 +238,55 @@ def _w_antianchor(tmp: Path) -> Path:
     return antianchor.Log(tmp).path
 
 
+def _w_attempts(tmp: Path) -> Path:
+    """走 `record()`，五個必填全部餵真的值。
+
+    少餵任何一個，`record()` 會在寫檔之前就 return 一個
+    `{"ok": False}` —— 那樣量到的零是提早 return 的零，
+    跟「它不寫」長得一樣（檔頭那個假陰性）。
+    """
+    import attempts
+    p = tmp / "attempts.jsonl"
+    r = attempts.record(
+        attempt="守門測試", observed_result="守門測試",
+        why_not_repeat="守門測試", source=["守門測試"],
+        verifier="守門測試", no_retry_basis="守門測試", path=p)
+    assert r["ok"], f"登錄被拒絕了，那這一條量到的零就不是零：{r}"
+    return p
+
+
+def _w_metrics(tmp: Path) -> Path:
+    """走 `build()` 再 `register()`，不直接餵一個手組的 dict。
+
+    `register()` 擋下「不是 build() 出來的東西」，所以手組的 dict
+    會在寫檔之前就 return —— 那樣量到的零是提早 return 的零，
+    跟「它不寫」長得一樣（檔頭那個假陰性）。
+    """
+    import metrics
+    built = metrics.build(
+        metric_name="守門測試", semantic_definition="守門測試不算一把尺",
+        numerator=1, denominator=2, sample_count_N=2,
+        material_class="synthetic", system_layer="end-to-end",
+        measured_by="守門測試", verification_method="守門測試",
+        applicability_scope="守門測試",
+        target_environment=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        model_id=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        model_hash=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        config_hash=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        code_commit=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        seed=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        cache_state=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        raw_metric_artifact=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        confidence_interval=metrics.absent(metrics.UNKNOWN, "守門測試"),
+        execution_environment={"python": "守門測試"},
+    )
+    assert built["ok"], f"組不起來，那這一條量到的零就不是零：{built}"
+    p = tmp / "metrics.jsonl"
+    r = metrics.register(built["record"], path=p)
+    assert r["ok"], f"登記被拒絕了，那這一條量到的零就不是零：{r}"
+    return p
+
+
 def _w_sufficiency(tmp: Path) -> Path:
     import sufficiency
     lg = sufficiency.Log(tmp)
@@ -255,12 +304,14 @@ def _w_workflow(tmp: Path) -> Path:
 WRITERS = {
     "advicetrack": _w_advicetrack,
     "antianchor": _w_antianchor,
+    "attempts": _w_attempts,
     "blockread": _w_blockread,
     "commit": _w_commit,
     "coverage": _w_coverage,
     "event_ledger": _w_event_ledger,
     "gate": _w_gate,
     "identity": _w_identity,
+    "metrics": _w_metrics,
     "pollution": _w_pollution,
     "sufficiency": _w_sufficiency,
     "workflow": _w_workflow,
@@ -321,13 +372,15 @@ def test_只寫該寫的那一個檔案(name, tmp_path, monkeypatch):
 # 驗不到「不傳的時候它去哪」—— 而系統平常跑的正是不傳的那條路。
 
 def _default_of(name: str) -> Path:
-    import advicetrack, antianchor, blockread, commit, coverage    # noqa: E401
+    import advicetrack, antianchor, attempts                        # noqa: E401
+    import blockread, commit, coverage                             # noqa: E401
     import event_ledger                                            # noqa: E401
-    import gate, identity, pollution, sufficiency, workflow        # noqa: E401
+    import gate, identity, metrics, pollution, sufficiency, workflow  # noqa: E401
     import desktop_api                                             # noqa: E401
     return {
         "advicetrack": lambda: advicetrack.LOG,
         "antianchor": lambda: antianchor.Log().path,
+        "attempts": lambda: attempts.LOG,
         # **`blockread` 沒有自己的預設。** `BlockLog.__init__` 的 `root`
         # 沒有預設值,位置整個由呼叫端決定,而全 repo 只有兩個呼叫端:
         # `desktop_api.py:921` 餵 `desktop_api.REPO`,`blockread.py:197`
@@ -339,6 +392,7 @@ def _default_of(name: str) -> Path:
         "event_ledger": lambda: event_ledger.default_jsonl(),
         "gate": lambda: gate.LOG,
         "identity": lambda: identity.registry_path(),
+        "metrics": lambda: metrics.LOG,
         "pollution": lambda: pollution.LOG,
         "sufficiency": lambda: sufficiency.Log().path,
         "workflow": lambda: workflow.boundary_path(),
@@ -351,12 +405,14 @@ def _default_of(name: str) -> Path:
 DEFAULT_NAMES = {
     "advicetrack": "advice_ledger.jsonl",
     "antianchor": "antianchor.jsonl",
+    "attempts": "attempts.jsonl",
     "blockread": "reading_blocks.jsonl",
     "commit": "commits.jsonl",
     "coverage": "reading_coverage.jsonl",
     "event_ledger": "event_ledger.jsonl",
     "gate": "gate.jsonl",
     "identity": "identity.jsonl",
+    "metrics": "metrics.jsonl",
     "pollution": "pollution.jsonl",
     "sufficiency": "sufficiency.jsonl",
     "workflow": "workflow_boundary.jsonl",

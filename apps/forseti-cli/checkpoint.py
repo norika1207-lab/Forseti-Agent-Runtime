@@ -107,19 +107,68 @@ def last_good(session: str, path: Path | None = None) -> dict | None:
     return max(marked, key=lambda r: r.get("at", 0)) if marked else None
 
 
+def _why_no_lg(els: dict) -> str:
+    """沒有 last_good 的時候那句話。**主詞要講出來。**
+
+    先前寫的是「沒有任何 checkpoint 被標成 last_good」,沒有主詞,
+    而它算的只有這條 session。碟上另有被標記的時候,那句話讀起來是
+    一句全稱否定,對接手的人是誤導。
+    """
+    why = ("這條 session 沒有任何 checkpoint 被標成 last_good。"
+           "系統不自己挑 —— 最近的那一個常常正是出事的那一個")
+    if els.get("last_good"):
+        why += (f"。碟上另有 {els['last_good']} 個被標成 last_good 的 "
+                f"checkpoint,分屬 {els['sessions']} 條別的 session。"
+                "**它們不在這條線上** —— 算不算數是 owner 的決定,"
+                "這裡只把它們存在這件事講出來")
+    return why
+
+
+def elsewhere(session: str, path: Path | None = None) -> dict:
+    """碟上**不屬於這條 session** 的 checkpoint 有哪些。只講事實。
+
+    ## 為什麼要有這一支
+
+    2026-09-17 實測:`.forseti/checkpoints.jsonl` 裡有 3 筆,全部
+    `last_good=True`,分屬兩條舊 session。而這一條 session 是 0 筆,
+    於是交接檔對接手的人說的是「一個 checkpoint 都沒有」「沒有任何
+    checkpoint 被標成 last_good」。兩句話各自都對(主詞是這條 session),
+    合起來讀卻是「完全沒有可以回去的點」—— 而碟上有三個,是人親手標的。
+
+    ## 這一支不做判斷
+
+    **不跨 session 挑 last_good。** `last_good()` 的政策沒有改,
+    這裡回的是一組數字,讓上層把事實講出來,而「別條 session 的點
+    算不算這條線上的點」仍然是 owner 的決定。這一條跟模組說明
+    「系統自己挑會挑到最近的那一個」是同一個理由:講事實不代表可以
+    替人做選擇。
+    """
+    rows = [r for r in load(path=path)
+            if r.get("session", "") != session]
+    marked = [r for r in rows if r.get("last_good")]
+    return {
+        "total": len(rows),
+        "last_good": len(marked),
+        "sessions": len({r.get("session", "") for r in rows}),
+        "latest_at": max((r.get("at", 0) for r in rows), default=None),
+    }
+
+
 def summary(session: str, path: Path | None = None) -> dict:
     rows = load(session=session, path=path)
     lg = last_good(session, path)
+    els = elsewhere(session, path)
     return {
         "total": len(rows),
+        # 碟上別條 session 的那些。**不併進 total** —— 兩個回答的不是
+        # 同一個問題(這條線上有沒有 ／ 這台機器上有沒有)。
+        "elsewhere": els,
         "rows": [{"id": r["id"], "n": r["n"], "reason": r["reason"],
                   "at": r["at"], "last_good": r.get("last_good", False),
                   "goal": (r.get("goal") or "")[:80],
                   "unknowns": len(r.get("unknowns") or [])}
                  for r in rows[-12:]][::-1],
         "last_good": ({"id": lg["id"], "n": lg["n"], "at": lg["at"]} if lg else None),
-        "why_no_last_good": (None if lg else
-                             "沒有任何 checkpoint 被標成 last_good。"
-                             "系統不自己挑 —— 最近的那一個常常正是出事的那一個"),
+        "why_no_last_good": (None if lg else _why_no_lg(els)),
         "reasons": list(REASONS),
     }

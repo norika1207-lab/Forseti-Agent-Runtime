@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -511,3 +512,241 @@ def can_write(root: Path = REPO, *, session: str) -> bool:
     if not enforced(root):
         return True
     return bool(state(root, session=session).get("reconciled"))
+
+
+# ---------------------------------------------------------------------------
+# CLI 入口
+# ---------------------------------------------------------------------------
+#
+# 2026-09-17 加。`forseti.py` 的模組說明最後一句寫著
+# 「一個沒有入口的機制等於不存在」，而這一支寫完的那一輪自己記著
+# 「它現在是一個可呼叫但沒有入口的模組。這是缺口，不是設計。」
+#
+# **這一節不加任何新判斷。** 每一個 sub-command 都是上面那六支的
+# 轉接，印出來的每一句都指得回它們的回傳值。
+
+
+def _live(root: Path) -> tuple[dict, dict]:
+    """拿當下的 snap 與 work。**只有這一個地方去驅動被考的系統。**
+
+    `canonical()` 自己不去叫 `desktop_api.strands()`（它的模組說明寫著
+    理由：一支用來考試的模組不該反過來驅動被考的系統），所以那一步
+    留在這裡做。
+
+    `verified` 是補上去的，不是 `strands()` 回的。`strands()` 的 snap
+    **沒有這個 key** —— 它只存在於 `_write_handoff()` 的區域變數裡，
+    所以照模組說明去拿的人拿到的永遠是空的。算法沒有在這裡重寫一份，
+    叫的是 `desktop_api.verified_lines()`，那支 2026-09-17 為了這件事
+    從 `_write_handoff()` 裡抽出來。
+    """
+    import desktop_api as D
+    snap = D.strands()
+    work = D.work()
+    out = dict(snap)
+    out["verified"] = D.verified_lines(snap)
+    return out, work
+
+
+def _session(rest: list[str]) -> str:
+    """這條線的識別。`--session` 優先，否則問 `forseti.current_session()`。
+
+    **不在這裡重寫一份**。權限綁在這個值上，兩份會分歧的取法
+    分歧那天的後果是「別人考過的算到我頭上」。
+    """
+    for i, a in enumerate(rest):
+        if a == "--session" and i + 1 < len(rest):
+            return rest[i + 1]
+    try:
+        import forseti
+        return forseti.current_session()
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def _arg(rest: list[str], flag: str, default: str = "") -> str:
+    for i, a in enumerate(rest):
+        if a == flag and i + 1 < len(rest):
+            return rest[i + 1]
+    return default
+
+
+def _print_state(st: dict) -> None:
+    print()
+    print(f"  這條線　{st.get('session') or '（認不出來）'}")
+    if st.get("derivation"):
+        print(f"  推導　{st['derivation']}　{st.get('stage', '')}")
+    print(f"  和解完成　{'是' if st.get('reconciled') else '否'}")
+    print(f"  理由　{st.get('why', '')}")
+    if st.get("unclassified"):
+        print("  還沒分類的差異　" + "、".join(st["unclassified"]))
+    if st.get("verified_fields"):
+        print("  比對一致的　" + "、".join(st["verified_fields"]))
+    if st.get("nothing_verified"):
+        print("  沒有正典可以對的　" + "、".join(st["nothing_verified"]))
+    print(f"  強制擋人　{'開' if st.get('enforced') else '關（只記錄不擋）'}")
+    print()
+
+
+def main(argv: list[str]) -> int:
+    """`forseti antianchor <status|open|submit|reveal|classify|show>`
+
+    v5.0 §39 的第 3 到第 6 步。順序是硬的：沒交推導不揭曉，
+    沒揭曉不分類 —— 那幾條拒絕就是這整套的重點，繞過去之後
+    剩下的只是流程表演。
+    """
+    sub = argv[0] if argv else "status"
+    rest = argv[1:]
+    root = Path(_arg(rest, "--root")) if _arg(rest, "--root") else REPO
+    sess = _session(rest)
+
+    if sub == "status":
+        _print_state(state(root, session=sess))
+        return 0
+
+    if sub == "open":
+        snap, work = _live(root)
+        can_now = canonical(snap, work, root)
+        row = open_derivation(root, session=sess, snap=snap, work=work)
+        print()
+        print("  反錨定接手　§39 第 3 步")
+        print()
+        print("  先看到答案再推導，推導出來的就是那個答案。")
+        print("  所以這張卷**不帶答案**，四欄各自問你現在自己推出什麼。")
+        print()
+        print(f"  這條線　{sess or '（認不出來）'}")
+        print(f"  推導　{row['id']}")
+        print()
+        for a in row["asks"]:
+            mark = {HAS_VALUE: "●", EMPTY: "○", NO_SOURCE: "✗"}.get(
+                a["canonical_state"], "?")
+            print(f"  {mark} {a['field']}　{a['zh']}（{a['en']}）")
+            if a["canonical_state"] == NO_SOURCE:
+                # NO_SOURCE 的理由是結構性的（§41 的 triage 引擎沒有實作），
+                # 講出來不會漏答案，而且不講的話受測者會白推導一欄。
+                why = can_now["fields"][a["field"]].get("why", "")
+                print(f"      這一欄沒有正典可以揭曉：{why[:110]}")
+            elif a["canonical_state"] == EMPTY:
+                # **EMPTY 的理由不准印。** 它解釋的是「為什麼此刻是空的」，
+                # 而那句話本身就是答案 —— 實測 `next_action` 那一欄的理由
+                # 寫著「2 件任務的步驟全部驗證完成了，所以沒有東西可以派」，
+                # 印出來等於把 §39 第 3 步要人自己推的那一欄直接告訴他。
+                # 受測者需要知道的是「這一欄評不了分」，那是結構；
+                # 為什麼空是內容，屬於第 5 步。
+                print("      這一欄此刻是空的。**為什麼空是答案的一部分，"
+                      "揭曉的時候才說。**")
+        print()
+        if not row["answerable"]:
+            print("  ⚠ 四欄**一欄都沒有正典可以對**。這一次走完流程會完成，")
+            print("    在證據上是空的 —— `reveal` 會把那四欄標成沒有驗到。")
+            print()
+        print("  交推導（只能交一次）：")
+        print("    echo '{\"state\": [\"...\"], \"blockers\": [\"...\"]}' | \\")
+        print(f"      python3 apps/forseti-cli/forseti.py antianchor submit {row['id']}")
+        print()
+        print("  兩件這道門擋不住的事，寫在這裡不是寫在模組說明裡而已：")
+        print("    一，它防不了偷看。讀得到 .forseti/ 的人自己算一次正典就看到全部答案。")
+        print("    二，`open` 這個動作本身會叫 strands()，而它尾段會重寫")
+        print("        .forseti/NEXT.md —— 那份裡面就有這四欄的答案。")
+        print()
+        return 0
+
+    if sub == "submit":
+        if not rest or rest[0].startswith("-"):
+            print("要交哪一份推導？　forseti antianchor submit <derivation_id>",
+                  file=sys.stderr)
+            return 2
+        raw = sys.stdin.read()
+        try:
+            answer = json.loads(raw) if raw.strip() else {}
+        except ValueError as e:                              # noqa: BLE001
+            print(f"讀不懂推導，要是 JSON：{e}", file=sys.stderr)
+            return 2
+        if not isinstance(answer, dict):
+            print("推導要是一個物件：{\"state\": [...], \"blockers\": [...]}",
+                  file=sys.stderr)
+            return 2
+        res = submit(root, derivation_id=rest[0], answer=answer)
+        if not res.get("ok"):
+            print(f"  ✗ {res.get('why')}")
+            return 2
+        print()
+        print(f"  收下了　{res['id']}")
+        print("  有作答的欄　" + ("、".join(res["answered"]) or "（一欄都沒有）"))
+        print()
+        print("  揭曉：")
+        print(f"    python3 apps/forseti-cli/forseti.py antianchor reveal {res['id']}")
+        print()
+        return 0
+
+    if sub == "reveal":
+        if not rest or rest[0].startswith("-"):
+            print("要揭曉哪一份？　forseti antianchor reveal <derivation_id>",
+                  file=sys.stderr)
+            return 2
+        snap, work = _live(root)
+        res = reveal(root, derivation_id=rest[0], snap=snap, work=work)
+        if not res.get("ok"):
+            print(f"  ✗ {res.get('why')}")
+            return 2
+        print()
+        print(f"  揭曉　{res['id']}　§39 第 5 步")
+        if res.get("canonical_changed"):
+            print("  ⚠ 正典在推導期間變了。**這是事實不是判定** ——")
+            print("    可能正是第 6 步的「現實變了」，也可能是有人去改了來源，")
+            print("    這一支分不出來是哪一種。")
+        print()
+        for d in res["diffs"]:
+            mark = {SAME: "✓", DIFFERENT: "✗"}.get(d["result"], "·")
+            print(f"  {mark} {d['field']}　{d['zh']}　{d['result']}")
+            if d.get("why"):
+                print(f"      {d['why'][:140]}")
+        print()
+        if res["nothing_verified"]:
+            print("  這幾欄什麼都沒驗到：" + "、".join(res["nothing_verified"]))
+            print("  **兩邊都空不算答對。** 不算進通過的欄。")
+            print()
+        if res["needs_classification"]:
+            print("  要分類的差異：" + "、".join(res["needs_classification"]))
+            print("  四類沒有一類算得出來，所以 `--by` 必填：")
+            for k, en, zh in CLASSES:
+                print(f"    {k}　{zh}（{en}）")
+            print(f"    python3 apps/forseti-cli/forseti.py antianchor classify "
+                  f"{res['id']} <欄> <類> --by <誰>")
+            print()
+        return 0
+
+    if sub == "classify":
+        if len(rest) < 3:
+            print("forseti antianchor classify <derivation_id> <欄> <類> "
+                  "--by <誰> [--reason 為什麼]", file=sys.stderr)
+            return 2
+        by = _arg(rest, "--by")
+        res = classify(root, derivation_id=rest[0], field=rest[1],
+                       kind=rest[2], by=by, reason=_arg(rest, "--reason"))
+        if not res.get("ok"):
+            print(f"  ✗ {res.get('why')}")
+            return 2
+        print()
+        print(f"  記下了　{res['field']}　{res['class']}　判的人 {res['by']}")
+        print()
+        return 0
+
+    if sub == "show":
+        if not rest or rest[0].startswith("-"):
+            print("要看哪一份？　forseti antianchor show <derivation_id>",
+                  file=sys.stderr)
+            return 2
+        rec = reconciliation(root, derivation_id=rest[0])
+        if not rec.get("ok"):
+            print(f"  ✗ {rec.get('why')}")
+            return 2
+        _print_state({**rec, "session": "", "derivation": rest[0],
+                      "enforced": enforced(root)})
+        return 0
+
+    print(main.__doc__)
+    return 2
+
+
+if __name__ == "__main__":  # pragma: no cover
+    sys.exit(main(sys.argv[1:]))

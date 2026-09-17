@@ -247,15 +247,75 @@ def test_collect不會把沒有來源寫成空清單():
     而那一刻它抓到的就是這件事。釘在
     `test_登記簿空的時候是來源在此刻空的_不是沒有來源`
     與下面那條真實 collect 的斷言。
+
+    2026-09-17 20:4x：`runtime_node` 移出去了，**第三次同樣不是為了
+    變綠**。`runtimenode.py` 實作了 §12.1 的 RuntimeNode，那一欄現在
+    答得出是哪一台機器（`runtimenode.reference()`）。
+    這條紅的時候訊息裡印的是 `{'basis': 'IOPlatformUUID', ...}` ——
+    **它抓到的正是「有來源了還寫沒有來源」**，跟前兩次一模一樣。
+    釘在下面 `test_runtime_node有來源之後不准再標成沒有來源`。
+
+    2026-09-17：`metrics_by_distribution` 移出去了，**第四次同樣不是為了
+    變綠**。`metrics.py` 實作了 §33.1 的 Metric Provenance Contract，
+    那一欄現在讀得到登記簿。這條紅的時候訊息裡印的是一整段
+    `Empty(why=...)` —— 跟前三次一模一樣，抓到的是「有來源了還寫
+    沒有來源」。釘在下面 `test_metrics有來源之後不准再標成沒有來源`。
+
+    四次都是同一個方向：這張清單只會變短，不會變長。
+    哪天有一欄從這裡消失而它其實還是沒有來源，那條紅不會出現 ——
+    所以移出去的每一欄都要在別處被釘住，不是只是刪掉。
     """
     ctx = C.collect({}, {}, git=C.NoSource("測試不跑 git"), model={})
-    for key in ("runtime_node", "metrics_by_distribution", "claims_allowed"):
+    for key in ("claims_allowed",):
         assert isinstance(ctx[key], C.NoSource), key
     # 移出去的那一欄不准退化成一個沒有理由的空值。
     got = ctx["logical_agent_id"]
     assert not isinstance(got, C.NoSource), "來源在了，不准再寫沒有來源"
     assert isinstance(got, (C.Empty, str)) and got != "", \
         "空字串讀起來像「查過了，這個 agent 沒有 id」，那是一句沒有根據的話"
+
+
+def test_runtime_node有來源之後不准再標成沒有來源():
+    """§39.1 Reality 第二欄：現在跑在哪台機器。
+
+    這一欄從 NO_SOURCE 移出來的那一刻起，守它的就是這一條。
+    問的是三件事，缺一件那個移出去的動作就沒有被接住：
+
+    一，不是 `NoSource` —— 來源在了。
+    二，答得出是哪一台（帶得出 `node_id`）。
+    三，**不是空字串也不是空 dict** —— 空的讀起來像
+        「查過了，這台機器沒有識別碼」，那是一句沒有根據的話。
+
+    不斷言 node_id 的值，那是這台機器的事實，換一台就不一樣。
+    """
+    ctx = C.collect({}, {}, git=C.NoSource("測試不跑 git"), model={})
+    got = ctx["runtime_node"]
+    assert not isinstance(got, C.NoSource), "來源在了，不准再寫沒有來源"
+    assert isinstance(got, dict) and got.get("node_id"), got
+    assert C.classify(got)["status"] == C.STATUS_PRESENT
+
+
+def test_metrics有來源之後不准再標成沒有來源(tmp_path):
+    """§39.1 Metrics 那一欄：現在的數字，附出處契約。
+
+    這一欄從 NO_SOURCE 移出來的那一刻起，守它的就是這一條。
+    問的是三件事：
+
+    一，不是 `NoSource` —— `metrics.py` 在了。
+    二，登記簿空的時候是 `Empty`，而那句理由要指得出誰去做什麼
+        它才會有值。空的 `Empty` 跟一個死路長得一模一樣。
+    三，**不准自動登記**。這一欄最容易的作弊是拿現成的數字配一組
+        猜出來的欄位登記上去，讓 0 變 1。讀一次不准長出檔案。
+
+    用 tmp_path 當登記簿路徑，不讀正本 —— 正本的筆數會變，
+    這條規則不會。
+    """
+    empty = tmp_path / "沒有這個檔.jsonl"
+    got = C._metrics_field(path=empty)
+    assert not isinstance(got, C.NoSource), "來源在了，不准再寫沒有來源"
+    assert isinstance(got, C.Empty)
+    assert "metric template" in got.why, "空的時候要指得出下一步是什麼"
+    assert not empty.exists(), "讀一次不准長出登記簿"
 
 
 def test_有來源的欄位不准再標成沒有來源(tmp_path):
@@ -1143,3 +1203,166 @@ def test_這四欄不准退回一個沒有理由的空值():
     for call in ("_blockers_field(work)", "_next_step(work)",
                  "_recovery_status(snap)", "_last_good_pointer(snap)"):
         assert call in body, f"{call} 沒有接上，那一欄會退回沒有理由的空值"
+
+
+# ---------------------------------------------------------------------------
+# 「這一份是在哪裡寫的」那一節。v5.0 §39.1 Identity + Reality
+# ---------------------------------------------------------------------------
+#
+# 2026-09-17 21:xx 加。守的是這個檔案的一種慣性:
+# **缺口清單只印缺的，所以一欄從 NO_SOURCE 變成有值之後，
+# 讀的人在 `NEXT.md` 上看到的差別是「少了一行缺口」，不是「多了一個答案」。**
+#
+# 同一個形狀先前撞過一次（`artifact_lines`，2026-09-16 18:2x:
+# artifact_paths 早就 PRESENT，而交接檔上一個路徑都看不到）。
+# 這一次是 `runtime_node`:同一份檔案的「已經發生過的決定」第一條寫著
+# 換機器，而它答不出現在是哪一台。
+
+def _rep_with(**fields):
+    """組一份只有指定欄位有值的 report。其他欄位一律沒有來源。
+
+    走真的 `check()`，不是自己編一個 groups —— 自己編的話，
+    哪天狀態的判法改了，這一組測試會繼續綠而功能已經壞了。
+    """
+    r = C.check(dict(fields))
+    r["ctx"] = dict(fields)
+    return r
+
+
+def test_有值的座標要印出來而且指得回欄位名():
+    out = C.coordinate_lines(_rep_with(
+        canonical_root="/x/y", project_id="Forseti",
+        runtime_node={"node_id": "node-abc", "host": "h1",
+                      "basis": "IOPlatformUUID"}))
+    t = "\n".join(out)
+    assert "node-abc" in t, "值算出來了就要看得到，這一節存在的唯一理由"
+    assert "/x/y" in t and "Forseti" in t
+    assert "`runtime_node`" in t, "要指得回 §39.1 的欄位名，不然查不回去"
+
+
+def test_一欄都答不出來的時候整節不印():
+    """不印一句「座標不明」。那一行讀起來像系統查過了。"""
+    assert C.coordinate_lines(C.check({})) == []
+    assert C.coordinate_lines(None) == []
+    assert C.coordinate_lines({}) == []
+
+
+def test_沒列到的座標要說得出去哪裡找():
+    """「沒列」不准被讀成「沒有這一欄」。"""
+    out = "\n".join(C.coordinate_lines(_rep_with(project_id="Forseti")))
+    assert "`runtime_node`" in out, "答不出來的那幾欄要點名"
+    assert "不是沒有這一欄" in out
+    assert "少了什麼" in out, "要指去缺口那一節，理由在那邊"
+
+
+def test_答不出來的座標不准在這一節印值或理由():
+    """兩個地方都印同一欄，兩邊就會開始不一致。
+
+    這一節只負責印有值的，缺席的理由歸缺口那一節管。
+    """
+    out = "\n".join(C.coordinate_lines(_rep_with(
+        project_id="Forseti",
+        runtime_node=C.NoSource("這句理由只該出現在缺口那一節"))))
+    assert "這句理由只該出現在缺口那一節" not in out
+
+
+def test_白名單不收已經有自己那一節的欄位():
+    """產出、已推翻的結論各自有一節，收進來會印兩次。"""
+    for k in ("artifact_paths", "artifact_hashes",
+              "invalidated_conclusions", "known_limits"):
+        assert k not in C.COORDINATE_FIELDS, f"{k} 已經有自己那一節"
+
+
+def test_值走shown不自己格式化():
+    """這一支不准有第二條渲染路徑。
+
+    自己格式化的話，同一個值在缺口那一節跟這一節會長得不一樣，
+    而讀的人沒辦法知道哪一邊是真的。
+    """
+    rep = _rep_with(project_id="Forseti")
+    for g in rep["groups"]:
+        for f in g["fields"]:
+            if f["key"] == "project_id":
+                f["shown"] = "換掉的字串"
+    assert "換掉的字串" in "\n".join(C.coordinate_lines(rep))
+
+
+def test_退回hostname的時候要多印一句():
+    """改機器名字跟換一台機器在畫面上長得一模一樣，要有東西分得出來。"""
+    out = "\n".join(C.coordinate_lines(_rep_with(
+        runtime_node={"node_id": "node-abc", "host": "h1",
+                      "basis": "hostname"})))
+    assert "不是硬體識別碼" in out
+    assert "node-abc" in out, "警告不是把那個 id 藏起來"
+
+
+def test_硬體識別碼算出來的不印那一句():
+    out = "\n".join(C.coordinate_lines(_rep_with(
+        runtime_node={"node_id": "node-abc", "host": "h1",
+                      "basis": "IOPlatformUUID"})))
+    assert "不是硬體識別碼" not in out
+
+
+def test_那個basis名字是跟runtimenode拿的不是寫死():
+    """寫死的話那邊改一個字，這句警告會靜默地永遠不成立。
+
+    少印一句警告不會讓任何測試變紅，所以要在這裡釘住來源。
+    """
+    import runtimenode as RN
+    assert C._basis_uuid_name() == RN.BASIS_UUID
+    src = Path(C.__file__).read_text(encoding="utf-8")
+    body = src.split("def coordinate_lines(")[-1].split("\ndef ")[0]
+    assert "IOPlatformUUID" not in body, "這一支裡不准出現那個字面值"
+
+
+def test_拿不到名字的時候寧可多印那一句(monkeypatch):
+    """多印一句警告是安全的方向，少印那一句才會讓人誤判成沒換機器。"""
+    monkeypatch.setattr(C, "_basis_uuid_name", lambda: "")
+    out = "\n".join(C.coordinate_lines(_rep_with(
+        runtime_node={"node_id": "node-abc", "basis": "IOPlatformUUID"})))
+    assert "不是硬體識別碼" in out
+
+
+# ── Recovery 那兩欄不准把碟上的事實吞掉（2026-09-17）─────────────
+#
+# 兩欄在「這條 session 0 個」的時候給的理由，先前只講這條線。
+# 實測碟上有 3 個被人標成 last_good 的 checkpoint 分屬兩條舊 session，
+# 於是那兩句話合起來讀成「完全沒有可以回去的點」。
+#
+# 這一組守兩件相反方向的事：事實要講出來，**而判定不准因此改變**。
+
+
+def _snap_els(total_here=0, els_total=3, els_lg=3, els_sessions=2):
+    return {"checkpoints": {
+        "total": total_here,
+        "elsewhere": {"total": els_total, "last_good": els_lg,
+                      "sessions": els_sessions},
+        "why_no_last_good": "這條 session 沒有任何 checkpoint 被標成 last_good",
+    }}
+
+
+def test_recovery_status_要講碟上還有什麼():
+    v = C._recovery_status(_snap_els())
+    assert isinstance(v, C.Empty), "判定不准變 —— 這條線上仍然是空的"
+    assert "碟上另有 3 個" in v.why
+    assert "2 條別的 session" in v.why
+    assert "owner 的決定" in v.why, "不准自己替她接過來"
+
+
+def test_last_good_pointer_要講碟上還有什麼():
+    v = C._last_good_pointer(_snap_els())
+    assert isinstance(v, C.Empty), "判定不准變"
+    assert "碟上另有 3 個" in v.why
+    assert "不替 owner 決定" in v.why
+
+
+def test_碟上沒有別的就不多講():
+    snap = _snap_els(els_total=0, els_lg=0, els_sessions=0)
+    for v in (C._recovery_status(snap), C._last_good_pointer(snap)):
+        assert isinstance(v, C.Empty)
+        assert "碟上另有" not in v.why, "沒有的東西不准提"
+
+
+def test_這條線上有checkpoint就不走那條理由():
+    snap = _snap_els(total_here=2)
+    assert C._recovery_status(snap) == "checkpoint 2 個", "有值就是有值"

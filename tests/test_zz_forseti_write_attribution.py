@@ -185,6 +185,33 @@ REGISTERED_WRITER_FILES = frozenset({
     # 不改成不碰：那一條測的正是 `strands()` 有沒有把 sot 接進快照，
     # 換成 `sot_panel()` 就不是同一題了（`sot_panel` 另有測試在 :284）。
     "tests/test_sot.py",
+    # 2026-09-17 18:5x 加的，**成因是量出來的不是推的**。
+    # `test_act標記checkpoint只落一筆而且不碰控制檔以外的東西` 走
+    # `act("checkpoint")`（`desktop_api.py:2308`）走得到正本的寫入閘門。
+    # **是三條路不是一條**，堆疊印出來的：
+    #
+    #     _checkpoint_now:1901 → strands:3441 → _write_handoff:1807
+    #     _checkpoint_now:1926 → audit:733 → strands:3441 → 同上
+    #     _checkpoint_now:1926 → audit:739 → strands:3441 → 同上
+    #
+    # 三條最後都到 `_write_handoff` 的 `HO.should_write()`，不帶路徑，
+    # 也就是正本 `NEXT.md`。攔截實測 3 次，目標三次都是正本。
+    #
+    # **它為什麼進不了這張名單，是這一筆的重點。** 這張名單有兩個來源，
+    # 兩個都看不到它：觀測只看得見贏了節流競速的那一條，而
+    # `_scan_strands_callers()` 掃的是**直接**呼叫點 —— 這一條隔著
+    # `act()` 與 `_checkpoint_now()` 兩層，正好落在那支掃描器自己
+    # docstring 裡寫著看不到的第二種（間接一層以上）。
+    # **兩個來源的盲區重疊在同一個檔上**，於是它兩邊都不在。
+    # 所以它不進 `STRANDS_CALLERS`：那一組的定義是直接呼叫點，
+    # 塞進去會讓那一組跟掃描結果對不起來，而那正是它守的東西。
+    #
+    # 不改成不碰：那一條測的正是「按一下標記會不會偷偷動到別的東西」，
+    # 走的必須是真的那一條路，換成半條就不是同一題了。
+    #
+    # 它碰得到正本這件事本身有一條測試釘著:
+    # `test_state_changing_writes.py::test_標記那一下碰得到正本交接檔_所以它在冊`。
+    "tests/test_state_changing_writes.py",
 })
 
 #: 直接呼叫 `strands()` 的測試檔。**這一組是掃原始碼掃出來的，
@@ -341,7 +368,8 @@ def _bad_paths(nodeid: str, paths, appended: dict | None) -> list[str]:
 EVIDENCE_CHARS = 200
 
 
-def _evidence(nodeid: str, rels, appended: dict | None) -> str:
+def _evidence(nodeid: str, rels, appended: dict | None,
+              created: dict | None = None) -> str:
     """把擷取到的新增段摘要成一行，附在紅的訊息後面。
 
     **這一支存在的理由是實測的代價。** 2026-09-17 同一輪裡，
@@ -353,13 +381,33 @@ def _evidence(nodeid: str, rels, appended: dict | None) -> str:
     訊息裡帶出內容，是把那個差別交到下一個人手上。
     沒有擷取到就明說「沒有擷取到」，不留白 ——
     留白跟「擷取到而且是空的」在讀的人眼裡同形。
+
+    ## 2026-09-17 19:3x：擷取不到要分成兩種說法
+
+    決定性復現那一次（做法在 `AUTO_CONTINUE_LOG.md` 同一輪）
+    印出來的訊息裡，**同一個檔印了兩種話**：前一條測試印
+    「沒有擷取到新增段（不是 append，或太大）」，後一條印出內容。
+    兩句都對，但前一句的真正原因是那一刻這個檔剛被建出來 ——
+    新出現的檔沒有「之前」可以比，`conftest._appended()` 對它
+    必然回 None。
+
+    這個差別會改變下一個人去查什麼：新出現的要問「誰建的」，
+    整檔覆寫的要問「原本那一段去哪了」。混成一句話的時候，
+    讀的人只會往後面那個方向找，而那一次的答案在前面那個方向。
+
+    **`created` 只用來改措辭，不放行任何東西。** 新出現一樣算
+    動到正本 —— 放行的判斷全在 `_bad_paths()`，這一支不碰。
     """
     caps = (appended or {}).get(nodeid) or {}
+    made = set((created or {}).get(nodeid) or ())
     bits = []
     for rel in rels:
         blob = caps.get(rel)
         if blob is None:
-            bits.append(f"{rel}: 沒有擷取到新增段（不是 append，或太大）")
+            why = ("這個檔是在這條測試期間新出現的，沒有「之前」可以比，"
+                   "所以擷取不到 —— 要查的是誰建的"
+                   if rel in made else "不是 append，或太大")
+            bits.append(f"{rel}: 沒有擷取到新增段（{why}）")
             continue
         head = " ".join(blob.split())[:EVIDENCE_CHARS]
         bits.append(f"{rel} 接上去的是:{head}")
@@ -649,6 +697,77 @@ def test_掃描與比對這兩支自己是對的(rec, tmp_path):
 
     (tmp_path / "a.txt").unlink()                  # 刪除也要看得到
     assert "a.txt" in rec._diff(after, rec._snapshot(tmp_path))
+
+
+def test_新出現的路徑算得出來_而且跟改過內容的分得開(rec, tmp_path):
+    """`_created` 只回新出現的，改內容的不算。
+
+    **2026-09-17 19:3x 加的，來源是一次決定性復現。** 那一次外部
+    在全套跑的期間往 `.forseti/` 放了一個新檔，紅的訊息把它講成
+    「不是 append，或太大」—— 兩個方向都不是答案，答案是它剛被建出來。
+
+    這一條守的是那個分辨。分不出來的話，訊息會把每一個擷取不到的
+    變動都送去同一個方向查，而新出現的那種要查的是誰建的。
+    """
+    (tmp_path / "a.txt").write_text("1")
+    before = rec._snapshot(tmp_path)
+
+    (tmp_path / "a.txt").write_text("22")          # 改內容，不算新出現
+    (tmp_path / "b.txt").write_text("new")         # 新出現
+    after = rec._snapshot(tmp_path)
+
+    assert rec._created(before, after) == ["b.txt"], (
+        "改過內容的被算成新出現，或者新出現的漏了")
+    assert rec._diff(before, after) == ["a.txt", "b.txt"], (
+        "這一條的前提是 `_diff` 兩種都看得到")
+
+    # 反方向：刪掉的不是新出現
+    (tmp_path / "a.txt").unlink()
+    assert rec._created(after, rec._snapshot(tmp_path)) == []
+
+    # 同一張表比自己：一個都沒有
+    assert rec._created(after, after) == []
+
+
+def test_擷取不到的兩種原因在訊息裡分得出來(rec):
+    """「剛被建出來」跟「不是 append 或太大」要講不一樣的話。
+
+    兩句話送讀的人去不一樣的方向：前者問誰建的，
+    後者問原本那一段去哪了。混成一句的代價是實測看到的 ——
+    復現那一次同一個檔印了兩種話，而先印的那一句是誤導的那一句。
+    """
+    rels = ["新的.jsonl"]
+    made = {"tests/t.py::x": ["新的.jsonl"]}
+
+    msg = _evidence("tests/t.py::x", rels, None, made)
+    assert "新出現" in msg and "誰建的" in msg, f"沒講出是新建的:{msg}"
+
+    # 沒帶 created 的時候退回原本那句，不准改成新建的說法
+    msg = _evidence("tests/t.py::x", rels, None, None)
+    assert "不是 append" in msg and "新出現" not in msg, msg
+
+    # created 有這條測試但不含這個檔，一樣退回原本那句
+    msg = _evidence("tests/t.py::x", rels, None, {"tests/t.py::x": ["別的"]})
+    assert "不是 append" in msg and "新出現" not in msg, msg
+
+    # 擷取得到內容的時候，created 不准把內容蓋掉
+    ap = {"tests/t.py::x": {"新的.jsonl": '{"id":"pol-x"}'}}
+    msg = _evidence("tests/t.py::x", rels, ap, made)
+    assert "pol-x" in msg and "新出現" not in msg, f"內容被措辭蓋掉:{msg}"
+
+
+def test_created不准放行任何東西(rec):
+    """措辭歸措辭，放行歸放行。
+
+    這一條在的理由是 `_evidence` 新吃的那個參數就長在判斷層旁邊，
+    哪天有人順手拿它去跳過新出現的檔，這裡會紅。
+    新出現的檔**一樣算動到正本** —— 外部把東西放進 `.forseti/`
+    正是要紅的那件事。
+    """
+    paths = ["新的.jsonl"]
+    assert _bad_paths("tests/t.py::x", paths, None) == paths
+    ap = {"tests/t.py::x": {"新的.jsonl": "不是 hook 寫的\n"}}
+    assert _bad_paths("tests/t.py::x", paths, ap) == paths
 
 
 def test_沒有變動的時候比對回空的不是回全部(rec, tmp_path):
@@ -981,7 +1100,10 @@ def test_動到的路徑全部在允許範圍內_而且這是最後一條(rec, r
         p for bad in offenders.values() for p in bad
         if p in IRREPLACEABLE
     })
-    ev = "　".join(_evidence(n, bad, appended) for n, bad in offenders.items())
+    made = rec.created_record()
+    ev = "　".join(
+        _evidence(n, bad, appended, made) for n, bad in offenders.items()
+    )
     assert not offenders, (
         f"有測試動到不該動的正本：{offenders}"
         + (f"　其中這幾個重建不回來：{grave}" if grave else "")
