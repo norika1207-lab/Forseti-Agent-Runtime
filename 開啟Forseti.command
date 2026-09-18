@@ -1,36 +1,14 @@
 #!/bin/bash
-# 雙擊這個檔案就會開啟 Forseti。
-#
-# 2026-09-14 做的。owner 明天要 demo，而在這之前唯一的啟動方式
-# 是在終端下指令 —— 那正是她從頭到尾沒有要過的東西。
-
-cd "$(dirname "$0")" || exit 1
-
-PORT=8830
-while lsof -i :$PORT >/dev/null 2>&1; do PORT=$((PORT+1)); done
-
-echo ""
-echo "  Forseti 啟動中，第一次要等十幾秒"
-echo ""
-
-python3 tools/ui-harness.py --port $PORT > /tmp/forseti-ui.log 2>&1 &
-PID=$!
-
-for i in $(seq 1 40); do
-  if curl -s -o /dev/null "http://127.0.0.1:$PORT/index.html" 2>/dev/null; then
-    open "http://127.0.0.1:$PORT/index.html"
-    echo "  開好了　http://127.0.0.1:$PORT/index.html"
-    echo ""
-    echo "  這個視窗關掉，Forseti 就會停。"
-    echo "  要停止請按 Control + C"
-    echo ""
-    wait $PID
-    exit 0
-  fi
-  sleep 1
-done
-
-echo "  起不來。錯誤在 /tmp/forseti-ui.log"
-tail -20 /tmp/forseti-ui.log
-kill $PID 2>/dev/null
-read -r -p "  按 Enter 關閉"
+# 雙擊就開。繞過 Tauri 的 WebView bug（macOS 26 上它不執行 JavaScript）。
+# 畫面跟桌面版一模一樣:同一份 app.js 與 app.css。
+cd "$(dirname "$0")"
+pkill -f "ui-harness.py" 2>/dev/null
+sleep 1
+nohup python3 tools/ui-harness.py --port 8791 > /tmp/forseti-ui.log 2>&1 &
+until curl -s -o /dev/null http://127.0.0.1:8791/ 2>/dev/null; do sleep 1; done
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --app=http://127.0.0.1:8791/ \
+  --window-size=360,900 \
+  --window-position=40,60 \
+  --user-data-dir="$HOME/.forseti/chrome-profile" \
+  --no-first-run --no-default-browser-check >/dev/null 2>&1 &

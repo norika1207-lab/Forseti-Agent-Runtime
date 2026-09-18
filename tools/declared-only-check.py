@@ -337,10 +337,12 @@ _reg("pollution", "REQUIRES", "REFERENCE",
 _reg("pollution", "FIELDS", "REFERENCE",
      "註解寫「§40.1 的欄位,逐字照抄」。逐字照抄的表就是拿來對規格的。")
 
-_reg("pollution", "OPTIONAL", "REFERENCE",
-     "跟 `FIELDS` 同一段（`pollution.py:86` 起），標哪兩個是選填。"
-     "依據是那一段的註解「§40.1 的欄位,逐字照抄。"
-     "後面兩個規格標了問號(選填)」。")
+# `pollution.OPTIONAL` 2026-09-18 下架:它現在有人讀。
+# `pollution._print_row()` 拿它當鍵名來源印那兩欄,而不是自己寫字面量
+# （寫字面量會讓 `literal-restate-check.py` 的條件 2 把打錯的鍵名
+# 當成真鍵名放過 —— `test_pollution_guard_split.py::Test唯一定義`
+# 在那一輪當場抓到第一版）。**留著這個登記的話它會一直宣稱一件
+# 已經不成立的事**,而那正是 `test_登記簿沒有過期的條目` 要擋的。
 
 _reg("rehydration", "COVERAGE", "REFERENCE",
      "F08 §5 的七級（跟 Vol2 §4 同一張表）。"

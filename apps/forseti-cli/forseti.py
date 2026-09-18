@@ -24,6 +24,8 @@
     python3 apps/forseti-cli/forseti.py antianchor open
     python3 apps/forseti-cli/forseti.py metric [list|show|template|register]
     python3 apps/forseti-cli/forseti.py attempt [list|show|template|record|release]
+    python3 apps/forseti-cli/forseti.py evidence [list|levels|template|register|show]
+    python3 apps/forseti-cli/forseti.py pollution [list|show|template|register|advance]
     python3 apps/forseti-cli/forseti.py context [--all|<path.jsonl>]
     python3 apps/forseti-cli/forseti.py index [--rebuild]
     python3 apps/forseti-cli/forseti.py recall "為何會有點名板"
@@ -2211,6 +2213,18 @@ def main(argv: list[str]) -> int:
         # 一次失敗的嘗試不是一句宣稱，它沒有真假只有發生過沒有。
         import attempts as AT
         return AT.main(argv[2:])
+    if cmd == "pollution":
+        # §40 污染登記簿。不併進 `claims`，因為那一支問的是「這句宣稱
+        # 有沒有證據」，這一支存的是「這句話已經被推翻了，而且當初是
+        # 什麼機制讓它錯的」。一筆污染不是一個待驗證的宣稱 —— 它的
+        # 真假已經定了，留下來的價值在機制（§40 開頭那句：preserve the
+        # mechanism, not only the corrected number）。
+        #
+        # 這個入口是 2026-09-18 補的。先前模組寫好了、桌面端與交接契約
+        # 都在讀它，而**登一筆進去只能手寫 `python3 -c "import
+        # pollution; ..."`**，`NEXT.md` 印的那一行「自己查」就是那個寫法。
+        import pollution as PO
+        return PO.main(argv[2:])
     if cmd == "antianchor":
         # §39 第 3 到第 6 步。不併進 `gate`，因為那一支做的是第 2 步與
         # 第 7 步（考讀懂沒有、給不給寫入權），這一支做的是中間那段

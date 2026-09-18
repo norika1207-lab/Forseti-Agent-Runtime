@@ -56,8 +56,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 import time
 from pathlib import Path
+
+# 三支指令列判準只有一份,在 `cliargs.py`。那個檔的 docstring 記著
+# 為什麼它存在（另外五個檔各有一份,而 `_arg` 有四種寫法）,以及
+# 為什麼那五支沒有一起搬。
+#
+# 這裡跟 `forseti._sibling()` 同一個防守:從別的 cwd 進來的時候
+# 這個目錄不一定在 sys.path 上,而 `import pollution` 成功不代表
+# 它底下的 `import cliargs` 也成功 —— 兩個 import 走的是同一條路徑
+# 清單,所以失敗的那一次會是 ImportError 而不是靜默拿到別的東西。
+try:
+    from cliargs import arg as _arg
+    from cliargs import flag_without_value as _flag_without_value
+    from cliargs import unknown_flags as _unknown_flags
+except ImportError:  # pragma: no cover  只有換 cwd 才走得到
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from cliargs import arg as _arg
+    from cliargs import flag_without_value as _flag_without_value
+    from cliargs import unknown_flags as _unknown_flags
 
 REPO = Path(__file__).resolve().parents[2]
 LOG = REPO / ".forseti" / "pollution.jsonl"
@@ -414,3 +433,334 @@ def guard_split(path: Path | None = None) -> dict:
         "unguarded_caveat": "重驗過不等於機制被擋住了",
         "source": "v5.0 §40.2",
     }
+
+
+# ── CLI ──────────────────────────────────────────────────────────────
+#
+# 2026-09-18 自動接續補的。**缺的不是資料也不是判準,是入口。**
+# 這個模組的 `record()` / `advance()` / `summary()` 在 09-16 就寫好了,
+# 桌面端（`desktop_api.pollution_panel()`）與交接契約（`contract.py`）
+# 都在讀它,而**登一筆進去只能寫 `python3 -c "import pollution; ..."`**
+# —— `NEXT.md` 自己印的那一行「自己查」就是那個寫法,
+# `tools/seed_pollution.py` 也是為此存在的一次性腳本。
+#
+# §40 要的是「每一次推翻都留下機制」,而一個要手寫 import 的登記方式
+# 會讓人在趕的時候跳過去。這跟 `evidence.py` 2026-09-18 那一輪
+# 「實體與儲存在了,磁碟上仍然 0 筆,因為人沒有地方登」是同一個形狀。
+
+SUBCOMMANDS: tuple[str, ...] = ("list", "show", "template",
+                                "register", "advance")
+
+KNOWN_FLAGS: tuple[str, ...] = (
+    "--path", "--from", "--id", "--to", "--verifier",
+    "--preventive-rule", "--regression-probe", "--note",
+)
+
+
+def _kwargs_of(fn) -> tuple[str, ...]:
+    """某一支收哪幾個關鍵字。**去問它,不抄一份。**
+
+    抄一份的症狀跟 `MEMBER_SLOTS` docstring 寫的那種一樣:
+    `record()` 哪天多一個欄位,這邊不會跟著動,而畫面上看起來
+    只是「不認得的欄位」一句拒絕,沒有人會發現兩邊已經不一致。
+
+    `path` 與 `at` 不在裡面:那兩個是呼叫端的事（寫到哪、什麼時候),
+    不是這一筆記錄的內容。
+    """
+    import inspect  # noqa: PLC0415  只有 CLI 這一段用得到
+    return tuple(p for p in inspect.signature(fn).parameters
+                 if p not in ("path", "at"))
+
+
+def template() -> dict:
+    """空白模板。尖括號那幾格一定要自己填。
+
+    `propagation_radius` 預設 None 配一句 `radius_basis`,
+    因為 `record()` 兩個都空的時候會退回 —— 規格沒有定義這個欄位的
+    單位,所以這裡不替它編一個,但也不准留一個沒有說明的空值。
+    """
+    return {
+        "original_claim": "<錯的那句話，逐字抄，不要改寫成比較好看的版本>",
+        "corrected_claim": "<實際是什麼>",
+        "failure_mechanism": "<為什麼會錯。不是錯在哪，是什麼機制讓它錯的>",
+        "source_events": ["<查得回去的出處，檔名加行號或事件 id>"],
+        "verifier": "<誰查出來的>",
+        "affected_metrics": [],
+        "affected_decisions": [],
+        "propagation_radius": None,
+        "radius_basis": "<沒有給 propagation_radius 就要寫為什麼算不出來>",
+        "status": "OPEN",
+        "preventive_rule": "",
+        "regression_probe": "",
+    }
+
+
+def unfilled(kw: dict) -> list[str]:
+    """哪幾格還是模板給的那個字串。回空清單表示都填過了。
+
+    ## 這一支是被自己的量測逼出來的（2026-09-18）
+
+    `template` 的 stderr 印著「尖括號那幾格一定要自己填,原樣送回去
+    會被退」。**實測原樣送回去沒有被退** —— `pollution register
+    --from <原封不動的模板>` exit=0,登進去一筆 `pol-a01ab492fd`,
+    五個欄位全是尖括號,而 `list` 裡它跟填對的那幾筆長得一模一樣。
+
+    `record()` 的四條必填擋的是「空的」,而佔位符**不是空的**。
+    它是看起來有內容的空,所以四條全部放行。那句警告當時是假的:
+    照抄 `evidence.py` 的說明,而那一支有 `check_fillable()`,
+    這一支沒有。**寫得出警告不等於有人在守。**
+
+    比對的對象是 `template()` 自己,不抄一份佔位字串到這裡 ——
+    模板哪天改一個字,抄的那一份不會跟著動,而症狀是「守門說填過了、
+    畫面上還是尖括號」,沒有人會發現。
+
+    只認「值跟模板一模一樣」,不認「裡面有尖括號」:真的要登一句
+    帶尖括號的原話（例如引用一段 HTML）是合法的,判它沒填就錯了。
+    """
+    t = template()
+    out = []
+    for k, placeholder in t.items():
+        if k not in kw:
+            continue
+        if isinstance(placeholder, str) and placeholder.startswith("<"):
+            if kw[k] == placeholder:
+                out.append(k)
+        elif isinstance(placeholder, list) and placeholder:
+            # `source_events` 的模板是一個單元素清單。整串一樣才算沒填,
+            # 填了一個真的出處再留著那個佔位符是兩件事（後者留給人自己看）。
+            if kw[k] == placeholder:
+                out.append(k)
+    return out
+
+
+def _one_line(r: dict) -> str:
+    mark = "守" if has_guard(r) else "人"
+    oc = (r.get("original_claim") or "").replace("\n", " ")
+    return f"  {mark}　{r['id']}　{r.get('status', ''):<10}　{oc[:42]}"
+
+
+def _print_row(r: dict) -> None:
+    print()
+    print(f"  {r['id']}　{r.get('status', '')}")
+    print()
+    print(f"  當初那句話　　{r.get('original_claim', '')}")
+    print(f"  實際是　　　　{r.get('corrected_claim', '')}")
+    print(f"  機制　　　　　{r.get('failure_mechanism', '')}")
+    print(f"  出處　　　　　{'、'.join(r.get('source_events') or [])}")
+    print(f"  誰查的　　　　{r.get('verifier', '')}")
+    rad = r.get("propagation_radius")
+    print(f"  傳播半徑　　　{rad if rad is not None else '沒量到'}"
+          f"{'　' + r['radius_basis'] if not rad and r.get('radius_basis') else ''}")
+    # 鍵名從 `OPTIONAL` 拿,不在這裡寫字面量。
+    # 寫字面量的後果不是難維護:`tools/literal-restate-check.py` 的
+    # 條件 2 是「全 repo 出現超過一次就當成真的鍵名」,所以在這裡多寫
+    # 一次 `"preventive_rule"` 會讓打錯成 `preventive_rulle` 的那一次
+    # 被當成真鍵名放過。`test_pollution_guard_split.py::Test唯一定義`
+    # 在 2026-09-18 這一輪當場抓到這件事 —— 第一版這兩行就是字面量。
+    #
+    # 標籤跟 `OPTIONAL` 的順序綁在一起,所以那個 tuple 的順序改了
+    # 這裡要跟著改。守它的是下面那條 assert 不是註解。
+    labels = ("預防規則", "回歸探針")
+    assert len(labels) == len(OPTIONAL), "標籤數跟 OPTIONAL 對不上"
+    for key, label in zip(OPTIONAL, labels):
+        print(f"  {label}　　　{r.get(key) or '（沒有）'}")
+    if not has_guard(r):
+        print()
+        print("  **現在只靠人記得。** §40.2 要的是偵測器，不是一次查核 ——")
+        print("  沒有 preventive_rule 也沒有 regression_probe 的那幾筆，")
+        print("  下一次同一個機制還是會犯。")
+    for h in r.get("history") or []:
+        print(f"    {h.get('from', '')} → {h.get('status', '')}"
+              f"　{h.get('verifier', '')}　{h.get('note', '')}")
+    print()
+
+
+def main(argv: list) -> int:
+    """`forseti pollution <list|show|template|register|advance>`
+
+    v5.0 §40 污染登記簿。`register` 收的是一份 JSON 檔不是一串旗標,
+    理由同 `forseti evidence register`:這一份的每一欄缺席都有後果
+    （沒有 failure_mechanism 會被退、沒有 source_events 會被退),
+    用旗標填的話人會為了讓指令跑得動而亂填,而那正是這個登記簿要擋的事。
+
+    `advance` 相反,收旗標,因為一次狀態轉換只有四個值要帶,
+    而且 `advance()` 自己會擋住不合法的轉換與缺的附帶條件。
+    """
+    # 第一個參數以 `-` 開頭的時候它是旗標不是子指令。少了這一行,
+    # `forseti pollution --path X` 會把 `--path` 放進 `sub`,於是 `rest`
+    # 只剩下 X,`_arg(rest, "--path")` 找不到,結果是**讀正本而不是讀 X**。
+    # 同一個形狀在 `evidence.py` 與 `metrics.py` 先撞到過,兩支的註解
+    # 都寫著「錯的答案跟對的答案長得一模一樣」。
+    _flag_first = bool(argv) and str(argv[0]).startswith("-")
+    sub = argv[0] if (argv and not _flag_first) else "list"
+    rest = list(argv) if _flag_first else list(argv[1:])
+
+    # 旗標寫了可是後面沒有值 -> 明著退回,不准掉回預設。
+    # `--path` 掉回正本、`--id` 會回「沒有這一筆」（那個人以為資料不存在,
+    # 而真正的事是指令打錯）、`--to` 會變成「status 只能是 ...」
+    # （怪值不合法,不是怪值漏了）。
+    for _flag, _why in (
+            ("--path", "後面要接一份登記簿的路徑。沒接的話會讀正本，"
+                       "而那份報告看起來跟你指定的檔一模一樣。"),
+            ("--from", "後面要接一份 JSON 的路徑。"),
+            ("--id", "後面要接一個 pol-xxxxxxxxxx。"),
+            ("--to", f"後面要接一個狀態：{'、'.join(STATUSES)}。"),
+            ("--verifier", "後面要接誰查的。沒接的話下一個旗標會被當成人名，"
+                           "而 REVERIFIED 這一關要的就是指得回人。"),
+            ("--preventive-rule", "後面要接規則。沒接的話下一個旗標名會被"
+                                  "當成規則寫進去，而那一筆看起來就有守門了。"),
+            ("--regression-probe", "後面要接探針。沒接的話同上。"),
+            ("--note", "後面要接一句話。")):
+        if _flag_without_value(rest, _flag):
+            print()
+            print(f"  `{_flag}` {_why}")
+            print("  所以這裡退回，不猜。")
+            print()
+            return 2
+
+    # 旗標名打錯字 -> 明著退回。不擋的話那個旗標會被當成沒寫:
+    # `--pathh X` 讀的是正本、`--verifierr 我` 會讓 REVERIFIED 那一關
+    # 回「要有 verifier」,而打字的人明明寫了。
+    _unknown = _unknown_flags(rest, KNOWN_FLAGS)
+    if _unknown:
+        print()
+        print(f"  不認得這個旗標：{'、'.join(_unknown)}")
+        print(f"  有的是：{'、'.join(KNOWN_FLAGS)}")
+        print("  打錯字不會報錯，那個旗標會被當成沒寫 —— `--path` 會掉回")
+        print("  正本，`--verifier` 會讓那一關回「你沒給」。所以這裡退回。")
+        print()
+        return 2
+
+    if sub not in SUBCOMMANDS:
+        # 打錯子指令要看得出來。掉進 list 的話會回 0 而且印一份看起來
+        # 正常的報告 —— `forseti pollution registr --from x` 會印出
+        # 登記簿然後結束,而那個人以為自己登記過了。
+        print()
+        print(f"  不認得這個子指令：{sub}")
+        print(f"  有的是：{'、'.join(SUBCOMMANDS)}")
+        print()
+        return 2
+
+    raw = _arg(rest, "--path")
+    p = Path(raw).expanduser() if raw else None
+
+    if sub == "template":
+        print(json.dumps(template(), ensure_ascii=False, indent=2))
+        print()
+        print("# 尖括號那幾格一定要自己填，原樣送回去會被退。", file=sys.stderr)
+        print(f"# status 只收：{'、'.join(STATUSES)}", file=sys.stderr)
+        print("# failure_mechanism 是這一份存在的理由（§40 開頭那句：",
+              file=sys.stderr)
+        print("# preserve the mechanism, not only the corrected number）。",
+              file=sys.stderr)
+        return 0
+
+    if sub == "register":
+        src = _arg(rest, "--from")
+        if not src:
+            print("要一份 JSON：`forseti pollution register --from <檔案>`。"
+                  "空白模板：`forseti pollution template`")
+            return 2
+        try:
+            kw = json.loads(Path(src).expanduser().read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"讀不到或解不開：{exc}")
+            return 2
+        if not isinstance(kw, dict):
+            print(f"要一個 JSON 物件，收到 {type(kw).__name__}")
+            return 2
+        extra = sorted(set(kw) - set(_kwargs_of(record)))
+        if extra:
+            print()
+            print(f"  不認得的欄位：{'、'.join(extra)}")
+            print("  沒有默默丟掉，是因為丟掉的話填錯欄位名跟沒填長得一樣 ——")
+            print("  少了 failure_mechanism 的那一筆會被 record() 退，")
+            print("  而 failure_mechanizm 打錯字的那一筆會被丟掉之後，")
+            print("  退回的理由變成「你沒寫機制」，指的不是真正發生的事。")
+            print()
+            return 1
+        blank = unfilled(kw)
+        if blank:
+            print()
+            print(f"  這幾格還是模板給的那句話：{'、'.join(blank)}")
+            print("  原樣送回去不會被 record() 擋 —— 它擋的是空的，")
+            print("  而佔位符不是空的，是看起來有內容的空。登進去之後")
+            print("  在 `list` 裡跟填對的那幾筆長得一模一樣。")
+            print()
+            return 1
+        res = record(path=p, **kw)
+        if not res["ok"]:
+            print()
+            print(f"  這一筆登記不了：{res['why']}")
+            print()
+            return 1
+        _print_row({**res["record"], "history": []})
+        return 0
+
+    if sub == "advance":
+        pid = _arg(rest, "--id")
+        to = _arg(rest, "--to")
+        if not pid or not to:
+            print("要 id 與目標狀態："
+                  "`forseti pollution advance --id pol-xxxxxxxxxx --to RESOLVED`")
+            return 2
+        res = advance(pid, to, path=p,
+                      verifier=_arg(rest, "--verifier") or "",
+                      preventive_rule=_arg(rest, "--preventive-rule") or "",
+                      regression_probe=_arg(rest, "--regression-probe") or "",
+                      note=_arg(rest, "--note") or "")
+        if not res["ok"]:
+            print()
+            print(f"  轉不過去：{res['why']}")
+            print()
+            return 1
+        row = get(pid, path=p)
+        _print_row(row or {})
+        return 0
+
+    if sub == "show":
+        pid = _arg(rest, "--id") or (rest[0] if rest and
+                                     not str(rest[0]).startswith("-") else None)
+        if not pid:
+            print("要一個 id：`forseti pollution show --id pol-xxxxxxxxxx`")
+            return 2
+        row = get(pid, path=p)
+        if row is None:
+            print(f"  {pid} 不在登記簿上")
+            return 1
+        _print_row(row)
+        return 0
+
+    rows = records(p)
+    s = summary(p)
+    g = guard_split(p)
+    print()
+    print(f"  §40 污染登記簿　{s['total']} 筆，還沒收乾淨 {s['open']} 筆")
+    if not rows:
+        print()
+        print("  一筆都還沒有人登。實體與儲存在了，缺的是有人去登 ——")
+        print("  `forseti pollution template` 產模板，填完")
+        print("  `forseti pollution register --from <檔案>`。")
+        print()
+        print("  **這一支不自動登記。** 拿一句看起來像錯的話配一個猜出來的")
+        print("  機制就是 §8.3 的填空，而那正是這個登記簿要擋的事。")
+        print()
+        return 0
+    print(f"  其中 {g['guarded']} 筆有偵測器或預防規則攔著，"
+          f"{g['unguarded']} 筆現在只靠人記得")
+    print(f"  分母是 {g['denominator']}")
+    print()
+    print("  左邊那一格：守＝有東西攔它，人＝只靠人記得")
+    print()
+    for r in rows:
+        print(_one_line(r))
+    if g["unguarded_ids"]:
+        print()
+        print(f"  只靠人記得的：{'、'.join(g['unguarded_ids'])}")
+        print(f"  {g['unguarded_caveat']}")
+    print()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

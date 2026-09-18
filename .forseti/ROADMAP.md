@@ -13,6 +13,28 @@ owner 2026-09-16：「有沒有寫下變成文件，然後安排開發順序？�
 
 ## 2026-09-18 自動接續做掉的
 
+| 項目（17:0x-17:4x 這一輪） | 證據 |
+|---|---|
+| 上一輪寫著「`MEMBER_SLOTS` 只有一支，別的名單沒掃過」，掃完了 | 三張名單沒有一張是缺口：`ledger.CAN_REPORT` 的值是 `led.can_report(step_id)` 算的不是誰打的、`GATE_SUBCOMMANDS` 已經有 `gate_subcommand()` 守著、`pollution.STATUSES` 沒有對應的位置參數**是因為整個 `pollution` 沒有 CLI 入口** |
+| 掃描本身撞到真正的缺口，而它不是守門是入口 | `record()` / `advance()` / `summary()` 09-16 就寫好，桌面端與 `contract.py` 都在讀，而登一筆只能手寫 `python3 -c "import pollution; ..."`。`NEXT.md` 印的那行「自己查」就是那個寫法 |
+| 量法自己先給了一次假結果，可重現 | `for c in "attempt bogus"; do python3 ... $c` 在 zsh 底下不分詞，五支全部印 62 行 `__doc__`，看起來像「五支都沒守門」。`${=c}` 才對。單獨跑 `attempt bogus` 是 3 行點名 |
+| 順手推翻一句還掛在原始碼裡的話 | `antianchor.py:684` 與 `probemodel.py:581` 寫著「`metric` 與 `attempt` 沒有未知子指令守門會掉進 list」，實測兩支都是點名加 exit 2。那句是寫下來之後才變假的 |
+| 做的是 `forseti pollution <list\|show\|template\|register\|advance>` | 形狀對齊既有三支。八個旗標缺值都退回、旗標名打錯點名、子指令打錯不掉進 list、`register` 收 JSON 檔、`advance` 收旗標 |
+| **第一版自己印的那句警告是假的，量出來的** | `template` 的 stderr 寫「原樣送回去會被退」，實測 exit=0 登進去一筆五欄全是尖括號的污染。`record()` 擋的是空的，佔位符不是空的。補 `unfilled()`，比對對象是 `template()` 自己 |
+| 三支判準沒有寫成第六份 | 新開 `cliargs.py`，`pollution.py` 用 `from cliargs import arg as _arg` 接。另外五支沒有一起搬（那是五個檔各自的反向驗證） |
+| 而抽的時候量出上一輪那句話錯在哪 | AST 比對：`_unknown_flags` 與 `_flag_without_value` 五份全同，**`_arg` 四種 body**。`git log -S "def _arg" -- forseti.py` 查無 commit，所以「加 forseti.py 那一份」不存在。數的是檔案數，講的是重複程度 |
+| 登進 §40，而且是用新指令登的 | `pol-d0a00f72d1`，OPEN，radius 10。`total` 30 → **31**，open 23 → 24。這是這個入口的第一次真實使用 |
+| 十一道注入，25 條測試每一道都有人紅 | 注入 2 與 3 是同一格兩端（不是抄來的／沒有判太寬），注入 11（自己再寫一份 `_arg`）紅 12 條。還原後 sha 一致 |
+| 第一次全套 5 紅，**其中 3 條是我造成的** | `test_有守門的判斷式只有一處` 抓到 `_print_row` 寫了字面量鍵名（那支 docstring 我讀過，讀的時候是為了抄別的段落）、`pollution.OPTIONAL` 登記過期、`blast.SRC` 是我的測試檔同名 `SRC` |
+| 而我先把第二條判給別人，錯在拿中間狀態當量測 | `sed` 的 `\b` 在 BSD sed 不生效，檔案當時是 `NameError` 的壞狀態，我拿那次的「還是紅」當證據。同一次輸出裡 `test_pollution_cli.py` 有 3 條紅，我只看了 `declared_only` 那一段 |
+
+新增 `tests/test_pollution_cli.py` **25 個**（六個類別）。上一輪收工 2214，
+2214 + 25 = **2239**，第二次全套 2238 綠 1 紅（那一紅的寫入者是 App）。
+新開 `apps/forseti-cli/cliargs.py`。
+**還沒做的是另外五支 helper 的搬遷（要先決定 `_arg` 回 None 還是 default）、
+`antianchor` 與 `probe-model` 的子指令名單常數、`unfilled()` 要不要移進
+`record()`**，細節在 `AUTO_CONTINUE_LOG.md` 這一輪的「還缺什麼」。
+
 | 項目（15:4x-16:2x 這一輪） | 證據 |
 |---|---|
 | 上一輪寫著「`event` 的 kind 仍然沒有守門」，結掉了 | `MEMBER_SLOTS` + `membership()`，第三種判準（成員資格），跟前兩種不重疊。`event bogus <真 step> why` 四格數量對、沒有一格是旗標，`no_extra_args` 與 `operands` 兩道都放行 |
@@ -4431,3 +4453,33 @@ Info.plist 的 legacy 旗標（`LSRequiresCarbon` 拿掉過）、
 **每一個「我以為是根因」的假設都被自己的下一次量測推翻了三次**
 （unminimize、鏡像螢幕、macOS 26 改了 JS 預設），
 能收斂是因為每一次都去量而不是去猜。
+
+## 桌面版繞過去了(2026-09-18)
+
+Tauri 的 WebView 在這台機器上不執行 JavaScript(證據見上一節),
+而畫面本身是好的 —— 瀏覽器版跑的是同一份 `app.js` 與 `app.css`。
+
+**所以外殼換掉:用 Chrome 的 app 模式。** 沒有網址列、沒有分頁,
+可以固定在桌面旁邊,跟 Tauri 版長得一樣。
+
+`開啟Forseti.command`,雙擊就開。它做三件事:
+起 `tools/ui-harness.py`、等它活著、用 `--app=` 開一個獨立視窗。
+用自己的 `--user-data-dir`,不干擾 owner 平常在用的 Chrome。
+
+第一次 macOS 會擋未簽名的 .command,右鍵選「打開」就過。
+
+**這不是修好 Tauri,是繞過它。** Tauri 那條等上游,
+而 owner 現在就看得到畫面。
+
+### 系統 WebKit 的對照(補完 issue 需要的那一格)
+
+用 Swift 直接建 `WKWebView` 跑同一段 HTML:
+
+```
+allowsContentJavaScript = true
+title = SCRIPT_RAN
+```
+
+**系統的 WebKit 執行得了那段 script,Tauri 的 WebView 不行。**
+所以不是 macOS 26 整體把 JS 關了,是 wry 那一層的事。
+這一格是開 issue 給 wry 的必要對照,少了它維護者第一個問題就是它。

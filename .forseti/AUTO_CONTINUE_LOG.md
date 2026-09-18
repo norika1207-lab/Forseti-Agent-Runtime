@@ -17069,3 +17069,256 @@ App 這一輪一直開著，是 owner 開的，這一輪沒有動它。
   並在守門的訊息裡講明。**兩條都是 owner 的決定**，這一輪沒有替她挑。
   這跟 5am 那一輪留下的「`cache/` 在路徑那條被允許、在誰那條仍要求在冊，
   兩條不一致」是同一個決定的兩半
+
+
+---
+
+## 2026-09-18 17:0x-17:4x　§40 的登記終於有指令可用，而入口的第一次使用推翻了派它下來的那句話
+
+### 挑的是哪一項，怎麼挑的
+
+照 ROADMAP「判斷清單空了之前先看兩個地方」那條規則的第一步：
+上一輪「還缺什麼」逐項問「要 owner 開口嗎」。第一條（`ALIASES` 要不要
+套到 CLI）要 owner，跳過。**第三條不要**：「`MEMBER_SLOTS` 現在只有
+一支，別的地方有沒有同樣形狀沒有掃過」—— 那是一次掃描，不是一個決定。
+
+### 掃描的結果：三張名單裡沒有一張是缺口，而掃描本身撞到別的東西
+
+| 名單 | 有沒有對應的 CLI 位置參數 | 結論 |
+|---|---|---|
+| `ledger.CAN_REPORT` | **沒有**。`can_report` 的值是 `led.can_report(step_id)` 算出來的，不是誰在指令列上打的 | 不是缺口 |
+| `pollution.STATUSES` | **沒有，因為整個 `pollution` 沒有 CLI 入口** | 缺的是入口，不是守門 |
+| `GATE_SUBCOMMANDS` | 有，`gate_subcommand()` 已經守著 | 已經做過了 |
+
+三支模組的子指令（`attempt` / `evidence` / `metric`）都已經有
+`SUBCOMMANDS` 守門，實測打錯子指令會點名並 exit 2。
+`antianchor` 與 `probe-model` 沒有名單常數，掉到 `print(main.__doc__)`
+exit 2 —— 那兩支的 docstring 第一行就列著合法子指令，所以**資訊在，
+只是沒有點名**，而且名單只存在於字串裡沒有常數。列進「還缺什麼」，
+沒有這一輪做，理由是它不會給錯答案。
+
+**順手推翻一句仍然掛在原始碼裡的話。** `antianchor.py:684` 與
+`probemodel.py:581` 的註解都寫著「這一支不像 `metric` 與 `attempt`
+會靜默給錯答案（那兩支沒有未知子指令守門，會掉進 list）」——
+那三支後來補了守門，實測 `metric bogus` 與 `attempt bogus` 都是
+點名加 exit 2。那句話是寫下來之後才變假的。
+
+### 量法自己先給了一次假結果，而它可重現
+
+第一次量五支的未知子指令行為，五支**全部**印出整個 CLI 的 62 行
+`__doc__`、exit 2，於是看起來像「五支都沒有守門」。單獨跑
+`forseti.py attempt bogus` 卻是 3 行點名訊息。
+
+成因是量的那個迴圈：`for c in "attempt bogus"; do python3 ... $c`
+在 zsh 底下**不做分詞**，所以傳進去的是單一參數 `"attempt bogus"`，
+`cmd` 對不上任何分支，落到最後那行 `print(__doc__)`。
+`${=c}` 才會分詞。
+
+寫下來是因為那個假結果**看起來完全合理**：五支一致、exit code
+一致、而且正好符合我當時要找的東西（沒有守門的名單）。
+分辨它的方法不是懷疑結論，是那一次順手跑的單獨呼叫。
+
+### 做的是入口：`forseti pollution`
+
+`pollution.py` 的 `record()` / `advance()` / `summary()` 09-16 就寫好了，
+`desktop_api.pollution_panel()` 與 `contract.py` 都在讀它，而**登一筆
+進去只能手寫 `python3 -c "import pollution; ..."`** —— `NEXT.md` 自己
+印的那一行「自己查」就是那個寫法，`tools/seed_pollution.py` 是為此
+存在的一次性腳本。這跟 `evidence.py` 那一輪「實體與儲存在了，磁碟上
+仍然 0 筆，因為人沒有地方登」是同一個形狀。
+
+五支子指令 `list|show|template|register|advance`，形狀對齊既有三支：
+第一個參數是旗標時不當子指令、八個旗標缺值都退回、旗標名打錯字點名、
+子指令打錯字不准掉進 `list`、`register` 收 JSON 檔不收一串旗標
+（理由同 `evidence register`：每一欄的缺席都有後果）、
+`advance` 收旗標（一次轉換只有四個值，而判準在 `advance()` 自己）。
+
+### 第一版自己印的那句警告是假的，而這是量出來的
+
+`template` 的 stderr 印著「尖括號那幾格一定要自己填，原樣送回去會被退」
+—— 那句話照抄 `evidence.py`。**實測原樣送回去沒有被退**：exit=0，
+登進去一筆 `pol-a01ab492fd`，五個欄位全是尖括號，在 `list` 裡跟填對的
+那幾筆長得一模一樣。
+
+`record()` 的四條必填擋的是「空的」，而佔位符**不是空的**，是看起來
+有內容的空，所以四條全部放行。`evidence.py` 有 `check_fillable()`
+這一層，這一支沒有。**寫得出警告不等於有人在守** —— 跟上一輪
+「寫得出警告不等於掃得到範圍」是同一句話的第二種。
+
+補的是 `unfilled()`，比對的對象是 `template()` 自己不是抄一份佔位
+字串，判準是「值跟模板一模一樣」而不是「裡面有尖括號」（後者會誤退
+一筆要逐字登記 `<div>` 這種原話的污染）。
+
+### 三支判準沒有寫成第六份
+
+`_arg` / `_flag_without_value` / `_unknown_flags` 新開一個
+`cliargs.py`，`pollution.py` 用 `from cliargs import arg as _arg` 接，
+本地讀法跟另外五支一致。名字不帶底線，理由逐字照 `pollution.has_guard`
+那一支：底線會讓下一個人覺得那是私有的、我自己再寫一份。
+
+**另外五支沒有一起搬。** 那是五個檔的改動，每一支都有自己的測試與
+註解（`probemodel._arg` 的 docstring 記著「不收等號會讓 `run` 跑滿
+36 次真呼叫」那次實測），整批搬要各自的反向驗證，跟「新增一個入口」
+不是同一件工作。
+
+### 而在抽的時候，量出上一輪那句話錯在哪
+
+上一輪的「還缺什麼」寫著「`_arg` / `_flag_without_value` /
+`_unknown_flags` 仍然是六份」，連續六輪同一個句型。AST 比對之後：
+
+| 函式 | 幾份 | body |
+|---|---|---|
+| `_unknown_flags` | 5 | 五份全同 |
+| `_flag_without_value` | 5 | 五份全同（型別註記兩種寫法） |
+| `_arg` | 5 | **四種 body** |
+
+第一次寫下那句話的那一輪自己加了括號：「五支各一份，加 `forseti.py`
+這一份服務兩個呼叫端」。`git log -S "def _arg" -- apps/forseti-cli/forseti.py`
+**查無任何 commit** —— 那個檔從來沒有過這三支，它有的是
+`transcript_path` 與 `transcript_limit`，另一組東西。
+
+比份數更重的是那個推論：**數的是「幾個檔案裡出現這個名字」，
+講出來的是「幾份重複」。** 而抽共用的難度取決於它們是不是同一支，
+不取決於份數 —— 連續五輪拿一個沒量過的數字判斷「抽共用模組是設計
+決定所以跳過」。
+
+登進 §40：`pol-d0a00f72d1`，OPEN，radius 10（`AUTO_CONTINUE_LOG.md`
+裡同時出現 `_arg` 與六份的行有 10 行，其中 6 行是同一句型的重述）。
+`preventive_rule` 是 `cliargs.py` 檔頭那張表加量法。
+
+**這一筆是用新指令登的**（`forseti pollution register --from`），
+也就是這個入口的第一次真實使用。`pollution.summary()` total
+30 → **31**，open 23 → 24，guarded 30。
+
+### 十一道注入，二十五條測試每一道都有人紅
+
+不帶 `-x`。每一道注入之後還原並比對 sha256（還原後 `a36756c29b70364c` 一致）。
+
+| 注入 | 紅幾條 | 唯一紅到的 |
+|---|---|---|
+| 1 拿掉 `unfilled` 守門 | 2 | |
+| 2 `unfilled` 抄一份寫死佔位字串 | 2 | |
+| 3 判成「裡面有尖括號就算沒填」 | 2 | |
+| 4 未知子指令守門拿掉 | 1 | `test_子指令打錯字不准掉進list` |
+| 5 旗標缺值守門拿掉 | 1 | `test_每一個旗標漏掉值都退回` |
+| 6 未知旗標守門拿掉 | 1 | `test_旗標名打錯字被點名` |
+| 7 第一個參數是旗標那一行拿掉 | 2 | |
+| 8 收哪幾個欄位抄一份寫死 | 3 | |
+| 9 `KNOWN_FLAGS` 多收一個沒人讀的 | 2 | |
+| 10 `advance` 不轉發 `verifier` | 3 | |
+| 11 自己再寫一份 `_arg` | 12 | |
+
+注入 2 與注入 3 是同一格的兩端：一端證明判準不是抄來的（模板改一個字
+它要跟著動），另一端證明它沒有判太寬（帶尖括號的真原話不算沒填）。
+注入 11 紅 12 條是預期的 —— 自己再寫一份 `_arg` 回 None，整條參數
+讀取都失效，而那正是 `cliargs.py` 存在要擋的事。
+
+### 測試數
+
+新增 `tests/test_pollution_cli.py` **25 個方法**，六個類別
+（Placeholder / Register / Advance / Args / Wiring / ListView）。
+
+### 第一次全套五條紅，其中三條是我造成的，而我先把第二條判給別人
+
+17:13:29 起跑，438.06 秒，**2234 passed、5 failed**。
+2214 + 25 = 2239 = 2234 + 5，跟新增數對得上。
+
+| 紅的 | 誰造成的 | 處置 |
+|---|---|---|
+| `test_pollution_guard_split.py::Test唯一定義::test_有守門的判斷式只有一處` | **我** | 修了 |
+| `test_declared_only.py::test_登記簿沒有過期的條目`（`pollution.OPTIONAL`） | **我** | 登記簿下架那一條 |
+| 同上（`blast.SRC`） | **我** | 測試檔的 `SRC` 改名 |
+| `test_declared_only.py::test_主程式回傳碼跟著紅綠走` | 同上連帶 | 跟著綠 |
+| `test_ui_render.py::test_溫度與證據覆蓋率是資料裡那個` | App 輪詢的競速 | 不處置 |
+| `test_zz_forseti_write_attribution.py` | App 寫 `advice_ledger.jsonl`，加上**我在測試期間登了那筆污染** | 不處置 |
+
+第一條抓得對而且抓得準：`_print_row()` 第一版把
+`r.get('preventive_rule')` 與 `r.get('regression_probe')` 寫成字面量，
+於是「有守門」的判斷式從一處變兩處 —— 而 `has_guard()` 的 docstring
+就寫著那個後果：`tools/literal-restate-check.py` 的條件 2 是「全 repo
+出現超過一次就當成真的鍵名」，多一處就會讓打錯的鍵名被放過。
+**那支 docstring 我讀過，而且讀的時候是為了抄它的「名字不帶底線」
+那一段。** 讀到了理由，沒有把它套到自己正在寫的那幾行。
+修法是從 `OPTIONAL` 拿鍵名，一個字面量都不留。
+
+### 判給別人那一次，錯在拿中間狀態當量測
+
+`blast.SRC` 冒出來的時候我先假設是自己新增的測試檔（它有個模組級
+`SRC` 常數，而那支檢查器是同名歸屬），用 `sed` 改名之後重跑 ——
+**還是紅**，於是我寫下「不是我造成的」並開始查別人。
+
+實際上那次 `sed` 的 `\b` 在 BSD sed 不生效，只改掉定義那一行，
+三處引用原封不動。檔案當時是壞的（`NameError: name 'SRC' is not
+defined`），而我拿那個狀態的結果當證據。改完之後 `blast.SRC` 就不見了。
+
+**中間狀態的量測不算數。** 分辨的方法本來就在畫面上:同一次輸出裡
+`test_pollution_cli.py` 有 3 條紅，而我只看了 `declared_only` 那一段。
+
+### 修完之後第二次全套：2238 綠，剩下那一紅的寫入者是 App
+
+17:24:58 起跑，599.25 秒，**2238 passed、1 failed**。
+2214 + 25 = 2239 = 2238 + 1，跟新增數對得上。起跑前 `ps aux | grep [p]ytest`
+確認只有這一個。
+
+剩下那一條是歸屬守門，指控四條測試動了 `advice_ledger.jsonl`。
+四筆的內容全部帶 App 這條 session 的 id 與 `n: 28/29/30/31`，
+`advicetrack` 在整個 repo 只有一個呼叫端（`desktop_api.py:3505`，
+在 `strands()` 裡）。**這一次我全程沒有寫任何檔案**，所以跟上一輪
+第二次那種「我自己造成的」不同 —— 指控落在測試頭上，寫入者是 App。
+
+`test_ui_render.py::test_溫度與證據覆蓋率是資料裡那個` 這一次沒有紅。
+那條是競速（渲染那一刻與事後讀資料那一刻之間資料被改了），
+**它會不會紅跟程式碼無關**，所以兩次結果不同不代表修好了什麼。
+
+### 正本被碰到的與沒被碰到的
+
+| 檔 | 測前 | 測後 |
+|---|---|---|
+| `.forseti/sufficiency.jsonl` | `b04d5e011ca3fbb5` | 同 |
+| `.forseti/NEXT.md` | `df2e9160dd2cb529` | 同（測試期間沒被寫） |
+| `.forseti/pollution.jsonl` | `3b3d3b4553476490` | 同 |
+| `.forseti/event_ledger.jsonl` | `be2d9d7726b0b59f` | **變了** |
+
+`event_ledger.jsonl` 多出來的兩筆是 `action: Stop` 的 hook 事件
+（`hooks/forseti-stop-hook.mjs`），`agent_id` 是 `c062039d-…`，
+時間戳 1789721344 與 1789723934，後者落在第二次全套區間內。
+**這是線索不是答案** —— 上一輪留下的「`test_ui_render.py` 那一條
+為什麼寫 `event_ledger.jsonl`」仍然沒有解，不要拿這一次的發現去填它。
+這一次歸屬守門**沒有**指控 `event_ledger.jsonl`，所以這兩筆是落在
+測試與測試之間的，不是被記在某條測試頭上。
+
+### 還缺什麼
+
+- **`pollution advance` 走的是旗標，而 `register` 走檔案。** 這一輪沒有
+  量「一次轉換要不要也能吃檔案」。不急，可是這兩種形狀混在同一支
+  CLI 裡是刻意的（理由寫在 `main()` 的 docstring），下一個人要改之前
+  先讀那一段
+- **`antianchor` 與 `probe-model` 的未知子指令沒有名單常數。** 兩支都
+  exit 2（不會給錯答案），可是訊息是整段 docstring 沒有點名打錯的字，
+  而合法子指令只存在於 docstring 字串裡，別人引用不到。**這一輪刻意
+  沒做**：它跟 `attempt`/`evidence`/`metric` 那三支的缺口等級不一樣
+  （那三支先前會靜默掉進 list）
+- **那兩支原始碼裡那句過期的註解沒有改。** `antianchor.py:684` 與
+  `probemodel.py:581` 寫著「`metric` 與 `attempt` 沒有未知子指令守門」，
+  實測兩支都有了。**沒有登進 §40**：它是註解裡的一句旁白，不是被
+  當成根據用過的結論，登進去會稀釋登記簿。這是判斷，可以被推翻
+- **另外五支的 `_arg` / `_flag_without_value` / `_unknown_flags` 沒有搬
+  到 `cliargs.py`。** 那是五個檔的改動，每一支有自己的測試與註解，
+  整批搬要各自的反向驗證。搬之前要先決定 `_arg` 的回傳:
+  antianchor 回 `default` 而不是 `None`，呼叫端的判斷式跟著不一樣
+- **`unfilled()` 只守 `register` 這一條路。** 直接呼叫 `record()` 的人
+  （例如 `tools/seed_pollution.py`）不經過它。要不要把它移進
+  `record()` 是協定的決定:那會讓程式介面也拒絕佔位符，而佔位符
+  這個概念本來只存在於 CLI 的模板裡
+- **`handoff` 那兩個真旗標仍然沒量**（上一輪那條沒有變）
+- **`context` / `index` / `recall` 轉發給別的模組，還是沒量**
+- **exit code 的慣例仍然沒有寫下來**（上一輪那條沒有變）
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED` 要她
+  重新登入、`code_commit` 要合規得把工作區 commit 乾淨、`limit=10`、
+  SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應 CANONICAL、
+  `PRODUCES` 的 expected 對 actual、污染登記簿的「被哪一筆取代」
+  要不要用 `SUPERSEDES` 接、`event_ledger.jsonl` 的白名單決定、
+  `ALIASES` 要不要套到 CLI
+- **全套在 App 開著的時候拿不到全綠，這一條沒有變，也沒有去關 App。**
+  owner 2026-09-16 明令不准自動接續開關 App
