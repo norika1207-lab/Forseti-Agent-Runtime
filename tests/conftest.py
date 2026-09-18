@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -64,6 +65,55 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 FORSETI_DIR = (ROOT / ".forseti").resolve()
+
+
+# ── 交接檔的寫入目標，這一輪導去暫存（2026-09-18）──────────────
+#
+# 上一輪（`AUTO_CONTINUE_LOG.md`）自己寫下的缺口，原話：
+#
+#     正本 `.forseti/NEXT.md` 這一輪被測試用合成資料覆蓋過。收尾的
+#     時候讀到裡面寫「工作區跟 HEAD 不一致的：0 個」與「checkpoint
+#     2 個」，而實測工作區有二十幾個檔案有改動、這條 session 的
+#     checkpoint 是 0 個。⋯⋯這一輪的處置只是等節流窗過去之後重寫
+#     一次，**沒有修根因**。根因的修法是讓測試路徑的 `handoff.OUT`
+#     指到暫存目錄。
+#
+# 這一段就是那個修法。**在 conftest 被 import 的當下設**，也就是在
+# 任何測試模組 `import handoff` 之前 —— 晚一步就來不及，`handoff.OUT`
+# 是 import 時算一次的模組常數。
+#
+# 為什麼是環境變數不是 monkeypatch：子行程繼承得到環境變數，繼承不到
+# monkeypatch，而這一組測試裡有真的跑 `pytest` 子行程的（e2e 那一組）。
+#
+# **用 `setdefault` 不用直接指派**：外面已經設了的話那是呼叫者的意思，
+# 這裡不覆蓋 —— 想量「測試真的會寫正本嗎」的人，設成正本路徑就量得到。
+#
+# 這裡**不刪**這個暫存目錄。要刪就得先判斷刪的是不是自己建的那一個，
+# 而判斷錯的代價是刪到別人的東西；不刪的代價是系統暫存區多一個
+# 十幾 KB 的目錄，作業系統自己會清。兩邊的失敗方向差太多。
+HANDOFF_TMPDIR = Path(tempfile.mkdtemp(prefix="forseti-handoff-"))
+HANDOFF_OUT = HANDOFF_TMPDIR / "NEXT.md"
+os.environ.setdefault("FORSETI_HANDOFF_OUT", str(HANDOFF_OUT))
+
+
+def handoff_redirect_target() -> Path:
+    """這一輪的交接檔實際寫到哪裡。守門那一組要拿它比對。"""
+    return Path(os.environ.get("FORSETI_HANDOFF_OUT") or HANDOFF_OUT)
+
+
+def handoff_redirect_size() -> int | None:
+    """重導目標此刻多大。不存在回 `None`，**不回 0**。
+
+    兩件事差很遠：`None` 是「這一輪沒有人走到寫入」，`0` 是
+    「寫了而且寫出空的」。守門要靠這個分辨「正本沒被動」是因為
+    重導接住了，還是因為這一輪根本沒人走到那條路 —— 後者的話
+    這組守門什麼都沒守到，而它看起來會跟守住了一模一樣。
+    """
+    p = handoff_redirect_target()
+    try:
+        return p.stat().st_size
+    except OSError:
+        return None
 
 # nodeid -> 這條測試結束後，跟開始前不一樣的相對路徑（排序過）
 _RECORD: dict[str, list[str]] = {}

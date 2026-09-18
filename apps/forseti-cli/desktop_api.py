@@ -2026,6 +2026,7 @@ def pollution_panel() -> dict:
 
     rows = PO.records()
     s = PO.summary()
+    g = PO.guard_split()
     out = []
     for r in rows:
         out.append({
@@ -2038,8 +2039,12 @@ def pollution_panel() -> dict:
             "radius": r.get("propagation_radius"),
             "radius_basis": r.get("radius_basis", ""),
             # 有沒有東西攔著它再犯，不是它對不對。
-            "guarded": bool((r.get("preventive_rule") or "").strip()
-                            or (r.get("regression_probe") or "").strip()),
+            # **叫 `pollution.has_guard()`，這裡不另外判一次。**
+            # 這一行 2026-09-18 之前是自己抄的一份，而那一份多了
+            # `.strip()` —— 兩份語意不完全一樣，只是現有 21 筆剛好
+            # 都測不出差別。那種「巧合相等」正是這個專案付過代價的
+            # 形狀，所以消掉的不是重複，是分歧。
+            "guarded": PO.has_guard(r),
             "sources": list(r.get("source_events") or []),
         })
     return {
@@ -2049,7 +2054,23 @@ def pollution_panel() -> dict:
         "by_status": s.get("by_status", {}),
         "radius_unknown": s.get("radius_unknown", 0),
         "radius_note": s.get("radius_note", ""),
-        "guarded": s.get("guarded", 0),
+        # **`guarded` 的分母是 open，不是 total。**
+        # 這一欄先前接的是 `summary()['guarded']`（分母 `records()` 全部），
+        # 而畫面上緊鄰它的那一句印的是 `open`。此刻 RESOLVED 是 0，
+        # 所以 total == open，兩個數字剛好對得上 —— 那是巧合不是設計。
+        # 第一筆推到 RESOLVED 的那天，畫面上就會出現
+        # 「N 筆還沒收乾淨 ⋯ 攔著的筆數：M 筆」而 M 含已收乾淨的那些。
+        # `guard_split()` 自己對 open 組算，並且把分母帶在回傳值裡。
+        "guarded": g.get("guarded", 0),
+        "unguarded": g.get("unguarded", 0),
+        "unguarded_ids": list(g.get("unguarded_ids") or []),
+        "guard_denominator": g.get("denominator", ""),
+        # 兩行各一句，不共用 `guard_note`（它一句講完兩堆，
+        # 拿去當第一行的說明會跟第二行整句重複）。
+        "guarded_note": g.get("guarded_note", ""),
+        "unguarded_note": g.get("unguarded_note", ""),
+        "unguarded_caveat": g.get("unguarded_caveat", ""),
+        "guard_basis": g.get("basis", ""),
         "guard_note": s.get("guard_note", ""),
         "source": s.get("source", ""),
         # 這一句是這一格最重要的誠實條款，不是說明文字。

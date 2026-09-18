@@ -418,7 +418,11 @@ def test_標記那一下碰得到正本交接檔_所以它在冊(tmp_path, monke
     orig = HO.should_write
 
     def spy(path=None, *a, **k):
-        seen.append(str(path) if path is not None else str(HO.OUT))
+        # **記的是「有沒有帶 path」，不是帶的值。** 原本這裡在 path 是
+        # None 的時候記 `str(HO.OUT)`，然後下面拿 `str(HO.OUT)` 去比 ——
+        # 同一個值跟自己比，那條斷言恆真，換句話說它守不到任何東西。
+        # 2026-09-18 發現並改掉。
+        seen.append("<default>" if path is None else str(path))
         return False
 
     monkeypatch.setattr(HO, "should_write", spy)
@@ -433,8 +437,12 @@ def test_標記那一下碰得到正本交接檔_所以它在冊(tmp_path, monke
         "`tests/test_state_changing_writes.py` 那一筆的登記理由就過期了 —— "
         "回去改那裡的說明，不要改這一條讓它閉嘴"
     )
-    assert str(HO.OUT) in seen, (
-        f"走到閘門了，但目標不是正本：{seen}　期望裡面有 {HO.OUT}。"
-        "目標換成別的路徑的話它就不再碰正本，那時候該做的是"
-        "把它從名單上拿掉，不是留著一筆不成立的登記"
+    assert "<default>" in seen, (
+        f"走到閘門了，但帶了自己的路徑：{seen}　"
+        "不帶 path 才落在 `handoff.OUT` 這個模組全域上 —— 那個全域"
+        "正式執行時是正本、跑測試時被導到暫存"
+        "（`tests/test_handoff_out_redirect.py`）。帶了自己的路徑的話"
+        "它就不再碰那條路，那時候該做的是把它從"
+        "`test_zz_forseti_write_attribution.py` 那張名單上拿掉，"
+        "不是留著一筆不成立的登記"
     )

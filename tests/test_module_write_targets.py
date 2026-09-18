@@ -74,9 +74,9 @@ CLI = ROOT / "apps" / "forseti-cli"
 #: **那條紅是這個檔案唯一的用處**：其餘每一條都只看自己那一支，
 #: 新增的模組在它們眼裡不存在。
 GUARDED_HERE = frozenset({
-    "advicetrack", "antianchor", "attempts", "blockread", "commit",
-    "coverage", "event_ledger", "gate", "identity", "metrics",
-    "pollution", "sufficiency", "workflow",
+    "advicetrack", "antianchor", "attempts", "blockread", "claims", "commit",
+    "coverage", "event_ledger", "evidence", "gate", "identity", "lineage",
+    "metrics", "pollution", "sufficiency", "workflow",
 })
 
 #: 另外三支守在 `tests/test_state_changing_writes.py`，那裡是從
@@ -165,6 +165,14 @@ def _w_blockread(tmp: Path) -> Path:
     lg.append(blockread.Note(path="x.md", index=0, title="t",
                              lo=1, hi=2, summary="s"))
     return lg.path
+
+
+def _w_claims(tmp: Path) -> Path:
+    import claims
+    p = tmp / ".forseti" / "claims.jsonl"
+    claims.record(claims.Claim(text="守門測試", kind="file", subject="x.py"),
+                  path=p)
+    return p
 
 
 def _w_commit(tmp: Path) -> Path:
@@ -294,6 +302,43 @@ def _w_sufficiency(tmp: Path) -> Path:
     return lg.path
 
 
+def _w_lineage(tmp: Path) -> Path:
+    """走 `add()`，五個必填全部餵真的值。
+
+    2026-09-18 新增的第十五個寫入點，由上面那條覆蓋率測試點名進來的
+    —— 它紅了一次，這一行才長出來。
+
+    `basis` 不能空，空的話 `add()` 在寫檔之前就 return 一個
+    `{"ok": False}`，那樣量到的零是提早 return 的零，
+    跟「它不寫」長得一樣（檔頭那個假陰性）。
+    """
+    import lineage
+    p = tmp / "lineage.jsonl"
+    r = lineage.add(type="SUPERSEDES", from_id="ADR-010", to_id="ADR-002",
+                    basis="守門測試", path=p)
+    assert r["ok"], f"加邊被拒絕了，那這一條量到的零就不是零：{r}"
+    return p
+
+
+def _w_evidence(tmp: Path) -> Path:
+    """走 `record()`，四個必填全部餵真的值。
+
+    2026-09-18 新增的第十六個寫入點，由上面那條覆蓋率測試點名進來的
+    —— 它紅了一次，這一行才長出來。
+
+    `about` / `sources` / `strength` / `captured_by` 缺任何一個，
+    `record()` 會在寫檔之前就 return 一個 `{"ok": False}`，
+    那樣量到的零是提早 return 的零，跟「它不寫」長得一樣
+    （檔頭那個假陰性）。
+    """
+    import evidence
+    p = tmp / "evidence.jsonl"
+    r = evidence.record(about="守門測試", sources=["守門測試"],
+                        strength="E1", captured_by="守門測試", path=p)
+    assert r["ok"], f"登記被拒絕了，那這一條量到的零就不是零：{r}"
+    return p
+
+
 def _w_workflow(tmp: Path) -> Path:
     import workflow
     workflow.declare_boundary("wf-守門測試", "NONE", declared_by="守門測試",
@@ -306,11 +351,14 @@ WRITERS = {
     "antianchor": _w_antianchor,
     "attempts": _w_attempts,
     "blockread": _w_blockread,
+    "claims": _w_claims,
     "commit": _w_commit,
     "coverage": _w_coverage,
     "event_ledger": _w_event_ledger,
+    "evidence": _w_evidence,
     "gate": _w_gate,
     "identity": _w_identity,
+    "lineage": _w_lineage,
     "metrics": _w_metrics,
     "pollution": _w_pollution,
     "sufficiency": _w_sufficiency,
@@ -373,9 +421,10 @@ def test_只寫該寫的那一個檔案(name, tmp_path, monkeypatch):
 
 def _default_of(name: str) -> Path:
     import advicetrack, antianchor, attempts                        # noqa: E401
-    import blockread, commit, coverage                             # noqa: E401
-    import event_ledger                                            # noqa: E401
-    import gate, identity, metrics, pollution, sufficiency, workflow  # noqa: E401
+    import blockread, claims, commit, coverage                     # noqa: E401
+    import event_ledger, evidence                                  # noqa: E401
+    import gate, identity, lineage, metrics, pollution            # noqa: E401
+    import sufficiency, workflow                                   # noqa: E401
     import desktop_api                                             # noqa: E401
     return {
         "advicetrack": lambda: advicetrack.LOG,
@@ -387,11 +436,14 @@ def _default_of(name: str) -> Path:
         # 餵傳進來的 root。所以這一支問的是「那個呼叫端餵的是不是控制目錄」,
         # 跟其餘九支問的不是同一件事,寫在這裡免得被讀成一樣。
         "blockread": lambda: blockread.BlockLog(desktop_api.REPO).path,
+        "claims": lambda: claims.log_path(),
         "commit": lambda: commit.LOG,
         "coverage": lambda: coverage.CoverageLog().path,
         "event_ledger": lambda: event_ledger.default_jsonl(),
+        "evidence": lambda: evidence.log_path(),
         "gate": lambda: gate.LOG,
         "identity": lambda: identity.registry_path(),
+        "lineage": lambda: lineage.log_path(),
         "metrics": lambda: metrics.LOG,
         "pollution": lambda: pollution.LOG,
         "sufficiency": lambda: sufficiency.Log().path,
@@ -407,11 +459,14 @@ DEFAULT_NAMES = {
     "antianchor": "antianchor.jsonl",
     "attempts": "attempts.jsonl",
     "blockread": "reading_blocks.jsonl",
+    "claims": "claims.jsonl",
     "commit": "commits.jsonl",
     "coverage": "reading_coverage.jsonl",
     "event_ledger": "event_ledger.jsonl",
+    "evidence": "evidence.jsonl",
     "gate": "gate.jsonl",
     "identity": "identity.jsonl",
+    "lineage": "lineage.jsonl",
     "metrics": "metrics.jsonl",
     "pollution": "pollution.jsonl",
     "sufficiency": "sufficiency.jsonl",

@@ -266,15 +266,44 @@ def model_fields(*, transcript: str | Path | None = None,
     仍然只有 `effort` 與 `perTurnEffort`。
     """
     mi = model if model is not None else {}
-    if model is None and transcript:
+    # 讀不到 model 的理由要分得出是哪一種讀不到。2026-09-18 實測，
+    # 這四種情況以前印的是同一句「這一條 session 的 jsonl 讀不到 model
+    # 欄位」，而那句話只有最後一種為真：
+    #   `metric template`（完全沒給）              -> 沒讀過任何 jsonl
+    #   `metric template --transcript`（旗標缺值）  -> 沒讀過任何 jsonl
+    #   `metric template --transcript --path X`    -> 讀的是 `--path` 這個字串
+    #   `metric template --transcript /不存在`      -> 開檔就失敗了
+    # 四種全部 exit=0、沒有任何錯誤訊息，模板照樣印得出來。§33.1 的
+    # 重點是這一筆數字的尺與材料查得回去，而一個假的缺席理由比空著更糟：
+    # 空著看得出來要補，假理由會被下一個人當成已知（§40 的機制欄一再
+    # 記到的同一件事）。
+    why_no_model = "這一條 session 的 jsonl 讀不到 model 欄位"
+    if model is not None:
+        why_no_model = ("呼叫端直接給了一份模型資訊，那一份裡面沒有 model "
+                        "這一欄。**沒有讀過任何 jsonl** —— 所以這一欄的缺席"
+                        "跟那份 jsonl 有沒有 model 欄位無關")
+    elif not transcript:
+        why_no_model = ("沒有指定 transcript，所以**沒有讀過任何 jsonl**。"
+                        "這一欄不是讀不到，是沒去讀 —— 兩件事寫成同一句的話，"
+                        "這一筆的 model_id 帶著一個查不回去的理由")
+    else:
         try:
-            import contract as CT                 # 延後 import
-            mi = CT.model_from_transcript(transcript)
-        except Exception:                         # pragma: no cover - 防禦
-            mi = {}
+            with open(transcript, "rb"):          # 只開檔，不讀內容（那份很大）
+                pass
+        except OSError as exc:
+            why_no_model = (f"指定的 transcript 開不起來"
+                            f"（{type(exc).__name__}）：{transcript}。"
+                            f"**不是那份 jsonl 沒有 model 欄位**，是根本沒讀到")
+        else:
+            try:
+                import contract as CT             # 延後 import
+                mi = CT.model_from_transcript(transcript)
+            except Exception as exc:              # pragma: no cover - 防禦
+                mi = {}
+                why_no_model = (f"讀 transcript 的時候出錯"
+                                f"（{type(exc).__name__}）：{transcript}")
     return {
-        "model_id": mi.get("model") or absent(
-            UNKNOWN, "這一條 session 的 jsonl 讀不到 model 欄位"),
+        "model_id": mi.get("model") or absent(UNKNOWN, why_no_model),
         "model_hash": absent(
             UNKNOWN, "模型權重的 revision/hash 提供端沒有給。"
                      "jsonl 的 `version` 是 CLI 版本不是模型版本"),
@@ -525,6 +554,71 @@ def _arg(argv: list, name: str) -> str | None:
     return None
 
 
+def _flag_without_value(argv: list, name: str) -> bool:
+    """旗標出現了，可是後面沒有值。
+
+    這跟「旗標沒出現」要分得開。`_arg` 兩種都回 None，而呼叫端拿
+    None 當「沒指定，讀正本」——於是 `--path`（手滑漏掉路徑）會去
+    讀正本並回報一份看起來正常的報告。2026-09-18 實測
+    `forseti attempt list --path` 回的是正本那筆 att-2bb74c352d，
+    五個欄位完整印出來。**那個人以為他看到的是自己指定的檔。**
+
+    等號寫法不算在內：`--path=` 是明確給了一個空字串，
+    跟沒寫完不是同一件事，留給呼叫端自己判。
+    """
+    # 「後面那個東西是另一個旗標」也算沒給值。2026-09-18 實測的後果：
+    # `antianchor classify <id> blockers CHANGED_REALITY --by --reason 環境變了`
+    # 會 exit=0、印「記下了」、而磁碟上那一筆 CLASSIFY 的 `by` 是
+    # `--reason`。§39 那四類沒有一類算得出來，所以每一筆分類都要指得回
+    # 是誰判的 —— 指回一個旗標名等於指不回任何人，而畫面上跟成功一樣。
+    # `classify()` 內部本來就擋空字串（`by` 必填），所以擋不住的不是空的，
+    # 是被下一個旗標填滿的。三支 `show --id` 那一半則是診斷指錯：
+    # 回「不在登記簿上」，那個人會以為那筆資料不存在。
+    #
+    # 代價講清楚：真的要傳一個以 `--` 開頭的值，等號那條路還在
+    # （`--by=--reason` 照樣拿得到 `--reason`），所以沒有失去表達能力。
+    # 只認兩個減號，`-1` 這種值不受影響。
+    return any(a == name for a in argv) and not any(
+        (a == name and i + 1 < len(argv)
+         and not str(argv[i + 1]).startswith("--"))
+        or str(a).startswith(name + "=")
+        for i, a in enumerate(argv))
+
+
+
+def _unknown_flags(argv: list, known: tuple) -> list:
+    """認不得的旗標名。打錯字不准靜默走預設。
+
+    2026-09-18 實測，五支的打錯字後果分三級，**沒有一支會說
+    「我不認得這個旗標」**：
+
+    | 寫法 | exit | 實際發生的事 |
+    |---|---|---|
+    | `probe-model run --yes --onlyy X` | 1 | 不過濾，跑滿 36 次真呼叫 |
+    | `antianchor status --roott X` | 0 | 讀正本，畫面跟成功一樣 |
+    | `attempt record --retry-conditionn X` | 0 | 印「登錄了」，那一欄落地是空的 |
+    | `metric template --transcriptt X` | 0 | 模板照印，缺席理由指錯原因 |
+    | `evidence show --idd X` | 2 | 報錯，可是怪「要一個 id」 |
+
+    跟 `_flag_without_value` 不是同一件事：那一支問的是「這個旗標
+    後面有沒有值」，前提是旗標名對得上。名字打錯的時候那一支
+    一律不觸發 —— 它 `any(a == name ...)` 找的是正確的那個名字。
+
+    判準只認兩個減號開頭的 token，取等號之前那一段比對，所以
+    `--by=--reason` 這種明著傳減號開頭的值照樣收（比的是 `--by`）。
+    裸的 `--` 跳過：這五支都沒有實作那個慣例標記，這道守門不替
+    它作決定，維持現況的忽略。
+    """
+    out = []
+    for a in argv:
+        s = str(a)
+        if not s.startswith("--") or s == "--":
+            continue
+        name = s.split("=", 1)[0]
+        if name not in known and name not in out:
+            out.append(name)
+    return out
+
 def _num(s: str | None):
     """數字就當數字，不是就原樣留著。
 
@@ -563,6 +657,16 @@ def _print_record(r: dict) -> None:
     print()
 
 
+SUBCOMMANDS: tuple[str, ...] = ("list", "show", "template", "register")
+
+
+#: `main()` 認得的全部旗標。跟底下那幾個 `_arg(rest, "--x")` 各寫
+#: 一份，`tests/test_cli_flag_dispatch.py` 有一條盯著不漂開 ——
+#: 漂開的話會出現「守門說認得、`main()` 裡沒人讀」的旗標，那種
+#: 打對了也沒用，跟打錯字一樣靜默。整支共用一份不是每個子指令一份。
+KNOWN_FLAGS: tuple[str, ...] = ("--path", "--from", "--id", "--transcript")
+
+
 def main(argv: list) -> int:
     """`forseti metric <list|show|template|register>`
 
@@ -570,9 +674,82 @@ def main(argv: list) -> int:
     這份記錄有 25 欄而且每一欄的缺席都要附理由，用旗標填的話
     人會為了讓指令跑得動而亂填，那正是這個契約要擋的事。
     """
-    sub = argv[0] if argv else "list"
-    rest = argv[1:]
+    # 第一個參數以 `-` 開頭的時候它是旗標不是子指令。少了這一行，
+    # `forseti metric --path X` 會把 `--path` 放進 `sub`，於是 `rest`
+    # 只剩下 X，`_arg(rest, "--path")` 找不到，結果是**讀正本而不是
+    # 讀 X**。2026-09-18 實測：正本此刻不存在所以回 0 筆，而 X 裡有
+    # 1 筆 —— 錯的答案（0）跟「登記簿是空的」那句話長得一模一樣，
+    # 不會報錯。同一個形狀在 `evidence.py` 先撞到（那一輪的紀錄在
+    # AUTO_CONTINUE_LOG 2026-09-18 08:2x）。
+    _flag_first = bool(argv) and str(argv[0]).startswith("-")
+    sub = argv[0] if (argv and not _flag_first) else "list"
+    rest = list(argv) if _flag_first else argv[1:]
+    # `--path` 寫了可是後面沒有值 -> 明著退回，不准掉回正本。
+    # 少了這一段，手滑漏掉路徑的人會拿到正本的內容並以為那是他指定的
+    # 檔（2026-09-18 實測，原始輸出在 AUTO_CONTINUE_LOG 那一輪）。
+    if _flag_without_value(rest, "--path"):
+        print("  `--path` 後面要接一個檔案路徑。沒接的話會讀正本，")
+        print("  而那份報告看起來跟你指定的檔一模一樣 —— 所以這裡退回。")
+        return 2
+    # `--from` 與 `--id` 是 2026-09-18 補的。兩者先前都不是靜默的，
+    # 可是都指錯原因：`--from` 接到下一個旗標會回「讀不到 --path=...」
+    # （怪檔案不存在，不是怪值漏了），`--id` 會回「不在登記簿上」
+    # （那個人會以為那筆資料不存在，而真正的事是指令打錯，
+    # 而且被吞掉的那個旗標讓它讀的還是別的檔）。
+    for _flag, _why in (("--from", "後面要接一份 JSON 的路徑。"),
+                        ("--id", "後面要接一個 id。")):
+        if _flag_without_value(rest, _flag):
+            print(f"  `{_flag}` {_why}沒接的話下一個旗標會被當成值，")
+            print("  於是錯誤訊息會怪到別的東西頭上 —— 所以這裡退回。")
+            return 2
+    # `--transcript` 另起一道，不併進上面那個迴圈。上面那道的訊息寫著
+    # 「錯誤訊息會怪到別的東西頭上」，而這一支根本不出錯誤訊息：
+    # 2026-09-18 實測 `metric template --transcript` 與
+    # `metric template --transcript --path X` 兩種都 exit=0、模板照印、
+    # `model_id` 靜默變成一筆帶著假理由的缺席。套那句話在這裡是假的。
+    #
+    # 這道跟 `model_fields()` 裡那段理由分辨**不是重複**：這道擋的是
+    # 指令列手滑，那段管的是所有呼叫路徑（含直接呼叫函式的人）。
+    # 少了這道，手滑的人拿到的是一份看起來完整的模板；少了那段，
+    # 任何路徑進來的缺席都掛著同一句只有一種情況為真的理由。
+    #
+    # 完全不寫 `--transcript` 是合法的（模板照樣要印得出來，
+    # `model_id` 缺席並說明沒去讀），所以這道只擋「寫了但沒給值」。
+    if _flag_without_value(rest, "--transcript"):
+        print("  `--transcript` 後面要接一份 session 的 jsonl 路徑。")
+        print("  沒接的話模板照樣印得出來，而 `model_id` 會變成一筆缺席，")
+        print("  理由寫著「jsonl 讀不到 model 欄位」—— 那句話是假的，")
+        print("  因為根本沒讀任何 jsonl。所以這裡退回。")
+        print("  不指定模型的話整個旗標拿掉，缺席的理由會照實寫。")
+        return 2
+    # 旗標名打錯字 -> 明著退回。2026-09-18 實測
+    # `metric template --transcriptt /tmp/x` exit=0、模板照印，而
+    # `model_id` 的缺席理由寫著「沒有指定 transcript，所以沒有讀過
+    # 任何 jsonl」。**那句話對機器為真，對打了字的那個人是假的** ——
+    # 他明明在指令列上寫了一個路徑。上一輪才把那一句拆成四句，
+    # 為的就是缺席理由要指得回真正的原因；打錯字這條路會讓那四句
+    # 裡挑到的那一句再度變成假理由，而假理由比空著更糟。
+    _unknown = _unknown_flags(rest, KNOWN_FLAGS)
+    if _unknown:
+        print()
+        print(f"  不認得這個旗標：{'、'.join(_unknown)}")
+        print(f"  有的是：{'、'.join(KNOWN_FLAGS)}")
+        print("  打錯字不會報錯，那個旗標會被當成沒寫 —— 模板照印，")
+        print("  而缺席的理由指的是另一個原因。所以這裡退回。")
+        print()
+        return 2
     p = Path(_arg(rest, "--path")) if _arg(rest, "--path") else None
+
+    # 打錯子指令不准靜默掉進 list。少了這一段，`forseti metric registr
+    # --from x` 會回 0 並印一份看起來正常的「0 筆」報告，而那個人以為
+    # 自己登記過了。判斷放在這裡不放在最後，是因為底下每一條 `sub ==`
+    # 都不成立的時候，落點就是 list。
+    if sub not in SUBCOMMANDS:
+        print()
+        print(f"  不認得這個子指令：{sub}")
+        print(f"  有的是：{'、'.join(SUBCOMMANDS)}")
+        print()
+        return 2
 
     if sub == "template":
         tpl = {}

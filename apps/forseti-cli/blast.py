@@ -28,11 +28,17 @@
 ## ROADMAP 那一句不準確
 
 ROADMAP P1 第 5 項寫「事件帳本裡有 lineage 邊，`event_ledger.py`
-有相關實作」。2026-09-16 查證：`event_ledger.py:117-125` 的
-`LINEAGE_EDGES` 是**只定義未實作**，同檔 `SPEC_DEVIATIONS` 自己寫著
-「v5.0 §6.3 的 lineage_edges 只定義未實作，等 claim 與 decision 存在」。
-所以「從事件節點往下游走」這條路現在沒有邊可以走。
+有相關實作」。2026-09-16 查證：`LINEAGE_EDGES` 當時是**只定義未實作**，
+所以「從事件節點往下游走」這條路沒有邊可以走。
 這裡走的是**檔案依賴**那條，也就是 M4 精確定義的那一條。
+
+**2026-09-18 更新。** `lineage.py` 補上了存放層與 §6.3 的兩端約束，
+`lineage.walk()` 走得動。但**磁碟上此刻 0 條邊**，所以上面那句
+「沒有邊可以走」對結果仍然成立，變的是原因：先前是沒有存放層，
+現在是沒有人產生邊。同一輪也量翻了當時記下的理由 ——
+擋住的不是「還沒有 claim 與 decision」（decision 指得到、claim 有
+實作），是 evidence 沒有實體。這一段留著不刪，因為它是那句
+ROADMAP 原話的更正紀錄。
 
 ## 誠實條款（第 6.4 節，不可協商）
 
@@ -664,7 +670,10 @@ def vectors(targets: list[str] | None = None, root: Path | None = None,
         return {**hit, "cached": True,
                 "cache_write": CACHE_NOT_ATTEMPTED,
                 "cache_write_why": _cache_write_why(CACHE_NOT_ATTEMPTED)}
+    stage = "寫暫存檔"
     tmp = Path(tempfile.mkdtemp(prefix="forseti-blast-"))
+    # `stage` 是 2026-09-18 加的，理由跟 `goalgate.py` 那一支同一句：
+    # 兩個 write_text 也會丟 OSError，而底下先前一律講成「起不了 node」。
     try:
         runner = tmp / "run.mjs"
         runner.write_text(_RUNNER, encoding="utf-8")
@@ -673,12 +682,13 @@ def vectors(targets: list[str] | None = None, root: Path | None = None,
                                     "js_files": g["js_files"],
                                     "repo": str(base)},
                                    ensure_ascii=False), encoding="utf-8")
+        stage = "叫 node"
         r = subprocess.run([n, str(runner), str(src), str(data)],
                            capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"has": False, "why": f"node 超過 {TIMEOUT} 秒沒回"}
     except OSError as e:
-        return {"has": False, "why": f"起不了 node：{e}"}
+        return {"has": False, "why": f"{stage}失敗：{e}"}
     finally:
         # **node 跑完就不需要這個目錄了。** 先前這裡沒有收，
         # 而這一支每一輪輪詢只要指紋變了就走一次 ——
@@ -890,6 +900,7 @@ def detail(target: str, root: Path | None = None) -> dict:
                 "cache_write": CACHE_NOT_ATTEMPTED,
                 "cache_write_why": _cache_write_why(CACHE_NOT_ATTEMPTED)}
 
+    stage = "寫暫存檔"          # 理由同 `vectors()`
     tmp = Path(tempfile.mkdtemp(prefix="forseti-blast-d-"))
     try:
         runner = tmp / "run.mjs"
@@ -899,12 +910,13 @@ def detail(target: str, root: Path | None = None) -> dict:
                                     "js_files": g["js_files"],
                                     "repo": str(base)},
                                    ensure_ascii=False), encoding="utf-8")
+        stage = "叫 node"
         r = subprocess.run([n, str(runner), str(src), str(data)],
                            capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
         return {"has": False, "target": tgt, "why": f"node 超過 {TIMEOUT} 秒沒回"}
     except OSError as e:
-        return {"has": False, "target": tgt, "why": f"起不了 node：{e}"}
+        return {"has": False, "target": tgt, "why": f"{stage}失敗：{e}"}
     finally:
         # 跟 `vectors()` 同一條理由，同一個事故的另一半：
         # 兩個前綴分別留下 2732 與 2981 個目錄。

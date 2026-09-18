@@ -305,14 +305,44 @@ def invalidated_conclusions(path: Path | None = None) -> list[str]:
     return out
 
 
+def has_guard(r: dict) -> bool:
+    """這一筆有沒有東西攔著它。**「有守門」的唯一定義,只寫在這裡。**
+
+    §40.2 認的是 preventive_rule 或 regression_probe,兩個有一個就算。
+
+    ## 為什麼一定要唯一
+
+    2026-09-18 這一支被抽出來,起因是 `guard_split()` 把同一個判斷式
+    照抄了兩次,於是 `r.get("regression_probe")` 在這個檔裡出現三次 ——
+    而 `tools/literal-restate-check.py` 的條件 2 是「全 repo 出現
+    超過一次就當成真的鍵名」(那一支的第 1212 行)。
+
+    所以那三次**讓打錯鍵名的偵測器失效了**:把其中一個打成
+    `regression_prope` 本來會被抓,重複之後就被當成真的鍵名放過。
+    `tests/test_literal_restate.py` 的反向驗證當場變成 0 命中。
+
+    判斷式重複不只是難維護,它會關掉一個偵測器。這是實測到的,
+    不是風格意見。
+
+    ## 為什麼沒有底線(2026-09-18 第二次)
+
+    這一支原本叫 `_has_guard`,而 `desktop_api.pollution_panel()`
+    第 2041 行當時自己另外抄了一份(還多了 `.strip()`,所以兩份
+    語意其實不完全一樣)。底線名稱會讓下一個人覺得「那是私有的,
+    我自己再寫一份」—— **而那正是這一支存在要杜絕的機制。**
+
+    現在它有跨模組使用者,所以名字不帶底線。
+    """
+    return bool(r.get("preventive_rule") or r.get("regression_probe"))
+
+
 def summary(path: Path | None = None) -> dict:
     rows = records(path)
     counts = {s: 0 for s in STATUSES}
     for r in rows:
         counts[r.get("status", "OPEN")] = counts.get(r.get("status", "OPEN"), 0) + 1
     no_radius = [r["id"] for r in rows if r.get("propagation_radius") is None]
-    guarded = [r["id"] for r in rows
-               if (r.get("preventive_rule") or r.get("regression_probe"))]
+    guarded = [r["id"] for r in rows if has_guard(r)]
     return {
         "total": len(rows),
         "by_status": counts,
@@ -325,4 +355,62 @@ def summary(path: Path | None = None) -> dict:
         "guard_note": ("有偵測器或預防規則攔著的筆數。"
                        "其餘那些現在只靠人記得"),
         "source": "v5.0 §40 PollutionRegistry",
+    }
+
+
+def guard_split(path: Path | None = None) -> dict:
+    """還沒收乾淨的那幾筆裡,有守門的與只靠人記得的各幾筆。
+
+    ## 為什麼這一支不是 `summary()['guarded']`
+
+    **分母不一樣。** `summary()` 的 `guarded` 是對 `records()` 算的,
+    分母是全部登記過的筆數；而交接檔「已經被推翻的」那一節
+    講的是 `open_records()`(RESOLVED 以外)。
+
+    2026-09-18 這一刻 RESOLVED 是 0,所以兩個分母剛好相等 ——
+    **那是巧合,不是設計。** 一旦有一筆推到 RESOLVED,
+    `summary()['guarded']` 就會把它算進來,而那一節的 21 筆裡沒有它。
+    拿那個數字去配這一節的分母,兩個數字就會在同一頁上打架,
+    而這個專案已經為「兩邊回答的不是同一個問題」付過代價
+    (`NEXT.md` 的產出那一節就是為此分成兩半)。
+
+    所以這一支自己對 open 組算,並且把分母寫在回傳值裡。
+
+    ## 為什麼要分這兩堆
+
+    §40.2 要的是偵測器,不是一次查核。一筆污染只要沒有
+    `preventive_rule` 也沒有 `regression_probe`,那個機制下一次
+    還是會犯 —— 現在唯一擋著它的是有人記得。
+
+    `open` 那個總數看不出這件事:19 筆有守門跟 2 筆只靠人記得
+    在那個數字裡長得一模一樣,而**後面那 2 筆才是風險所在**。
+
+    `unguarded_ids` 照登記順序,不排序 —— 順序本身是資訊
+    (先登記的那一筆卡得比較久)。
+    """
+    rows = open_records(path)
+    guarded = [r["id"] for r in rows if has_guard(r)]
+    unguarded = [r["id"] for r in rows if not has_guard(r)]
+    return {
+        "open": len(rows),
+        "guarded": len(guarded),
+        "unguarded": len(unguarded),
+        "unguarded_ids": unguarded,
+        "denominator": "open_records()（RESOLVED 以外）",
+        "basis": ("有 preventive_rule 或 regression_probe 的算有守門。"
+                  "其餘那些現在只靠人記得"),
+        # **`basis` 一句話講完兩堆，而畫面是兩行各講一堆。**
+        # 直接拿 `basis` 去當第一行的說明，它的後半（「其餘那些現在
+        # 只靠人記得」）會跟第二行整句重複 —— 實測畫面上長成
+        # 「⋯其餘那些現在只靠人記得：19 筆⋯／剩下 2 筆現在只靠人記得⋯」。
+        # 所以這裡拆成兩句，各對應畫面的一行。`basis` 不動，
+        # 它是回答「憑什麼這樣分」的那一句，不是畫面文案。
+        "guarded_note": "有偵測器或預防規則攔著的筆數",
+        "unguarded_note": "現在只靠人記得",
+        # caveat 分開一欄，因為畫面上那幾個 id 要接在 note 後面，
+        # caveat 要接在 id 後面 —— 併成一句的話，排版會變成
+        # 「⋯只靠人記得。重驗過不等於機制被擋住了：pol-xxx」，
+        # 句號後面接冒號，斷句是壞的。**排版歸畫面，句子歸這裡。**
+        "unguarded_caveat": "重驗過不等於機制被擋住了",
+        "source": "v5.0 §40.2",
     }

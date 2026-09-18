@@ -380,6 +380,32 @@ fn main() {
                     let _ = w.show();
                     let _ = w.unminimize();
                     let _ = w.set_focus();
+                    // 【2026-09-18】上面那三行早就在了，而視窗還是看不到。
+                    // 所以印出「它以為自己在哪個螢幕上」——
+                    // 這台機器是雙螢幕鏡像（主 4608x2592、內建 3024x1964），
+                    // 兩邊解析度不同，視窗的座標算在主螢幕的座標系裡，
+                    // 鏡像過去可能落在裁切區外。
+                    // **「visible=true 而看不到」的解釋只能來自螢幕資訊，
+                    // 不能來自視窗自己怎麼說。**
+                    match w.current_monitor() {
+                        Ok(Some(m)) => eprintln!(
+                            "[forseti] 目前螢幕 {:?} size={:?} pos={:?} scale={}",
+                            m.name(), m.size(), m.position(), m.scale_factor()),
+                        Ok(None) => eprintln!("[forseti] 目前螢幕:拿不到（視窗可能不在任何一個螢幕上）"),
+                        Err(e) => eprintln!("[forseti] 目前螢幕:查詢失敗 {e}"),
+                    }
+                    if let Ok(ms) = w.available_monitors() {
+                        for m in ms {
+                            eprintln!("[forseti]   可用螢幕 {:?} size={:?} pos={:?} scale={}",
+                                      m.name(), m.size(), m.position(), m.scale_factor());
+                        }
+                    }
+                    eprintln!("[forseti] minimized={:?} focused={:?}",
+                              w.is_minimized(), w.is_focused());
+                    // 置中到目前的螢幕。位置檢查只擋得住「明顯在畫面外」，
+                    // 擋不住「在主螢幕內但鏡像過去被裁掉」。
+                    let _ = w.center();
+                    let _ = w.set_always_on_top(true);
                     // 位置異常就拉回螢幕內。負座標或超出範圍會讓它
                     // 「開著但看不到」，而那跟沒開長得一模一樣。
                     if let Some(p) = pos {

@@ -397,13 +397,42 @@ def status(*, check_auth: bool = False) -> dict:
     return out
 
 
+def case_classes() -> tuple[str, ...]:
+    """PACK 裡有哪幾個題名。`--only` 收得了哪些值，答案只有這一個來源。"""
+    return tuple(c.cls for c in PACK)
+
+
+def select(only: str | None):
+    """`--only` 挑出哪幾題。**乾跑與真跑共用這一支**，不各算一次。
+
+    2026-09-18 之前是兩份判準：`run()` 自己過濾，而 `main()` 的乾跑
+    寫死 `plan(PACK)`。後果是預告的次數跟真的會跑的次數對不上，
+    當輪實測三種：
+
+    | 寫法 | 預告 | 真的會跑 |
+    |---|---|---|
+    | `run --only goal_persistence` | 36 次 | 4 次 |
+    | `run --only <不存在的題名>` | 36 次 | 0 次 |
+    | `run`（不帶 `--only`） | 36 次 | 36 次（這一種本來就對） |
+
+    高報不會花錢，可是**一個假的預告數字會讓人以為自己按下去的規模
+    比實際大**，而第二列是反過來的那一種：預告說 36，按下去一次都
+    沒有發生。兩種方向都是同一個根因 —— 判準有兩份。
+
+    抽成一支而不是在 `main()` 裡重寫一次過濾，理由是後者會再長出
+    第三份判準。這裡不改 `plan()` 的簽名：它的第一個參數本來就是
+    `cases`，餵過濾過的清單進去就夠（上一輪推測要改簽名，是錯的）。
+    """
+    return [c for c in PACK if not only or c.cls == only]
+
+
 def run(*, models=DEFAULT_MODELS, modes=CONTEXT_MODES,
         only: str | None = None, timeout: int = 180) -> dict:
     """真的跑。每一題乘上每個模型乘上每種 context 模式。
 
     **這一支會花掉 owner 的訂閱額度。** 跑之前先看 `plan()`。
     """
-    cases = [c for c in PACK if not only or c.cls == only]
+    cases = select(only)
     rows = []
     started = time.time()
     for c in cases:
@@ -439,8 +468,106 @@ def run(*, models=DEFAULT_MODELS, modes=CONTEXT_MODES,
     }
 
 
+def _arg(rest: list[str], flag: str) -> str | None:
+    """`--flag X` 與 `--flag=X` 兩種寫法讀到同一個值，重複出現取第一個。
+
+    這一支先前是寫在 `run` 分支裡的一段迴圈，跟另外四支的 `_arg`
+    差三件事，三件都是 2026-09-18 實測出來的：
+
+    一，不收等號。`run --yes --only=goal_persistence` 的 `only` 是
+    None，而 `run()` 拿 None 當「不過濾」—— 於是它跑滿 36 次呼叫
+    而不是 4 次。**那個人以為他只跑了一題。**
+    二，取最後一個而不是第一個（`--only A --only B` 拿到 `B`）。
+    三，見 `_flag_without_value`。
+    """
+    for i, a in enumerate(rest):
+        if a == flag and i + 1 < len(rest):
+            return rest[i + 1]
+        if str(a).startswith(flag + "="):
+            return str(a).split("=", 1)[1]
+    return None
+
+
+def _flag_without_value(argv: list[str], name: str) -> bool:
+    """旗標出現了，可是後面沒有值。
+
+    判準跟 `metrics` / `attempts` / `evidence` / `antianchor` 那四份
+    逐字相同，`tests/test_cli_flag_dispatch.py` 有一條盯著五份不漂開。
+
+    這一支的後果跟那四支不同級：那四支掉回正本是答案錯，這一支
+    掉回「不過濾」是**花錢**。2026-09-18 實測 `run --yes --only`
+    （手滑漏掉題名）的 `only` 是 None，跑滿 36 次而不是 4 次。
+
+    等號寫法不算在內：`--only=` 是明確給了一個空字串，
+    跟沒寫完不是同一件事，留給呼叫端自己判。
+    """
+    # 「後面那個東西是另一個旗標」也算沒給值。2026-09-18 實測的後果：
+    # `antianchor classify <id> blockers CHANGED_REALITY --by --reason 環境變了`
+    # 會 exit=0、印「記下了」、而磁碟上那一筆 CLASSIFY 的 `by` 是
+    # `--reason`。§39 那四類沒有一類算得出來，所以每一筆分類都要指得回
+    # 是誰判的 —— 指回一個旗標名等於指不回任何人，而畫面上跟成功一樣。
+    # `classify()` 內部本來就擋空字串（`by` 必填），所以擋不住的不是空的，
+    # 是被下一個旗標填滿的。三支 `show --id` 那一半則是診斷指錯：
+    # 回「不在登記簿上」，那個人會以為那筆資料不存在。
+    #
+    # 代價講清楚：真的要傳一個以 `--` 開頭的值，等號那條路還在
+    # （`--by=--reason` 照樣拿得到 `--reason`），所以沒有失去表達能力。
+    # 只認兩個減號，`-1` 這種值不受影響。
+    return any(a == name for a in argv) and not any(
+        (a == name and i + 1 < len(argv)
+         and not str(argv[i + 1]).startswith("--"))
+        or str(a).startswith(name + "=")
+        for i, a in enumerate(argv)
+    )
+
+
+
+def _unknown_flags(argv: list, known: tuple) -> list:
+    """認不得的旗標名。打錯字不准靜默走預設。
+
+    2026-09-18 實測，五支的打錯字後果分三級，**沒有一支會說
+    「我不認得這個旗標」**：
+
+    | 寫法 | exit | 實際發生的事 |
+    |---|---|---|
+    | `probe-model run --yes --onlyy X` | 1 | 不過濾，跑滿 36 次真呼叫 |
+    | `antianchor status --roott X` | 0 | 讀正本，畫面跟成功一樣 |
+    | `attempt record --retry-conditionn X` | 0 | 印「登錄了」，那一欄落地是空的 |
+    | `metric template --transcriptt X` | 0 | 模板照印，缺席理由指錯原因 |
+    | `evidence show --idd X` | 2 | 報錯，可是怪「要一個 id」 |
+
+    跟 `_flag_without_value` 不是同一件事：那一支問的是「這個旗標
+    後面有沒有值」，前提是旗標名對得上。名字打錯的時候那一支
+    一律不觸發 —— 它 `any(a == name ...)` 找的是正確的那個名字。
+
+    判準只認兩個減號開頭的 token，取等號之前那一段比對，所以
+    `--by=--reason` 這種明著傳減號開頭的值照樣收（比的是 `--by`）。
+    裸的 `--` 跳過：這五支都沒有實作那個慣例標記，這道守門不替
+    它作決定，維持現況的忽略。
+    """
+    out = []
+    for a in argv:
+        s = str(a)
+        if not s.startswith("--") or s == "--":
+            continue
+        name = s.split("=", 1)[0]
+        if name not in known and name not in out:
+            out.append(name)
+    return out
+
 def _p(obj) -> None:
     print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+
+#: `main()` 認得的全部旗標。跟底下那幾個 `_arg(rest, "--x")` 與
+#: `"--x" in rest` 各寫一份，`tests/test_cli_flag_dispatch.py` 有一條
+#: 盯著不漂開 —— 漂開的話會出現「守門說認得、`main()` 裡沒人讀」的
+#: 旗標，那種打對了也沒用，跟打錯字一樣靜默。
+#:
+#: 這是整支共用一份，不是每個子指令一份。`plan --yes` 因此不被擋
+#: （`plan` 不讀 `--yes`），那是既有行為，這一輪不動它：那屬於
+#: 「旗標用錯地方」，跟「旗標名不存在」不是同一個問題。
+KNOWN_FLAGS: tuple[str, ...] = ("--only", "--yes", "--check-auth")
 
 
 def main(argv: list[str]) -> int:
@@ -449,8 +576,30 @@ def main(argv: list[str]) -> int:
     `run` 沒有 `--yes` 就只印乾跑。理由跟 fork 的乾跑一樣:
     一個按下去就開始花錢的指令，遲早會在沒人打算花錢的時候被按到。
     """
-    sub = argv[0] if argv else "status"
-    rest = argv[1:]
+    # 第一個參數以 `-` 開頭的時候它是旗標不是子指令。少了這一行，
+    # `forseti probe-model --check-auth` 會把旗標放進 `sub`，掉到最後那條
+    # `print(main.__doc__); return 2`。這一支不像 `metric` 與 `attempt`
+    # 會靜默給錯答案（那兩支沒有未知子指令守門，會掉進 list），
+    # 它是明著退回 exit=2 —— 2026-09-18 實測。所以這裡修的是
+    # 「省略 status 用不了」，不是「答案是錯的」。
+    _flag_first = bool(argv) and str(argv[0]).startswith("-")
+    sub = argv[0] if (argv and not _flag_first) else "status"
+    rest = list(argv) if _flag_first else argv[1:]
+    # 旗標名打錯字 -> 明著退回。這一支的後果在五支裡最重：
+    # 2026-09-18 實測 `run --yes --onlyy goal_persistence` exit=1，
+    # 而且它**真的把 36 次呼叫發出去了**（那一次全部 CALL_FAILED 是
+    # 因為 OAuth 過期，不是因為被擋下來）。`--only` 的缺值守門攔不到
+    # 這一種：它找的是 `--only` 這個名字，而手滑打出來的名字不是它。
+    # 排在缺值守門之前，因為「這個旗標不存在」比「這個旗標沒給值」
+    # 更根本 —— 名字都不對的時候，講缺值是指錯地方。
+    _unknown = _unknown_flags(rest, KNOWN_FLAGS)
+    if _unknown:
+        print(f"不認得這個旗標：{'、'.join(_unknown)}", file=sys.stderr)
+        print(f"有的是：{'、'.join(KNOWN_FLAGS)}", file=sys.stderr)
+        print("打錯字不會報錯，`--only` 會變成沒寫，於是 run 不過濾 ——"
+              "2026-09-18 實測跑滿 36 次真呼叫。所以這裡退回。",
+              file=sys.stderr)
+        return 2
 
     if sub == "status":
         s = status(check_auth="--check-auth" in rest)
@@ -466,18 +615,38 @@ def main(argv: list[str]) -> int:
         return 0
 
     if sub == "run":
+        # 缺值守門排在 `--yes` 之前，不是之後。排後面的話手滑漏掉題名
+        # 的人要等到他加上 `--yes`（也就是決定花錢的那一刻）才會知道
+        # 自己打錯，而那時候擋下來已經沒有意義 —— 他要的是別跑滿。
+        if _flag_without_value(rest, "--only"):
+            print("`--only` 後面沒有題名。要跑全部就整個拿掉，"
+                  "不然它會靜默跑滿。", file=sys.stderr)
+            return 2
+        _only = _arg(rest, "--only")
+        # 題名打錯 -> 明著退回。上面那一道守的是旗標「名字」不存在，
+        # 這一道守的是旗標「值」不在 PACK 裡，是相鄰的兩個洞。
+        # 2026-09-18 實測沒有這一道的後果：`run --only bogus` 乾跑印
+        # 「36 次」，而 `run --yes --only bogus` 0 次呼叫、elapsed 0.0s、
+        # 印出一坨 judged=0 的結果狀 JSON、exit=1 —— 看起來像「跑過而且
+        # 失敗了」，不是「你的題名不存在」。排在 `--yes` 之前，理由跟
+        # 缺值守門那一段一樣：手滑的人要在決定花錢那一刻之前就知道。
+        if _only is not None and _only not in case_classes():
+            print(f"沒有這一題：{_only}", file=sys.stderr)
+            print(f"有的是：{'、'.join(case_classes())}", file=sys.stderr)
+            print("不擋的話這裡不會報錯，它會挑出 0 題然後印一份 "
+                  "judged=0 的結果，看起來像跑過而且失敗了。",
+                  file=sys.stderr)
+            return 2
         if "--yes" not in rest:
-            pl = plan(PACK)
+            # 餵過濾過的清單，不是整個 PACK。兩邊共用 `select()`，
+            # 所以這裡印的次數就是按下 `--yes` 之後真的會跑的次數。
+            pl = plan(select(_only))
             print(f"這會真的呼叫模型 {pl['calls']} 次，"
                   f"送出去的 prompt 合計 {pl['total_prompt_chars']:,} 字元，"
                   f"走 Claude 訂閱。")
             print("確定的話加 --yes。先看細節用 `probe-model plan`。")
             return 2
-        only = None
-        for i, a in enumerate(rest):
-            if a == "--only" and i + 1 < len(rest):
-                only = rest[i + 1]
-        out = run(only=only)
+        out = run(only=_only)
         slim = {k: v for k, v in out.items() if k != "rows"}
         _p(slim)
         for r in out["rows"]:

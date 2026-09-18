@@ -29,12 +29,63 @@ mtime 會失去意義 —— 而「這份交接是什麼時候寫的」正是接
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
-OUT = REPO / ".forseti" / "NEXT.md"
+
+#: 正本交接檔。停機之後接手的人唯一看得到的那一份就是它。
+DEFAULT_OUT = REPO / ".forseti" / "NEXT.md"
+
+#: 把預設寫入目標換掉的環境變數。
+#:
+#: **2026-09-18 加這一個，修的是一個一直在對接手的人說假話的根因。**
+#: 上一輪（`AUTO_CONTINUE_LOG.md` 那一節）的原話：
+#:
+#:     正本 `.forseti/NEXT.md` 這一輪被測試用合成資料覆蓋過。收尾的
+#:     時候讀到裡面寫「工作區跟 HEAD 不一致的：0 個」與「checkpoint
+#:     2 個」，而實測工作區有二十幾個檔案有改動、這條 session 的
+#:     checkpoint 是 0 個。兩個數字都不是真的。
+#:
+#: 成因不是誰寫錯了，是路徑本身：`desktop_api.strands()` 尾段無條件
+#: 走 `_write_handoff()`，而 `_write_handoff()` 呼叫 `should_write()`
+#: 與 `write()` **都不帶 path**，於是兩邊都落在這個模組全域上。測試
+#: 餵合成 transcript 呼叫 `strands()` 的時候，算出來的是合成狀態，
+#: 寫的地方卻是正本。
+#:
+#: **這跟「測試會動到 mtime」不是同一件事。** mtime 動是雜訊，
+#: 內容被合成資料取代是交接檔對接手的人說假話 —— 而它偏偏是
+#: 停機之後唯一有人看的東西，所以它的失敗方向不准是「看起來像真的」。
+#:
+#: 為什麼用環境變數而不是在測試裡 monkeypatch 這個全域：
+#: 子行程繼承得到環境變數，繼承不到 monkeypatch。這個專案的測試裡
+#: 有跑 `pytest` 迷你 session 的（`test_zz_forseti_write_attribution`
+#: 的 e2e 那一組），那一條走的是真的子行程。
+#:
+#: **這一支不判斷「現在是不是在跑測試」。** 判斷在設環境變數的那一端
+#: （`tests/conftest.py`），因為只有那一端知道自己是測試。這裡若自己去
+#: 猜（看 `sys.modules` 有沒有 pytest 之類），正式執行時只要環境裡剛好
+#: 有那個字，交接檔就會被默默導走 —— 而那種失敗一樣是安靜的。
+OUT_ENV = "FORSETI_HANDOFF_OUT"
+
+
+def resolve_out(env: dict | None = None) -> Path:
+    """這一次的預設寫入目標。
+
+    沒設、設成空的、設成只有空白，一律回正本 —— **拿不準就回正本**，
+    因為導錯地方的後果是交接檔沒人在寫而且沒有人會發現，
+    比多寫一次正本嚴重。
+    """
+    raw = ((env if env is not None else os.environ).get(OUT_ENV) or "").strip()
+    return Path(raw).expanduser() if raw else DEFAULT_OUT
+
+
+#: **import 的時候算一次**，跟它原本是個模組常數一致。
+#: 跑到一半改環境變數不會生效，那是刻意的：一輪裡面換目標的話，
+#: 「這一輪寫到哪裡」就沒有單一答案了。
+OUT = resolve_out()
 
 #: 兩次寫入的最小間隔。mtime 要保有意義。
 MIN_GAP_S = 240
@@ -208,7 +259,25 @@ def render(state: dict) -> str:
     # 行文一樣由 `contract.py` 算好，這裡只排版，理由同下面那一節。
     art = state.get("artifact_lines") or []
     if art:
-        lines += ["## 產出在哪裡", ""] + list(art)
+        # 標題用 `contract.ARTIFACT_HEADING`，不在這裡再寫一次字面值。
+        #
+        # `contract.recorded_artifacts()` 靠這個標題把這一節切出來。
+        # 兩邊各寫一次的時候，只改一邊會讓那一支切到 0 行 ——
+        # **而 0 行讀起來跟「全部對得上」一樣**，不會有東西變紅。
+        # 2026-09-18 實測過那條逃生路：把字面值搬進註解、印出去的
+        # 那一行改掉，`test_artifact_drift.py` 35 條全綠。
+        # 這裡改成同一份常數，那條路構造上就走不出來了。
+        #
+        # 延後 import，理由**不是**「模組頂層會炸」。2026-09-18 實測過：
+        # 把兩邊都搬到模組頂層造成真的環，`tests/test_artifact_drift.py`
+        # 38 條照樣全綠，兩個載入順序都不炸。因為這一刻雙方在載入期間
+        # 都沒有碰對方的名字。
+        #
+        # 留在函式裡的理由是那個「這一刻」：模組頂層互相 import 之後，
+        # **哪一天任何一邊在載入期間用到對方一個名字，它就會炸**，
+        # 而那一天量不到、也沒有測試守得住。放在函式裡是把那個未來拿掉。
+        import contract  # noqa: PLC0415
+        lines += [contract.ARTIFACT_HEADING, ""] + list(art)
 
     # 這一段回答的是「這份交接本身夠不夠」。v5.0 §39.1
     #

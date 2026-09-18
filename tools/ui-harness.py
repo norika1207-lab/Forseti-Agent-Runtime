@@ -150,39 +150,53 @@ def main(argv: list[str]) -> int:
     if "--session" in argv:
         session = argv[argv.index("--session") + 1]
 
+    # 這一支借了目錄從來不還。整個檔案以前一個 `rmtree` 都沒有，
+    # 所以每跑一次留一個：2026-09-18 實測暫存區 44 個
+    # `forseti-ui-*`，42MB，最早的是 09-14。
+    #
+    # `--keep` 沿用 `ui-render-check.py` 已經在用的那個旗標名，
+    # 給的是同一件事：留著讓人進去看。不給就收掉。
+    keep = "--keep" in argv
+
     out = Path(tempfile.mkdtemp(prefix="forseti-ui-"))
-    build(out, fake, session)
+    try:
+        build(out, fake, session)
 
-    class H(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *a, **kw):
-            super().__init__(*a, directory=str(out), **kw)
+        class H(http.server.SimpleHTTPRequestHandler):
+            def __init__(self, *a, **kw):
+                super().__init__(*a, directory=str(out), **kw)
 
-        def log_message(self, *a):
-            pass
+            def log_message(self, *a):
+                pass
 
-        def end_headers(self):
-            # 不准快取。
-            #
-            # 【2026-09-14 實測】改了 app.js 重啟 harness，index.html 是新的
-            # （fixture 內嵌在裡面）但 app.js 被瀏覽器快取成舊版。
-            # 新 HTML 有新分頁按鈕，舊 JS 沒有對應的分支，於是點下去
-            # 落到 else 分支畫成別的畫面 —— 看起來像新功能寫壞了，
-            # 實際上新功能根本沒被載進來。這種假症狀最貴。
-            self.send_header("Cache-Control", "no-store, must-revalidate")
-            self.send_header("Pragma", "no-cache")
-            super().end_headers()
+            def end_headers(self):
+                # 不准快取。
+                #
+                # 【2026-09-14 實測】改了 app.js 重啟 harness，index.html 是新的
+                # （fixture 內嵌在裡面）但 app.js 被瀏覽器快取成舊版。
+                # 新 HTML 有新分頁按鈕，舊 JS 沒有對應的分支，於是點下去
+                # 落到 else 分支畫成別的畫面 —— 看起來像新功能寫壞了，
+                # 實際上新功能根本沒被載進來。這種假症狀最貴。
+                self.send_header("Cache-Control", "no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                super().end_headers()
 
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("127.0.0.1", port), H) as srv:
-        print()
-        print(f"  http://127.0.0.1:{port}/index.html")
-        print(f"  檔案在 {out}")
-        print("  改了 desktop/ui/ 之後要重跑這支，它是複製不是連結")
-        print()
-        try:
-            srv.serve_forever()
-        except KeyboardInterrupt:
-            print("\n  停了")
+        socketserver.TCPServer.allow_reuse_address = True
+        with socketserver.TCPServer(("127.0.0.1", port), H) as srv:
+            print()
+            print(f"  http://127.0.0.1:{port}/index.html")
+            print(f"  檔案在 {out}")
+            print("  改了 desktop/ui/ 之後要重跑這支，它是複製不是連結")
+            print()
+            try:
+                srv.serve_forever()
+            except KeyboardInterrupt:
+                print("\n  停了")
+    finally:
+        if keep:
+            print(f"  暫存目錄留著：{out}")
+        else:
+            shutil.rmtree(out, ignore_errors=True)
     return 0
 
 

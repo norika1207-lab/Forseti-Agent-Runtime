@@ -183,13 +183,24 @@ def scan(strands: list) -> dict:
                 "why": "這段對話裡沒有推得出結構化欄位的輪"}
 
     import tempfile
+    stage = "寫暫存檔"
     tmp = Path(tempfile.mkdtemp(prefix="forseti-js-"))
-    runner = tmp / "run.mjs"
-    runner.write_text(_RUNNER, encoding="utf-8")
-    data = tmp / "payload.json"
-    data.write_text(json.dumps({"rounds": rounds}, ensure_ascii=False),
-                    encoding="utf-8")
+    # **2026-09-18：這兩個 write_text 先前在 try 外面。** 借了目錄之後、
+    # 進到有 finally 的那個區塊之前，中間夾著兩個會丟 OSError 的動作，
+    # 所以磁碟滿或權限不對的時候目錄留下來沒人收。決定性復現：把
+    # `Path.write_text` 換成丟 OSError，`scan()` 一次留一個
+    # `forseti-js-*`，而且 OSError 直接逸出這一支 —— 兩個呼叫點
+    # （`desktop_api.py:3078`、`:3292`）都是 `_safe(..., default)`，
+    # 帶 default 就不走 `{"error": ...}` 那條，於是畫面拿到 0 筆而
+    # 說不出理由。`goalgate.py:233` 與 `blast.py:667` 從一開始就是
+    # 「mkdtemp 的下一個敘述就是那個 try」，漏的是這裡。
     try:
+        runner = tmp / "run.mjs"
+        runner.write_text(_RUNNER, encoding="utf-8")
+        data = tmp / "payload.json"
+        data.write_text(json.dumps({"rounds": rounds}, ensure_ascii=False),
+                        encoding="utf-8")
+        stage = "叫 node"
         r = subprocess.run(
             [av["node"], str(runner), str(SRC), str(data)],
             capture_output=True, text=True, timeout=TIMEOUT)
@@ -197,7 +208,10 @@ def scan(strands: list) -> dict:
         return {"ok": False, "why": f"node 超過 {TIMEOUT} 秒沒回",
                 "findings": []}
     except OSError as e:
-        return {"ok": False, "why": f"叫不動 node：{e}", "findings": []}
+        # **`stage` 不是裝飾。** 把寫檔失敗講成「叫不動 node」是一句
+        # 假指控，而這個專案 2026-09-18 上一輪才為了同一個形狀
+        # （紅燈指著沒做錯事的 `blast.py`）花掉一輪。
+        return {"ok": False, "why": f"{stage}失敗：{e}", "findings": []}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

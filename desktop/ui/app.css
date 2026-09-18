@@ -1369,6 +1369,11 @@ button{font:inherit;cursor:pointer;color:inherit}
   overflow-wrap:anywhere}
 .plNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
   overflow-wrap:anywhere}
+/* 只靠人記得的那幾筆。**跟其他說明文字不能長得一樣** ——
+   §40.2 要的是偵測器，而這幾筆現在什麼都沒有攔著。
+   它跟旁邊那句「攔著的筆數」是同一個分母的兩半，
+   長成同一種灰色的話，風險那一半會消失在說明文字裡。 */
+.plRisk{color:var(--amber)}
 .plSrcs{display:flex;flex-wrap:wrap;gap:3px;margin:3px 0 0;
   color:var(--ink-4);font-size:10px}
 .plSrc{display:inline-block;padding:0 5px;border-radius:8px;

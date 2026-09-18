@@ -297,6 +297,71 @@ def _arg(argv: list, name: str) -> str | None:
     return None
 
 
+def _flag_without_value(argv: list, name: str) -> bool:
+    """旗標出現了，可是後面沒有值。
+
+    這跟「旗標沒出現」要分得開。`_arg` 兩種都回 None，而呼叫端拿
+    None 當「沒指定，讀正本」——於是 `--path`（手滑漏掉路徑）會去
+    讀正本並回報一份看起來正常的報告。2026-09-18 實測
+    `forseti attempt list --path` 回的是正本那筆 att-2bb74c352d，
+    五個欄位完整印出來。**那個人以為他看到的是自己指定的檔。**
+
+    等號寫法不算在內：`--path=` 是明確給了一個空字串，
+    跟沒寫完不是同一件事，留給呼叫端自己判。
+    """
+    # 「後面那個東西是另一個旗標」也算沒給值。2026-09-18 實測的後果：
+    # `antianchor classify <id> blockers CHANGED_REALITY --by --reason 環境變了`
+    # 會 exit=0、印「記下了」、而磁碟上那一筆 CLASSIFY 的 `by` 是
+    # `--reason`。§39 那四類沒有一類算得出來，所以每一筆分類都要指得回
+    # 是誰判的 —— 指回一個旗標名等於指不回任何人，而畫面上跟成功一樣。
+    # `classify()` 內部本來就擋空字串（`by` 必填），所以擋不住的不是空的，
+    # 是被下一個旗標填滿的。三支 `show --id` 那一半則是診斷指錯：
+    # 回「不在登記簿上」，那個人會以為那筆資料不存在。
+    #
+    # 代價講清楚：真的要傳一個以 `--` 開頭的值，等號那條路還在
+    # （`--by=--reason` 照樣拿得到 `--reason`），所以沒有失去表達能力。
+    # 只認兩個減號，`-1` 這種值不受影響。
+    return any(a == name for a in argv) and not any(
+        (a == name and i + 1 < len(argv)
+         and not str(argv[i + 1]).startswith("--"))
+        or str(a).startswith(name + "=")
+        for i, a in enumerate(argv))
+
+
+
+def _unknown_flags(argv: list, known: tuple) -> list:
+    """認不得的旗標名。打錯字不准靜默走預設。
+
+    2026-09-18 實測，五支的打錯字後果分三級，**沒有一支會說
+    「我不認得這個旗標」**：
+
+    | 寫法 | exit | 實際發生的事 |
+    |---|---|---|
+    | `probe-model run --yes --onlyy X` | 1 | 不過濾，跑滿 36 次真呼叫 |
+    | `antianchor status --roott X` | 0 | 讀正本，畫面跟成功一樣 |
+    | `attempt record --retry-conditionn X` | 0 | 印「登錄了」，那一欄落地是空的 |
+    | `metric template --transcriptt X` | 0 | 模板照印，缺席理由指錯原因 |
+    | `evidence show --idd X` | 2 | 報錯，可是怪「要一個 id」 |
+
+    跟 `_flag_without_value` 不是同一件事：那一支問的是「這個旗標
+    後面有沒有值」，前提是旗標名對得上。名字打錯的時候那一支
+    一律不觸發 —— 它 `any(a == name ...)` 找的是正確的那個名字。
+
+    判準只認兩個減號開頭的 token，取等號之前那一段比對，所以
+    `--by=--reason` 這種明著傳減號開頭的值照樣收（比的是 `--by`）。
+    裸的 `--` 跳過：這五支都沒有實作那個慣例標記，這道守門不替
+    它作決定，維持現況的忽略。
+    """
+    out = []
+    for a in argv:
+        s = str(a)
+        if not s.startswith("--") or s == "--":
+            continue
+        name = s.split("=", 1)[0]
+        if name not in known and name not in out:
+            out.append(name)
+    return out
+
 def _print_record(r: dict) -> None:
     print()
     print(f"  {r['id']}　{'（已放掉）' if r.get('released') else ''}")
@@ -316,6 +381,19 @@ def _print_record(r: dict) -> None:
     print()
 
 
+SUBCOMMANDS: tuple[str, ...] = ("list", "show", "template", "record", "release")
+
+
+#: `main()` 認得的全部旗標。跟底下那幾個 `_arg(rest, "--x")` 各寫
+#: 一份，`tests/test_cli_flag_dispatch.py` 有一條盯著不漂開 ——
+#: 漂開的話會出現「守門說認得、`main()` 裡沒人讀」的旗標，那種
+#: 打對了也沒用，跟打錯字一樣靜默。整支共用一份不是每個子指令一份。
+KNOWN_FLAGS: tuple[str, ...] = (
+    "--path", "--from", "--id",
+    "--attempt", "--observed", "--why", "--source", "--verifier",
+    "--retry-condition", "--no-retry-basis")
+
+
 def main(argv: list) -> int:
     """`forseti attempt <list|show|template|record|release>`
 
@@ -323,9 +401,84 @@ def main(argv: list) -> int:
     因為這一份只有五個必填欄位，用旗標填不會逼人為了讓指令跑得動而亂填
     （`forseti metric` 那一支有 25 欄，所以那裡只收檔案）。
     """
-    sub = argv[0] if argv else "list"
-    rest = argv[1:]
+    # 第一個參數以 `-` 開頭的時候它是旗標不是子指令。少了這一行，
+    # `forseti attempt --path X` 會把 `--path` 放進 `sub`，於是 `rest`
+    # 只剩下 X，`_arg(rest, "--path")` 找不到，結果是**讀正本而不是
+    # 讀 X**。2026-09-18 實測：指定一個空檔，回的是正本那 1 筆
+    # att-2bb74c352d，完整印出來跟正常查詢長得一模一樣，不會報錯。
+    _flag_first = bool(argv) and str(argv[0]).startswith("-")
+    sub = argv[0] if (argv and not _flag_first) else "list"
+    rest = list(argv) if _flag_first else argv[1:]
+    # `--path` 寫了可是後面沒有值 -> 明著退回，不准掉回正本。
+    # 少了這一段，手滑漏掉路徑的人會拿到正本的內容並以為那是他指定的
+    # 檔（2026-09-18 實測，原始輸出在那一輪的接續紀錄裡）。
+    if _flag_without_value(rest, "--path"):
+        print("  `--path` 後面要接一個檔案路徑。沒接的話會讀正本，")
+        print("  而那份報告看起來跟你指定的檔一模一樣 —— 所以這裡退回。")
+        return 2
+    # `--from` 與 `--id` 是 2026-09-18 補的。兩者先前都不是靜默的，
+    # 可是都指錯原因：`--from` 接到下一個旗標會回「讀不到 --path=...」
+    # （怪檔案不存在，不是怪值漏了），`--id` 會回「不在登記簿上」
+    # （那個人會以為那筆資料不存在，而真正的事是指令打錯，
+    # 而且被吞掉的那個旗標讓它讀的還是別的檔）。
+    for _flag, _why in (("--from", "後面要接一份 JSON 的路徑。"),
+                        ("--id", "後面要接一個 id。")):
+        if _flag_without_value(rest, _flag):
+            print(f"  `{_flag}` {_why}沒接的話下一個旗標會被當成值，")
+            print("  於是錯誤訊息會怪到別的東西頭上 —— 所以這裡退回。")
+            return 2
+    # 底下這七個是**內容欄位**，跟上面那兩個不同級。上面那兩個至少會報錯
+    # （只是怪錯對象），這七個一句話都不說：2026-09-18 實測七個全部
+    # exit=0、印「登錄了 att-xxxxxxxxxx」、磁碟落地把下一個旗標名寫成內容。
+    # 撈出來確認過的四筆:
+    #   `--attempt --observed "看到 X"`  -> attempt='--observed'
+    #   `--source --verifier me`         -> source=['--verifier']
+    #   `--verifier --no-retry-basis X`  -> verifier='--no-retry-basis'
+    #   release `--why --verifier me`    -> RELEASE 那一筆 why='--verifier'
+    # 最後一個是這一組裡最重的：release 存的就是「哪個條件成立了所以
+    # 可以重試」，而那一欄變成旗標名等於這筆放掉沒有理由 —— 正是
+    # `release()` 內部第 166 行明著擋空字串要防的那件事，只是空的擋得住，
+    # 被下一個旗標填滿的擋不住。§39.1 五個必填欄位同理:填著旗標名的
+    # 那一筆在 `list` 與 `show` 裡跟填對的長得一樣。
+    for _flag, _what in (("--attempt", "試了什麼"),
+                         ("--observed", "觀察到什麼"),
+                         ("--why", "為什麼不要再試"),
+                         ("--source", "出處"),
+                         ("--verifier", "誰觀察到的"),
+                         ("--retry-condition", "什麼條件成立可以再試"),
+                         ("--no-retry-basis", "為什麼沒有重試條件")):
+        if _flag_without_value(rest, _flag):
+            print(f"  `{_flag}` 後面要接{_what}。沒接的話下一個旗標會被")
+            print("  當成內容寫進登記簿，而且會印「登錄了」跟成功一樣 ——")
+            print("  所以這裡退回。")
+            return 2
+    # 旗標名打錯字 -> 明著退回。這一支的打錯字後果分兩種，
+    # 2026-09-18 逐個量的：**必填**那幾欄打錯會被 `record()` 內部擋住
+    # （`--attemptt` 回「attempt 是空的」exit=2，怪錯對象但至少沒落地）；
+    # **選填**那幾欄打錯是靜默的 —— `--retry-conditionn 等登入` exit=0、
+    # 印「登錄了 att-xxxxxxxxxx」、磁碟上 `retry_condition` 是 `''`。
+    # 那一欄存的就是「什麼條件成立可以再試」，空的跟「本來就沒有
+    # 重試條件」在 `list` 與 `show` 裡長得一模一樣。
+    _unknown = _unknown_flags(rest, KNOWN_FLAGS)
+    if _unknown:
+        print()
+        print(f"  不認得這個旗標：{'、'.join(_unknown)}")
+        print(f"  有的是：{'、'.join(KNOWN_FLAGS)}")
+        print("  打錯字不會報錯，那個旗標會被當成沒寫 —— 選填那幾欄")
+        print("  會靜默留空，而畫面照樣印「登錄了」。所以這裡退回。")
+        print()
+        return 2
     p = Path(_arg(rest, "--path")) if _arg(rest, "--path") else None
+
+    # 打錯子指令不准靜默掉進 list。這一支比 `metric` 更要緊：它的正本
+    # 此刻有資料，所以打錯字拿到的不是「0 筆」而是一份看起來完整的
+    # 別人的答案。
+    if sub not in SUBCOMMANDS:
+        print()
+        print(f"  不認得這個子指令：{sub}")
+        print(f"  有的是：{'、'.join(SUBCOMMANDS)}")
+        print()
+        return 2
 
     if sub == "template":
         print(json.dumps({

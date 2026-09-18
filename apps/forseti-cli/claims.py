@@ -58,6 +58,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import os
 import re
 import sys
@@ -235,6 +236,50 @@ DEFAULT_CONTRACTS = {
 # Claim
 # ---------------------------------------------------------------------------
 
+def make_cid(text: str, kind: str, subject: str) -> str:
+    """一個宣稱的 id。§5 那一行的 `claim_id`。
+
+    **只拿 text / kind / subject 去雜湊，不拿 `at`，也不拿任何會變的欄位。**
+    兩個理由，都指得回這個模組自己已經有的東西：
+
+    一，state 與 strength 在生命週期裡本來就會變（PROPOSED →
+    EVIDENCE_REQUIRED → VERIFIED，E0 → E2）。把它們放進 id 的話，
+    §6.3 的 VERIFIES 邊在宣稱被驗過之後就會指到一個不存在的 id ——
+    而那條邊存在的理由正是要指著同一個宣稱看它怎麼變。
+
+    二，`at` 不進雜湊，是因為這個模組已經有一個方法在處理「同一句話
+    又被說了一次」：`repeat()`。它把次數記在 claim 上而不是生一筆新的
+    （§7.1「repetition increases social consensus」）。把 `at` 放進 id
+    會讓同一句話每被說一次就多一個 id，那跟 `repeat()` 的語意直接打架。
+
+    **這一點跟 `evidence._make_eid()` 不一樣，而且是刻意的。** 那邊把
+    `observed_at` 放進雜湊，理由是同一個檔案在兩個時刻各看一次是兩筆
+    證據（§10 的 freshness 對它們的答案不同）。證據記的是某一刻看到
+    什麼，宣稱記的是有人主張什麼 —— 前者跟時間綁，後者不綁。
+    """
+    raw = "\x1f".join([str(text), str(kind), str(subject)])
+    return "cl-" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:10]
+
+
+def _evidence_id_ok(s) -> bool:
+    """這個字串是不是一個 evidence id。
+
+    **判準借 `evidence.is_evidence_id()`，這裡不自己寫正則。** 跟
+    `contract.py` 借 `claims._disk()` 同一條理由：id 的形狀是
+    `evidence._make_eid()` 決定的，在這裡複製一份的話，那邊改了這邊
+    不會跟著改，而症狀會是「合法的 id 被拒收」——那種錯很難查，因為
+    兩邊各自看起來都對。
+
+    延後 import 是因為這一支在 dataclass 的驗證路徑上，而 import 時機
+    不該綁在模組載入順序上。
+    """
+    try:
+        import evidence as _E                  # noqa: PLC0415  故意延後，見上
+    except ImportError:
+        return False
+    return _E.is_evidence_id(s)
+
+
 @dataclass
 class Claim:
     """一個可以被查核的宣稱。
@@ -256,10 +301,12 @@ class Claim:
     strength: str = "E0"
     contract: Contract | None = None
     evidence_refs: list[str] = field(default_factory=list)
+    strength_log: list[dict] = field(default_factory=list)
     repeats: int = 0
     said_by: list[str] = field(default_factory=list)
     at: float = field(default_factory=time.time)
     why_state: str = "剛抽出來，還沒要求證據"
+    id: str = ""
 
     def __post_init__(self):
         if self.kind not in KINDS:
@@ -271,6 +318,33 @@ class Claim:
                              f"合法的是 {'/'.join(STRENGTH)}（v5.0 §7.2）")
         if self.contract is None and self.kind in DEFAULT_CONTRACTS:
             self.contract = DEFAULT_CONTRACTS[self.kind]
+        if not self.id:
+            self.id = make_cid(self.text, self.kind, self.subject)
+        bad = [r for r in self.evidence_refs if not _evidence_id_ok(r)]
+        if bad:
+            raise ClaimError(
+                f"evidence_refs 只收 evidence id（`ev-` 開頭，見 "
+                f"`evidence._make_eid()`），收到 {bad[0]!r}。"
+                "升降強度的理由不進這一欄，進 strength_log —— "
+                "§6.3 的 VERIFIES / REFUTES 是 evidence -> claim，"
+                "一欄自由文字指不到那一端")
+
+    # -- 落地 -------------------------------------------------------------
+
+    def to_row(self) -> dict:
+        """一列 jsonl。`contract` 存 checks 不存物件 —— 讀回來的人要的是
+        「當初聲明了哪幾項檢查」（§7.3），不是一個要反序列化的類別。"""
+        return {
+            "id": self.id, "text": self.text, "kind": self.kind,
+            "subject": self.subject, "state": self.state,
+            "strength": self.strength,
+            "contract": (list(self.contract.checks) if self.contract else None),
+            "contract_kind": (self.contract.kind if self.contract else None),
+            "evidence_refs": list(self.evidence_refs),
+            "strength_log": [dict(x) for x in self.strength_log],
+            "repeats": self.repeats, "said_by": list(self.said_by),
+            "at": self.at, "why_state": self.why_state,
+        }
 
     # -- 生命週期 ---------------------------------------------------------
 
@@ -335,12 +409,55 @@ class Claim:
         self.state = "CANONICAL"
         self.why_state = f"{authority} 依 {policy_ref} 認定"
 
-    def raise_strength(self, level: str, why: str) -> None:
+    # -- 證據 -------------------------------------------------------------
+
+    def attach_evidence(self, evidence_id: str, *, path=None,
+                        require_exists: bool = False) -> None:
+        """把一筆證據接到這個宣稱上。§6.3 那條 VERIFIES 邊的 claim 端。
+
+        兩段檢查刻意分開，而且第二段預設不做：
+
+        形狀（永遠檢查）
+            `ev-` 開頭的那個形狀，判準借 `evidence.is_evidence_id()`。
+
+        存不存在（`require_exists=True` 才檢查）
+            去 `evidence.jsonl` 裡找。預設關掉是因為這一支會被
+            `verify()` 那條路上呼叫，而那條路一輪跑幾百次；每一次都
+            重讀整份 jsonl 會讓驗證從碰一次磁碟變成碰兩次。要嚴的那
+            一邊自己開。
+
+        **重複接同一筆不當錯誤，但也不重複記。** 同一筆證據支撐同一個
+        宣稱兩次跟支撐一次是同一件事（§7.1：重複增加的是社會共識，
+        不是證據強度）——那條原則在 `repeat()` 是分欄位，在這裡是去重。
+        """
+        eid = str(evidence_id).strip()
+        if not _evidence_id_ok(eid):
+            raise ClaimError(
+                f"不是 evidence id：{eid!r}。要的是 `evidence.record()` 回的那個 "
+                "`ev-` id。想記的是理由而不是證據的話，那個欄位是 strength_log")
+        if require_exists:
+            import evidence as _E                # noqa: PLC0415  同 _evidence_id_ok
+            if _E.get(eid, path=path) is None:
+                raise ClaimError(
+                    f"{eid} 在證據登記簿上找不到。"
+                    "一條指向不存在的東西的邊，比沒有那條邊危險 —— "
+                    "它在畫面上跟一條真的邊長得一樣")
+        if eid not in self.evidence_refs:
+            self.evidence_refs.append(eid)
+
+    def raise_strength(self, level: str, why: str, *,
+                       evidence_id: str | None = None) -> None:
         """升強度。只能升不能降著用，而且要說出憑據。
 
         降強度要用 lower_strength()，分開兩個方法是為了讓「降級」
         在程式碼裡看得見 —— 一個宣稱的證據變弱了是大事，
         不該跟升級用同一個呼叫。
+
+        **`why` 進 `strength_log`，不進 `evidence_refs`。** 2026-09-18
+        之前它進後者，於是那一欄裡混著「帳本裡 hook 當時量到的」這種
+        句子跟（本來預計要有的）證據 id。症狀不是欄位髒，是 §6.3 的
+        VERIFIES 邊接不上去：一句話指不回 `evidence.jsonl` 上的任何一
+        列，而那一欄的名字讓人以為它指得到。要接證據就給 `evidence_id`。
         """
         if level not in STRENGTH:
             raise ClaimError(f"不是合法的強度：{level}")
@@ -348,16 +465,120 @@ class Claim:
             raise ClaimError(f"{self.strength} → {level} 是降級，用 lower_strength()")
         if not why.strip():
             raise ClaimError("升強度要說出憑據")
+        if evidence_id is not None:
+            self.attach_evidence(evidence_id)
+        was = self.strength
         self.strength = level
-        self.evidence_refs.append(why)
+        self.strength_log.append({
+            "from": was, "to": level, "why": why,
+            "evidence_id": (str(evidence_id).strip() if evidence_id else ""),
+            "at": time.time()})
 
-    def lower_strength(self, level: str, why: str) -> None:
+    def lower_strength(self, level: str, why: str, *,
+                       evidence_id: str | None = None) -> None:
         if level not in STRENGTH:
             raise ClaimError(f"不是合法的強度：{level}")
         if not why.strip():
             raise ClaimError("降強度要說出理由")
+        if evidence_id is not None:
+            self.attach_evidence(evidence_id)
+        was = self.strength
         self.strength = level
-        self.evidence_refs.append(f"降級：{why}")
+        self.strength_log.append({
+            "from": was, "to": level, "why": f"降級：{why}",
+            "evidence_id": (str(evidence_id).strip() if evidence_id else ""),
+            "at": time.time()})
+
+
+# ---------------------------------------------------------------------------
+# 落地：.forseti/claims.jsonl
+# ---------------------------------------------------------------------------
+#
+# 為什麼要有這個檔：§6.3 的 VERIFIES 與 REFUTES 是 evidence -> claim，
+# 而一條邊的兩端都得指得到東西。evidence 那一端 2026-09-18 做好了
+# （`evidence.jsonl`），claim 這一端在那之前只有一個記憶體裡的
+# dataclass，沒有 id 也沒有地方放，所以 `lineage._kind_claim()` 回的是
+# NOT_ADDRESSABLE。這一節補的就是那一端。
+#
+# **append-only。** 同一個宣稱被驗過之後狀態會變，那時候是再寫一列，
+# 不是回頭改前一列。id 穩定所以同一個宣稱的幾列連得起來，而「它從
+# PROPOSED 走到 REFUTED」這件事本身就是要留下來的東西。
+
+_REPO = Path(__file__).resolve().parents[2]
+
+
+def log_path(repo: Path | None = None) -> Path:
+    """宣稱落在哪。公開，因為守門要問得到「不傳參數的時候它去哪」
+    （`tests/test_module_write_targets.py` 的 `_default_of`）。"""
+    return Path(repo or _REPO) / ".forseti" / "claims.jsonl"
+
+
+def record(claim: "Claim", *, path: Path | None = None) -> dict:
+    """把一個宣稱寫下來。回 `{"ok": bool, ...}`，不丟例外。
+
+    跟 `evidence.record()` 不一樣的是這一支收的是**已經造好的 Claim**，
+    不是一堆欄位。理由是 claim 在這個模組裡本來就是 `extract()` 與
+    `verify()` 在生在改的東西，要一個平行的建構入口等於多一條路，
+    而兩條路會漂開。合法性在 `Claim.__post_init__` 就擋掉了。
+    """
+    if not isinstance(claim, Claim):
+        return {"ok": False, "why": f"不是 Claim：{type(claim).__name__}"}
+    p = path or log_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    row = claim.to_row()
+    with p.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return {"ok": True, "claim": row}
+
+
+def load(path: Path | None = None) -> list[dict]:
+    p = path or log_path()
+    if not p.exists():
+        return []
+    out = []
+    for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return out
+
+
+def history(claim_id: str, *, path: Path | None = None) -> list[dict]:
+    """這個 id 的每一列，照寫下的順序。
+
+    存在的理由是讓 `get()` 的「最後一列」講得出憑據 —— 沒有這一支的話，
+    「現在的狀態」跟「只有這一個狀態」在讀的人眼裡長得一樣。
+    """
+    return [r for r in load(path) if r.get("id") == claim_id]
+
+
+def get(claim_id: str, *, path: Path | None = None) -> dict | None:
+    """這個 id 現在的樣子，也就是**最後寫下的那一列**。
+
+    不是第一列。append-only 加上會變的狀態，意思就是前面幾列是舊的；
+    回第一列的話，一個已經被 REFUTED 的宣稱會永遠回報 PROPOSED。
+    要看全部用 `history()`。
+    """
+    rows = history(claim_id, path=path)
+    return rows[-1] if rows else None
+
+
+def store_summary(repo: Path | None = None) -> dict:
+    """磁碟上有幾列、幾個不同的宣稱、各是什麼狀態。
+
+    列數與宣稱數分開回，因為 append-only 讓兩個數字本來就不一樣，
+    而合成一個的話「五個宣稱」跟「一個宣稱被改了五次」會長得一樣。
+    """
+    rows = load(log_path(repo))
+    ids = {r.get("id") for r in rows if r.get("id")}
+    states: dict[str, int] = {}
+    for cid in ids:
+        last = [r for r in rows if r.get("id") == cid][-1]
+        st = str(last.get("state") or "?")
+        states[st] = states.get(st, 0) + 1
+    return {"rows": len(rows), "claims": len(ids), "by_state": states,
+            "path": str(log_path(repo))}
 
 
 # ---------------------------------------------------------------------------

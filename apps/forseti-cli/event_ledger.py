@@ -114,11 +114,19 @@ def spec_source(event_type: str) -> str:
             return "本專案 docs/build-plan.md，不是 v5.0 §6.2"
     return ""
 
-# v5.0 §6.3 的十種 lineage 邊。這裡先定義不實作 ——
-# 邊要有兩端才畫得出來，而現在只有事件還沒有 claim 與 decision。
-# 定義先放著是為了讓做的人不用回頭翻規格，也避免又長出第二套
+# v5.0 §6.3 的十種 lineage 邊。**這張表是邊型別的唯一來源** ——
+# `lineage.py` 的 `add()` 拿它當白名單，兩端的型別在
+# `lineage.EDGE_ENDPOINTS`。不在這裡再抄一份，也不要在別處抄
 # （`src/topology.js:40` 已經有一套九種的，只有三個名字重疊，
 # 那是 glossary 第四條）。
+#
+# 【2026-09-18 更正】這裡先前寫著「邊要有兩端才畫得出來，而現在
+# 只有事件還沒有 claim 與 decision」。逐一查證之後那句話兩半都錯:
+# decision 指得到（`.forseti/DECISION_LEDGER.md` 的 ADR-001 到
+# ADR-010），claim 也有實作（`claims.py` 的 §7.1 生命週期與 §7.2
+# 強度），它缺的是 id 與儲存不是存在。真正擋住的是 evidence ——
+# `evidence.py` 是分級函式不是實體。量法與此刻的答案:
+# `python3 apps/forseti-cli/lineage.py`。
 LINEAGE_EDGES = (
     "DERIVED_FROM", "TRIGGERED_BY", "VERIFIES", "REFUTES", "SUPERSEDES",
     "CONSUMES", "PRODUCES", "PROMOTES", "PROPAGATES_TO", "RECONSTRUCTED_FROM",
@@ -129,7 +137,7 @@ LINEAGE_EDGES = (
 SPEC_DEVIATIONS = (
     "v5.0 §20.3 要 SQLite 為主、JSONL 為輔；本專案反過來（見檔頭）。",
     "v5.0 §20.2 列 29 張表；本階段只做 raw_events 與 events 兩張。",
-    "v5.0 §6.3 的 lineage_edges 只定義未實作，等 claim 與 decision 存在。",
+    "v5.0 §6.3 的 lineage_edges 有存放層與約束（`lineage.py`），磁碟上 0 條邊；十條裡 6 條的兩端此刻指得到，擋住的是 evidence 沒有實體、claim 沒有 id、hypothesis/fact 不存在。量法 `python3 apps/forseti-cli/lineage.py`。",
 )
 
 

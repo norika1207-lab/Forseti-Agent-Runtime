@@ -233,17 +233,36 @@ class 這個repo現在的狀態(unittest.TestCase):
         """
         self.assertEqual(self.r.stale_registry, [])
 
-    def test_LINEAGE_EDGES仍然是登記在案的空殼(self):
-        """§40 污染登記簿第一筆的主角。
+    def test_LINEAGE_EDGES不再是空殼而且不是靠讀一下變綠的(self):
+        """2026-09-18 這一條紅過，那是好消息紅，處置照它原本寫的做了。
 
-        它被實作的那一天這一條會紅 —— 那是好消息紅，
-        處置是把它從清單移掉，同時去收那一筆污染。
+        原本這一條驗的是「它仍然登記在案、仍然沒人讀」。
+        `lineage.py` 把它接成 `add()` 的邊型別白名單之後，
+        登記拿掉了，這一條跟著改成守新的事實。
+
+        **兩件事都要驗，只驗前面那件會被騙。** 一個常數只要被誰
+        `import` 一下就會從 unread 消失，而那不代表它管得住任何東西
+        —— B-15「不要做的事」那一段講的正是這種變綠法。
+        所以這裡第二段直接去打 `lineage.add()`，驗那張表真的在擋人。
         """
-        self.assertEqual(
-            DO.REGISTRY[("event_ledger", "LINEAGE_EDGES")]["kind"],
-            "DECLARED_ONLY")
-        self.assertIn(("event_ledger", "LINEAGE_EDGES"),
-                      {(c.module, c.name) for c in self.r.unread})
+        self.assertNotIn(("event_ledger", "LINEAGE_EDGES"), DO.REGISTRY,
+                         "它不再是空殼，登記要拿掉")
+        self.assertNotIn(("event_ledger", "LINEAGE_EDGES"),
+                         {(c.module, c.name) for c in self.r.unread})
+
+        import importlib.util as _ilu
+        _spec = _ilu.spec_from_file_location(
+            "forseti_lineage_probe",
+            REPO / "apps" / "forseti-cli" / "lineage.py")
+        _ln = _ilu.module_from_spec(_spec)
+        sys.modules["forseti_lineage_probe"] = _ln
+        _spec.loader.exec_module(_ln)
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "lineage.jsonl"
+            bad = _ln.add(type="NOT_A_SPEC_EDGE", from_id="a", to_id="b",
+                          basis="植入", path=out)
+            self.assertFalse(bad["ok"], "不在表裡的型別要被擋下來")
+            self.assertFalse(out.exists(), "被擋下來的不可以落檔")
 
     def test_RAW_INLINE_LIMIT那個門檻仍然沒有人執行(self):
         """這一條不看登記簿，直接看原始碼。

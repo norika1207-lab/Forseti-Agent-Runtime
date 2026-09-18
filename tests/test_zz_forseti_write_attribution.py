@@ -161,6 +161,13 @@ def rec(request):
 
 #: 允許被動到的頂層檔。`NEXT.md` 是系統設計上就會被 `strands()` 覆寫的
 #: 產出檔，內容每一輪都重算得回來。
+#:
+#: **2026-09-18：「重算得回來」這個理由當初就不完整。** 重算得回來的
+#: 前提是算的時候餵的是真的 transcript，而測試餵的是合成的 —— 於是
+#: 正本被一份**算得沒錯但材料是假的**交接檔覆蓋，而它是停機之後唯一
+#: 有人看的東西。那一輪起測試路徑的寫入已經被導到暫存
+#: （`tests/test_handoff_out_redirect.py`），所以這一筆現在守的是
+#: 「重導失效的時候不要連紅一片」，不是「這個檔被覆寫沒關係」。
 ALLOWED_TOP_LEVEL = frozenset({"NEXT.md"})
 
 #: 允許被動到的目錄前綴。`cache/` 顧名思義刪掉會自己長回來。
@@ -168,6 +175,16 @@ ALLOWED_PREFIXES = ("cache/",)
 
 #: 動到正本的測試，准許出現的檔案。2026-09-17 全套實測出來的，
 #: 不是預先設計的。新增一個要先講得出「這個檔為什麼需要碰正本」。
+#:
+#: **2026-09-18 起這張名單記的是「重導失效的時候誰會碰到正本」。**
+#: 那一輪把 `handoff.OUT` 的預設目標改成看環境變數，`tests/conftest.py`
+#: 在模組層把它指到暫存目錄（機制由 `tests/test_handoff_out_redirect.py`
+#: 守著）。所以底下每一筆的成因說明**仍然成立** —— 它們走得到那個
+#: 寫入閘門這件事沒有變，變的是閘門後面那個路徑。
+#:
+#: 名單留著不清空的理由：清掉的話，哪天重導失效，這裡會一次冒出
+#: 一串「不在冊」的紅，而那串紅指的是早就查清楚成因的老面孔。
+#: 留著的代價是它看起來比實際嚴重，那個代價寫在這裡。
 REGISTERED_WRITER_FILES = frozenset({
     "tests/test_contract.py",
     "tests/test_handoff.py",
@@ -830,6 +847,17 @@ def test_NEXT_md的寫入次數不超過節流窗開過的次數(rec):
     `floor(T / G) + 1` 次。一輪比 G 短的時候這個式子就是 1，
     跟原本那句話一致 —— 所以守的東西沒有被放寬，只是把
     「一輪一定比節流窗短」這個會過期的前提換成量到的秒數。
+
+    **2026-09-18 起正常情況下這裡會量到 0 個寫入者**，因為測試路徑的
+    `handoff.OUT` 已經被導到暫存（`tests/test_handoff_out_redirect.py`）。
+    這一條**不改成斷言 0**：正本這一刻有沒有被動，桌面 App 與 Stop hook
+    都說得上話，而它們在不在跑不是這一組測試決定的 —— 斷言 0 會紅在
+    跟測試無關的地方，那正是這個檔開頭「它分不出寫入者」咬過的形狀。
+
+    所以這一條守的仍然是上界，重導生不生效由那一支自足的測試守。
+    失敗訊息裡多印一行重導目標的狀態，讓讀到紅的人分得出是哪一種：
+    重導目標有東西 = 重導在運作，這幾筆多半來自外面；
+    重導目標是 `None` = 這一輪沒有人走到寫入，那這個數字另有來源。
     """
     import handoff  # noqa: E402
 
@@ -843,10 +871,14 @@ def test_NEXT_md的寫入次數不超過節流窗開過的次數(rec):
         nodeid for nodeid, paths in rec.write_record().items()
         if "NEXT.md" in paths
     ]
+    _rt = getattr(rec, "handoff_redirect_target", None)
+    _rs = getattr(rec, "handoff_redirect_size", None)
+    hint = (f"　重導目標 {_rt() if _rt else '（這一版沒有重導）'}"
+            f"，此刻大小 {_rs() if _rs else None}")
     assert len(writers) <= allowed, (
         f"這一輪有 {len(writers)} 條測試寫到 NEXT.md：{writers}　"
         f"這一輪跑了 {elapsed:.1f} 秒，節流是 {handoff.MIN_GAP_S} 秒，"
-        f"所以最多寫得成 {allowed} 次，多出來的代表節流失效"
+        f"所以最多寫得成 {allowed} 次，多出來的代表節流失效" + hint
     )
     for nodeid in writers:
         assert nodeid.split("::", 1)[0] in REGISTERED_WRITER_FILES, (

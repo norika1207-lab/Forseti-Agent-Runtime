@@ -367,51 +367,69 @@ def render(session: str = "", fake: bool = False,
     chrome = find_chrome()
     harness = _load_harness()
 
+    # 借的人是誰，在借之前就要決定。`outdir` 是呼叫端給的，那一份
+    # 不是我借的，不准收；沒給的時候才是我自己去借的。
+    #
+    # 2026-09-18 加這一段。在這之前，底下五條 raise 路徑
+    #（harness 產不出頁面、沒寫出 index.html、Chrome 逾時、
+    # Chrome 非零回傳、空 DOM）每走一條就留一個目錄在暫存區：
+    # 呼叫端收的方式是 `shutil.rmtree(r.outdir)`，而那些路徑上
+    # `r` 根本不存在，所以那幾條上沒有任何人收得到。
+    # 當天實測暫存區有 188 個 `forseti-render-*`，130MB。
+    mine = outdir is None
+    # 成功回傳 = 所有權交給呼叫端（它自己 rmtree `r.outdir`），
+    # 那一條路上不能收，收了呼叫端拿到的是一個空目錄。
+    handed = False
     out = outdir or Path(tempfile.mkdtemp(prefix="forseti-render-"))
     try:
-        harness.build(out, fake, session)
-    except Exception as e:
-        raise CannotRun(f"harness 產不出頁面：{type(e).__name__}: {e}") from e
+        try:
+            harness.build(out, fake, session)
+        except Exception as e:
+            raise CannotRun(f"harness 產不出頁面：{type(e).__name__}: {e}") from e
 
-    page = out / "index.html"
-    if not page.exists():
-        raise CannotRun(f"harness 沒有寫出 index.html：{out}")
-    if spy:
-        # 順序有意義：觀察器要在 app.js 之前，傾印要在最後一下之後。
-        _inject_invoke_spy(page)
-    _inject_clicks(page, clicks, CLICK_AFTER_MS)
-    if spy:
-        _inject_spy_dump(
-            page,
-            spy_at_ms if spy_at_ms is not None else
-            CLICK_AFTER_MS + max(0, len(clicks) - 1) * CLICK_GAP_MS
-            + SPY_DUMP_EXTRA_MS)
+        page = out / "index.html"
+        if not page.exists():
+            raise CannotRun(f"harness 沒有寫出 index.html：{out}")
+        if spy:
+            # 順序有意義：觀察器要在 app.js 之前，傾印要在最後一下之後。
+            _inject_invoke_spy(page)
+        _inject_clicks(page, clicks, CLICK_AFTER_MS)
+        if spy:
+            _inject_spy_dump(
+                page,
+                spy_at_ms if spy_at_ms is not None else
+                CLICK_AFTER_MS + max(0, len(clicks) - 1) * CLICK_GAP_MS
+                + SPY_DUMP_EXTRA_MS)
 
-    cmd = [
-        chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
-        # fixture 內嵌在 HTML 裡，但 app.js / app.css 是同目錄的檔案。
-        "--allow-file-access-from-files",
-        # console 走 stderr。沒有這兩個旗標，JS 的 Uncaught 完全看不到，
-        # 而「整塊不出現」最常見的原因正是一個沒人接的例外。
-        "--enable-logging=stderr", "--log-level=0",
-        # 讓計時器與 fetch 的微任務跑完再照相。app.js 的渲染是在
-        # DOMContentLoaded 之後才動，不等的話照到的是還沒畫的那一刻。
-        "--virtual-time-budget=%d" % budget_ms,
-        "--dump-dom", page.resolve().as_uri(),
-    ]
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        raise CannotRun(f"Chrome 超過 {timeout} 秒沒有回來") from e
-    if r.returncode != 0:
-        raise CannotRun(f"Chrome 回 {r.returncode}：{r.stderr[-600:]}")
-    if not r.stdout.strip():
-        raise CannotRun("Chrome 回了空的 DOM")
+        cmd = [
+            chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
+            # fixture 內嵌在 HTML 裡，但 app.js / app.css 是同目錄的檔案。
+            "--allow-file-access-from-files",
+            # console 走 stderr。沒有這兩個旗標，JS 的 Uncaught 完全看不到，
+            # 而「整塊不出現」最常見的原因正是一個沒人接的例外。
+            "--enable-logging=stderr", "--log-level=0",
+            # 讓計時器與 fetch 的微任務跑完再照相。app.js 的渲染是在
+            # DOMContentLoaded 之後才動，不等的話照到的是還沒畫的那一刻。
+            "--virtual-time-budget=%d" % budget_ms,
+            "--dump-dom", page.resolve().as_uri(),
+        ]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired as e:
+            raise CannotRun(f"Chrome 超過 {timeout} 秒沒有回來") from e
+        if r.returncode != 0:
+            raise CannotRun(f"Chrome 回 {r.returncode}：{r.stderr[-600:]}")
+        if not r.stdout.strip():
+            raise CannotRun("Chrome 回了空的 DOM")
 
-    console = [ln for ln in r.stderr.splitlines()
-               if "CONSOLE" in ln or "Uncaught" in ln]
-    fixture = json.loads((out / "fixture.json").read_text(encoding="utf-8"))
-    return Render(dom=r.stdout, console=console, fixture=fixture, outdir=out)
+        console = [ln for ln in r.stderr.splitlines()
+                   if "CONSOLE" in ln or "Uncaught" in ln]
+        fixture = json.loads((out / "fixture.json").read_text(encoding="utf-8"))
+        handed = True
+        return Render(dom=r.stdout, console=console, fixture=fixture, outdir=out)
+    finally:
+        if mine and not handed:
+            shutil.rmtree(out, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- DOM 取值

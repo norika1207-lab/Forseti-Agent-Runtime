@@ -56,6 +56,7 @@ id、git HEAD 配上一個非空的工作區），不用在語意判斷。
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from dataclasses import dataclass
@@ -1221,7 +1222,53 @@ def _by_mtime(entries: list, base: Path) -> list:
     return sorted(entries, key=key)
 
 
-def invalidated_lines(ctx: dict | None, limit: int = 6) -> list:
+def _guard_lines(guard: dict | None, n_rows: int) -> list:
+    """「其中幾筆有守門」那幾行。`invalidated_lines()` 的一部分，拆出來是為了測得動。
+
+    `guard` 是 `pollution.guard_split()` 的回傳值。給 None 就自己去問；
+    問不到（登記簿不存在、模組 import 不起來）**整段不印**，
+    不印「守門狀態未知」那種行文 —— 那句話對讀的人沒有作用，
+    而且會讓這一節看起來比實際上知道得更多。
+    """
+    if guard is None:
+        try:
+            import pollution                # noqa: PLC0415  故意延後，同 _invalidated
+            guard = pollution.guard_split()
+        except Exception:                   # noqa: BLE001
+            return []
+    if not isinstance(guard, dict):
+        return []
+    try:
+        g = int(guard["guarded"])
+        u = int(guard["unguarded"])
+        n_open = int(guard["open"])
+    except (KeyError, TypeError, ValueError):
+        return []
+
+    ids = [str(x) for x in (guard.get("unguarded_ids") or [])]
+    out = []
+    if u == 0:
+        out.append(f"這 {n_open} 筆**全部**有偵測器或預防規則攔著。")
+    else:
+        out.append(f"其中 **{g} 筆**有偵測器或預防規則攔著，"
+                   f"**{u} 筆現在只靠人記得**。")
+        if ids:
+            named = "、".join(f"`{i}`" for i in ids[:6])
+            more = f"（還有 {len(ids) - 6} 筆沒列）" if len(ids) > 6 else ""
+            out.append("")
+            out.append(f"只靠人記得的是 {named}{more}。**那幾筆才是風險所在** ——")
+            out.append("§40.2 要的是偵測器，不是一次查核。重驗過不等於機制被擋住了。")
+    if n_open != n_rows:
+        out.append("")
+        out.append(f"**這兩個數字對不起來**：上面那一行的 {n_rows} 筆是傳進來的清單，"
+                   f"這一行的 {n_open} 筆是現在去讀登記簿算的。")
+        out.append("不挑一個印，因為不一致本身就是要給人看的狀態。")
+    out.append("")
+    return out
+
+
+def invalidated_lines(ctx: dict | None, limit: int = 6,
+                      guard: dict | None = None) -> list:
     """交接檔「已經被推翻的」那一節的行文。算在這裡，`handoff.py` 只排版。
 
     理由跟 `artifact_lines` 同一條，而這一節的必要性更直接:
@@ -1234,6 +1281,24 @@ def invalidated_lines(ctx: dict | None, limit: int = 6) -> list:
     空的時候回空清單，那一節整個不印。**不印「目前沒有被推翻的結論」** ——
     這個登記簿只收明確登錄的那幾筆，沒有東西不代表沒有污染，
     只代表沒有人登錄。這句話講出來反而會給一個沒有根據的保證。
+
+    ## `guard` 那一行是 2026-09-18 加的
+
+    先前這一節只印得出「有 N 筆還沒收乾淨」。而那個數字裡，
+    **有偵測器攔著的那幾筆跟只靠人記得的那幾筆長得一模一樣** ——
+    §40.2 要的是偵測器不是一次查核，所以後面那幾筆才是風險所在，
+    而讀這一份的人看不出來是哪幾筆。
+
+    `guard` 不給就自己去問 `pollution.guard_split()`（延後 import，
+    理由跟 `_invalidated()` 同一條）。**問不到就整行不印** ——
+    拿 `summary()['guarded']` 來湊是不行的，那一支的分母是
+    `records()` 全部，而這一節的分母是 open，兩個此刻相等純屬巧合
+    （RESOLVED 是 0）。細節寫在 `pollution.guard_split()` 的說明裡。
+
+    兩邊的 open 數字不一致的時候**不挑一個印** ——
+    `rows` 是呼叫者傳進來的（可能已經被 `Degraded` 降級過），
+    `guard` 是這一支自己讀檔算的。不一致本身是要給人看的狀態，
+    不是要被抹平的雜訊。
     """
     ctx = ctx or {}
     raw = ctx.get("invalidated_conclusions")
@@ -1251,6 +1316,7 @@ def invalidated_lines(ctx: dict | None, limit: int = 6) -> list:
         "數字改掉就沒事了，機制不改掉會再犯一次（§40 開頭那一句）。",
         "",
     ]
+    lines += _guard_lines(guard, len(rows))
     for r in rows[:limit]:
         lines.append(f"- {r}")
     if len(rows) > limit:
@@ -1424,15 +1490,478 @@ def artifact_lines(ctx: dict | None, limit: int = 10) -> list:
                     else {"missing": "檔案不在了", "dir": "這是目錄",
                           "unmeasured": "量不到"}.get(st, "沒有雜湊"))
             tag = "這一輪寫的" if e.get("source") == "tool_point" else e.get("vcs", "")
-            lines.append(f"- `{e['path']}` ── {tag}，{mark}")
+            lines.append(ART_ROW_FMT.format(path=e["path"], tag=tag, mark=mark))
         if len(paths) > limit:
-            lines.append(f"- 還有 {len(paths) - limit} 個沒列出來，"
-                         "`python3 apps/forseti-cli/contract.py` 全部印得出來")
+            lines.append(ART_TRUNC_FMT.format(n=len(paths) - limit))
+            # 數量那一行講不出是哪幾個,而「另外 16 個不在檢查範圍內」
+            # 這句話拿不去查:讀的人不知道自己剛改的檔在不在那 16 個裡。
+            # 代價量過了（多一行 493 字元），理由與四種排版的比較
+            # 在 `ART_UNLISTED_FMT` 的說明裡。
+            lines.append(ART_UNLISTED_FMT.format(
+                paths=ART_UNLISTED_SEP.join(
+                    ART_UNLISTED_ITEM_FMT.format(path=e["path"])
+                    for e in paths[limit:])))
         lines.append("")
         lines.append("工作區那一半照**修改時間**排，新的在前。"
                      "那是「什麼時候被動過」，不是「誰動的」。")
         lines.append("")
     return lines
+
+
+#: 交接檔那一節的標題。**跟 `handoff.py` 排版用的是同一個字面值**，
+#: 而它在那邊是寫死的。兩邊各寫一次就會有一天只改一邊，而那一天
+#: 這裡會靜默地掃不到任何一行 —— 零筆讀起來跟「全部對得上」一樣。
+#: `test_那個標題兩邊是同一個` 釘住這件事。
+ARTIFACT_HEADING = "## 產出在哪裡"
+
+#: `artifact_lines()` 印出來的那一行長這樣:
+#:     - `路徑` ── 標記，雜湊前 16 碼
+#: 最後一欄不一定是雜湊（「檔案不在了」「這是目錄」「量不到」
+#: 「沒有雜湊」都印在同一格），所以這裡**不假設它是**，
+#: 判斷留給 `artifact_drift()`。
+#:
+#: **這是那一行唯一的定義。** 先前排版寫在 `artifact_lines()` 的
+#: f-string 裡，讀回來的正則寫在這裡，兩邊各寫一次。2026-09-18
+#: 實測過只改排版不改正則會怎樣:`tests/test_artifact_drift.py`
+#: 當場 11 條紅，**所以那不是靜默失效**（上一輪的紀錄寫成靜默，
+#: 那句話已經登進 §40）。會靜默的是另一半 —— Python 側的改動不經過
+#: build 就對桌面版生效，而 `desktop/deploy.sh` 的守門只跑
+#: `test_js_symbols.py` 與 `test_ui_contract.py`，這一組不在裡面。
+#: 也就是說「有人跑全套測試」是唯一的關卡。單一來源化不是為了多一道
+#: 守門，是為了讓那個不一致從「測試會擋」變成**構造上做不出來**。
+ART_ROW_FMT = "- `{path}` ── {tag}，{mark}"
+
+#: 每一欄允許長什麼樣。**用具名群組**，因為 `ART_ROW_FMT` 的欄位
+#: 順序哪天換了，位置群組的編號會跟著換而讀的那一支不會知道。
+#:
+#: **這一份跟 `ART_ROW_FMT` 是一對，所以跟它一樣公開。** 第一版寫成
+#: 底線開頭，`test_私有常數的曝險此刻是0` 當場紅了 —— 那一條守的是
+#: 「成員只活在私有常數裡就沒有對照組」，而這三個鍵正是那種。
+#: 它們真正的對照組是 `ART_ROW_FMT` 裡的 `{path}` `{tag}` `{mark}`，
+#: 但那個守門掃的是列舉常數的成員，看不進 f-string 的欄位名。
+#: 一個講格式、一個講每欄的樣式，沒有理由一個公開一個私有。
+ART_FIELD_PAT = {
+    "path": r"(?P<path>[^`]+)",
+    "tag": r"(?P<tag>[^，]*)",
+    "mark": r"(?P<mark>.*)",
+}
+
+#: 那一節被截斷的時候多印的那一行。**它是這個檢查的邊界宣告**:
+#: `artifact_lines()` 預設只印前 10 個路徑（`desktop_api.py` 傳的就是 10），
+#: 而 `artifact_drift()` 只對得到印出去的那幾行。被截掉的那些
+#: **永遠不會被追尾抓到**,因為它們從來沒有被記下來過。
+#:
+#: 2026-09-18 實測:工作區 26 個路徑,交接檔那一節記了 10 筆,
+#: 另外 16 個不在檢查範圍內。而 `drift_lines()` 印的是
+#: 「10 個雜湊這一刻都對得上（那一節共 10 筆）」——
+#: 那句話沒有一個字是假的,可是讀起來像是覆蓋了工作區。
+#:
+#: 所以這一行要讀得回來,理由跟 `ART_ROW_FMT` 同一條,
+#: 而用途不同:那一份是為了對雜湊,這一份是為了**講出對不到哪裡為止**。
+ART_TRUNC_FMT = ("- 還有 {n} 個沒列出來，"
+                 "`python3 apps/forseti-cli/contract.py` 全部印得出來")
+
+#: 只有一欄,而且它一定是數字。**不用 `.*`** —— 那會讓
+#: 「還有 一些 個沒列出來」也匹配得上,然後 `int()` 在別的地方炸。
+ART_TRUNC_PAT = {"n": r"(?P<n>\d+)"}
+
+#: 被截掉的那幾個**是哪幾個**。上一行只講得出數量,而
+#: 「另外 16 個不在這個檢查裡」這句話沒辦法拿去查 —— 讀的人
+#: 不知道自己剛改的那個檔在不在那 16 個裡面,也就沒辦法判斷
+#: 「全部對得上」這句話對他有沒有用。
+#:
+#: **只有路徑,刻意不帶雜湊。** 帶了雜湊就會被 `recorded_artifacts()`
+#: 讀成記錄，於是它們變成追尾範圍的一部分 —— 而這一行的用途正好相反:
+#: 它是在宣告這些東西**不**在範圍內。名單跟範圍是兩件事。
+#:
+#: 2026-09-18 實測四種排版的代價（工作區 26 個路徑,`limit=10`,
+#: 四份都是真的產出來再數的,不是估的）:
+#:
+#:     A 現況,只有數量                 22 行　872 字元
+#:     B 擠成一行,只有路徑             23 行　1402 字元　← 這一份
+#:     C 每行一個,只有路徑             38 行　1380 字元
+#:     D 乾脆全部印出來,含雜湊         37 行　1766 字元
+#:
+#: **C 沒有比 D 省行數**（38 比 37 還多一行,因為 D 的截斷行本身
+#: 消失了）,它省的只有字元,而字元也只省 22%。也就是說「留路徑
+#: 清單」這件事要划得來,唯一的排版是 B:多一行,換那句邊界宣告
+#: 從「拿不去查」變成「查得動」。
+#:
+#: B 那一行很長（實測 530 字元）,這是刻意付的代價。
+#:
+#: **這一行自己不截斷。** 一個宣告別人被截斷了的行自己再截斷一次,
+#: 就會需要第三行去講它截到哪裡，而那正是這一整節在解的問題。
+ART_UNLISTED_FMT = ("- 沒列出來的是這幾個（只有路徑，"
+                    "**沒有雜湊，所以它們不在追尾範圍內**）：{paths}")
+
+#: 一整串,裡面每一個路徑各自用反引號包,中間用 `ART_UNLISTED_SEP` 隔開。
+#: **不用 `.*`** 而用 `.+`:空字串代表沒有路徑,那種時候整行就不該印。
+ART_UNLISTED_PAT = {"paths": r"(?P<paths>.+)"}
+
+#: 分隔符。**單獨一個常數**,因為讀回來那一支要拿它切,
+#: 而排版與切割用同一個字面值是這一整組的前提。
+ART_UNLISTED_SEP = "、"
+
+#: 那一行裡每一個路徑長什麼樣。**這一份存在是因為守門抓到了它** ——
+#: 第一版把反引號直接寫在 `artifact_lines()` 的 f-string 裡,
+#: `test_排版跟讀回來用的是同一份格式` 當場紅（它掃的是原始碼裡
+#: 有沒有寫死的 `` `{ ``）,而讀回來那一支則自己 `strip("`")`。
+#: 兩邊各有一份對反引號的知識,就是 `ART_ROW_FMT` 那一整段講的形狀。
+#: 沒有把測試改綠,改的是這裡。
+ART_UNLISTED_ITEM_FMT = "`{path}`"
+ART_UNLISTED_ITEM_PAT = {"path": r"(?P<path>[^`]+)"}
+
+
+def _fmt_to_re(fmt: str, pats: dict) -> re.Pattern:
+    """把排版格式轉成讀得回來的正則。固定的部分一律 `re.escape`。
+
+    **不接受 `pats` 沒定義的欄位。** 排版多加一欄而這裡忘了給樣式，
+    正確的行為是當場 `KeyError`，不是生出一個少一欄照樣匹配得上的
+    正則 —— 那會讓多出來的那一欄靜默地被併進隔壁欄。
+    """
+    out, i = [], 0
+    for m in re.finditer(r"\{(\w+)\}", fmt):
+        out.append(re.escape(fmt[i:m.start()]))
+        out.append(pats[m.group(1)])
+        i = m.end()
+    out.append(re.escape(fmt[i:]))
+    return re.compile("^" + "".join(out) + "$")
+
+
+_ART_ROW = _fmt_to_re(ART_ROW_FMT, ART_FIELD_PAT)
+_ART_TRUNC = _fmt_to_re(ART_TRUNC_FMT, ART_TRUNC_PAT)
+_ART_UNLISTED = _fmt_to_re(ART_UNLISTED_FMT, ART_UNLISTED_PAT)
+_ART_UNLISTED_ITEM = _fmt_to_re(ART_UNLISTED_ITEM_FMT, ART_UNLISTED_ITEM_PAT)
+
+_HEX16 = re.compile(r"^[0-9a-f]{16}$")
+
+
+def _section(text: str, heading: str) -> list[str]:
+    """切出某一節的內容。下一個 `## ` 就停。
+
+    **先切範圍再比對，不是整份檔案 grep。** 別的節裡也有反引號包路徑
+    的行，靠「只有這一節有 ──」去分等於依賴別節的排版永遠不變，
+    而那是一個沒有人在守的假設。
+    """
+    lines = (text or "").splitlines()
+    try:
+        i = lines.index(heading)
+    except ValueError:
+        return []
+    out = []
+    for ln in lines[i + 1:]:
+        if ln.startswith("## "):
+            break
+        out.append(ln)
+    return out
+
+
+def recorded_artifacts(text: str) -> list[dict]:
+    """把已經寫出去的交接檔裡「產出在哪裡」那幾行讀回來。
+
+    **讀的是交出去的那份文字，不是重算一次狀態。** 這是刻意的:
+    這一支要答的是「接手的人看到的那幾行，現在還對不對得上」。
+    重算一次只會答「現在是什麼」，而那題 `artifact_hashes()` 早就答過了，
+    再答一次不會發現任何不一致。
+    """
+    rows = []
+    for ln in _section(text, ARTIFACT_HEADING):
+        m = _ART_ROW.match(ln)
+        if not m:
+            continue
+        path = m.group("path")
+        tag, mark = m.group("tag").strip(), m.group("mark").strip()
+        rows.append({"path": path, "tag": tag, "mark": mark,
+                     "hash": mark if _HEX16.match(mark) else None})
+    return rows
+
+
+def recorded_truncation(text: str) -> int | None:
+    """那一節自己宣告「還有幾個沒列出來」。
+
+    **`None` 跟 `0` 是兩件事。** `0` 是那一節有路徑行而沒有截斷行,
+    也就是當初沒有被截斷,所以檢查範圍等於工作區。`None` 是連一行
+    路徑都讀不回來 —— 那一節可能是空的,也可能是排版改了讀不到,
+    這裡分不出來,所以不准回 `0` 冒充「沒有被截斷」。
+
+    這一支跟 `recorded_artifacts()` 讀的是同一節,拆成兩支是因為
+    兩題不一樣:那邊問「記了哪幾個」,這邊問「沒記的有幾個」。
+    """
+    body = _section(text, ARTIFACT_HEADING)
+    seen_row = False
+    for ln in body:
+        m = _ART_TRUNC.match(ln)
+        if m:
+            return int(m.group("n"))
+        if _ART_ROW.match(ln):
+            seen_row = True
+    return 0 if seen_row else None
+
+
+def recorded_unlisted(text: str) -> list[str] | None:
+    """那一節被截掉的**是哪幾個**。三態,跟 `recorded_truncation()` 不同構。
+
+    `[]`   那一節沒有被截斷（有路徑行、沒有截斷行）。沒有名單要讀,
+           而這不是缺陷。
+    `list` 讀回來的路徑,順序照印出去那一行。
+    `None` **答不出來**,兩種情況:一行路徑都讀不回來（跟
+           `recorded_truncation()` 的 `None` 同一種）,或者有截斷行
+           卻沒有名單行 —— 後者是舊格式的交接檔,它宣告了數量而
+           沒有留下路徑。
+
+    **`[]` 跟 `None` 在 `if not` 底下長得一樣,所以呼叫端一律用
+    `is None` 判斷。** 這一支回的兩種空值分別是「不需要」跟「答不出來」,
+    合成一個就會讓一份舊格式的交接檔讀起來像是沒有被截斷過。
+    """
+    body = _section(text, ARTIFACT_HEADING)
+    seen_row = trunc = False
+    for ln in body:
+        m = _ART_UNLISTED.match(ln)
+        if m:
+            # 每一項也走同一份格式。**不 `strip("`")`** —— 那是第二份
+            # 對反引號的知識,而且它會把一個根本沒被包起來的字串
+            # 照樣收下來,於是排版壞掉那天這裡讀得回東西。
+            got = []
+            for x in m.group("paths").split(ART_UNLISTED_SEP):
+                mi = _ART_UNLISTED_ITEM.match(x.strip())
+                if mi:
+                    got.append(mi.group("path"))
+            return got
+        if _ART_TRUNC.match(ln):
+            trunc = True
+        if _ART_ROW.match(ln):
+            seen_row = True
+    if trunc:
+        return None
+    return [] if seen_row else None
+
+
+def _changed_after(base, rel: str, at: float | None) -> bool | None:
+    """那個檔案是不是在交接檔寫出去之後才被動的。
+
+    **拿不到就回 None 不回 False。** False 讀起來是「沒有在那之後被動過」，
+    而那正是下面要標成可疑的那一類。拿一個量不到的東西去指控一筆記錄，
+    是這個專案 §8.3 點名的填空。
+    """
+    if at is None:
+        return None
+    f = Path(rel)
+    if not f.is_absolute() and base is not None:
+        f = Path(base) / rel
+    try:
+        return f.stat().st_mtime > at
+    except OSError:
+        return None
+
+
+def artifact_drift(text: str | None = None, cwd=None, out=None, disk=None) -> dict:
+    """交接檔記下的那幾個雜湊，現在還對不對得上。
+
+    ## 為什麼有這一支
+
+    2026-09-18 自動接續那一輪撞到的，原話在 `AUTO_CONTINUE_LOG.md`:
+
+        收尾的順序是「重產 `NEXT.md` → 寫這一節」，而 `NEXT.md` 的
+        「產出在哪裡」那一節裡有這個檔的 hash。**所以寫完這一節，
+        `NEXT.md` 當場就過期了。**
+
+    那一輪的處置是多重產一次，而它自己的結尾寫著「現在靠人記得，
+    **沒有東西擋**」。這一支就是那個東西。
+
+    ## 對不上是一個觸發器，不是一個結論
+
+    B-05 擋住的是「單靠文字比對直接產生 finding」。這裡同一條:
+    雜湊對不上只代表那個檔案在交接寫出去之後被動過，而那在一個
+    還在動的工作區裡是正常狀態。所以每一筆一起回 `changed_after`。
+
+    **`True` 跟 `False` 是兩種東西，不准併成一個數字。**
+    `True` 是交接寫完之後才改的，那是追尾，重產一次就對了。
+    `False` 是檔案沒被動過而雜湊對不上 —— 那句記錄在寫下的當下
+    就不成立，那才是這一支真正要抓的。`None` 是量不到，
+    它既不是前者也不是後者。
+
+    ## 它看不到什麼（是前提不是補充）
+
+    交接檔寫出去之後被改過又改回來的檔案，這一支看不到 ——
+    它比的是內容不是歷史。這跟 `conftest.py` 掃目錄那一支看不到
+    「先建檔再刪掉」是同一個形狀:量結果的東西看不到過程。
+    """
+    p = Path(out) if out else None
+    if p is None:
+        try:
+            import handoff                # noqa: PLC0415  故意延後，同 _claims_disk
+            p = Path(handoff.OUT)
+        except Exception:                 # noqa: BLE001
+            p = None
+    empty = {"source": str(p) if p else None, "at": None, "checked": 0,
+             "matched": [], "stale": [], "gone": [], "unmeasured": [],
+             "skipped": [], "uncovered": None, "uncovered_paths": None,
+             "problem": None}
+    if text is None:
+        if p is None:
+            return {**empty, "problem": "問不到交接檔在哪裡（`handoff.OUT` 拿不到）"}
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError as e:
+            return {**empty, "problem": f"交接檔讀不到:{type(e).__name__}: {e}"}
+    at = None
+    if p is not None:
+        try:
+            at = p.stat().st_mtime
+        except OSError:
+            at = None
+    rows = recorded_artifacts(text)
+    # 那一節自己宣告沒列出來的有幾個。**這一欄不是用來對雜湊的**,
+    # 它講的是這一支對不到哪裡為止,見 `ART_TRUNC_FMT` 的說明。
+    uncovered = recorded_truncation(text)
+    # 是哪幾個。**跟上面那一欄分開讀**,因為一份舊格式的交接檔
+    # 答得出數量而答不出名單,那兩件事要分得出來（見 `recorded_unlisted()`）。
+    uncovered_paths = recorded_unlisted(text)
+    base = Path(cwd) if cwd else REPO
+    live = artifact_hashes([{"path": r["path"]} for r in rows], cwd=base, disk=disk)
+    lmap = {h.get("path"): h for h in live if isinstance(h, dict)}
+
+    matched, stale, gone, unmeasured, skipped = [], [], [], [], []
+    for r in rows:
+        if r["hash"] is None:
+            # 當初就沒記到雜湊（目錄、量不到、檔案不在了）。
+            # **這不算對得上也不算對不上** —— 沒有東西可以比。
+            skipped.append({"path": r["path"], "mark": r["mark"]})
+            continue
+        h = lmap.get(r["path"]) or {}
+        st = h.get("state")
+        if st == "missing":
+            gone.append({"path": r["path"], "was": r["hash"]})
+        elif st == "ok" and h.get("hash"):
+            now = h["hash"][:16]
+            if now == r["hash"]:
+                matched.append(r["path"])
+            else:
+                stale.append({"path": r["path"], "was": r["hash"], "now": now,
+                              "changed_after": _changed_after(base, r["path"], at)})
+        else:
+            unmeasured.append({"path": r["path"], "state": st})
+    return {"source": str(p) if p else None, "at": at,
+            "checked": len(rows), "matched": matched, "stale": stale,
+            "gone": gone, "unmeasured": unmeasured, "skipped": skipped,
+            "uncovered": uncovered, "uncovered_paths": uncovered_paths,
+            "problem": None}
+
+
+def _uncovered_line(d: dict) -> list[str]:
+    """這一支管到哪裡為止。**跟對不對得上是兩題。**
+
+    `drift_lines()` 印的「N 個雜湊這一刻都對得上（那一節共 N 筆）」
+    沒有一個字是假的,可是它讀起來像是覆蓋了工作區。
+    `artifact_lines()` 預設只印前 10 個路徑,被截掉的那些
+    從來沒有被記下來,所以**永遠不會被任何一次追尾抓到** ——
+    不是對得上,是根本不在範圍內,而這兩件事在原本的行文裡長得一樣。
+
+    走到這裡的時候 `uncovered` 一定是數字:`None` 只在
+    「一行路徑都讀不回來」的時候出現,而那條路徑在上面
+    `if not d.get("checked")` 就提早回了。
+    `test_讀不回來那一種在這裡到不了` 釘住這個推論 ——
+    哪天那個提早回被拿掉,這裡就要自己處理 `None`。
+    """
+    u = d.get("uncovered")
+    if u is None:
+        return ["    那一節有沒有被截斷**讀不回來**,所以管到哪裡為止答不出來。"]
+    if not u:
+        return []
+    out = [f"    **另外 {u} 個工作區的檔案不在這個檢查裡。**",
+           "    它們沒有被寫進那一節,所以不是對得上,是從來沒有被記下來過。"]
+    # 是哪幾個。數量答不出「我剛改的那個檔在不在裡面」,而那正是
+    # 讀這一行的人唯一想知道的事。**`[]` 跟 `None` 在這裡是兩種話**,
+    # 所以用 `is None` 分,不用 `if not`。
+    names = d.get("uncovered_paths")
+    if names is None:
+        out.append("    是哪幾個**讀不回來** —— 那一節只宣告了數量,"
+                   "沒有留下路徑（舊格式的交接檔）。")
+        return out
+    # 數量跟名單各自讀回來,所以它們對不上是量得到的。對不上不去
+    # 挑一邊當真 —— 兩個都印,讓讀的人知道那一節自己在打架。
+    if len(names) != u:
+        out.append(f"    **那一節自己打架**:數量寫 {u},名單只有 "
+                   f"{len(names)} 個。名單照印,不替它挑一邊。")
+    out.append("      " + ART_UNLISTED_SEP.join(names))
+    return out
+
+
+#: `drift_lines()` 每一類最多列幾筆。**它跟 `artifact_lines()` 的
+#: `limit` 是兩個不同的截斷**:那一個決定「哪幾個檔進得了追尾範圍」,
+#: 這一個只決定「對不上的那些印幾筆出來」。
+#:
+#: 2026-09-18 查過:這個上限**從來沒有被觸發過**（那一輪四類最多 2 筆）。
+#: 沒被觸發過的截斷仍然要宣告 —— 一個安靜少印的分支,等到真的踩到
+#: 那一天,讀的人看到的是一份看起來完整的清單。
+DRIFT_ROW_LIMIT = 6
+
+
+def _drift_rows(items: list, fmt) -> list[str]:
+    """一類對不上的明細。**截到上限就講出還有幾筆。**
+
+    這是這一輪那一整節（`ART_UNLISTED_FMT`）的同一個形狀:
+    截斷本身不是問題,不宣告才是。四類共用這一支,所以
+    「哪天多一類而忘了宣告」這條路走不出來。
+    """
+    out = [fmt(x) for x in items[:DRIFT_ROW_LIMIT]]
+    if len(items) > DRIFT_ROW_LIMIT:
+        out.append(f"      · 還有 {len(items) - DRIFT_ROW_LIMIT} 筆沒列出來")
+    return out
+
+
+def drift_lines(d: dict | None) -> list[str]:
+    """把 `artifact_drift()` 的結果寫成給人看的行。
+
+    **全部對得上的時候照樣印一行。** 這跟 `recheck_lines()` 的做法相反，
+    理由不一樣:那邊不印「0 條過期」是因為那一行斷言的是缺席，
+    而缺席沒有人量得到。這裡印的是「N 筆量過了，這一刻都對得上」，
+    那是一個量出來的正面事實，而且它必須印 ——
+    這一支存在的理由就是取代「靠人記得」，
+    一個乾淨時什麼都不印的檢查，分不出「乾淨」跟「根本沒跑」。
+
+    印的那一行一定連著講它管到哪裡為止。少了那半句，
+    它就會被讀成「這幾個檔沒問題」，而它只說「這一刻內容沒變」。
+    """
+    if not d:
+        return []
+    if d.get("problem"):
+        return [f"  交接檔的產出雜湊**沒對到**:{d['problem']}",
+                "    對不到不等於對得上,這兩件事在這裡分得出來。"]
+    if not d.get("checked"):
+        return ["  交接檔的「產出在哪裡」那一節**一行雜湊都沒有**,所以沒有東西可以對。"]
+    out = []
+    stale = d.get("stale") or []
+    after = [x for x in stale if x.get("changed_after") is True]
+    before = [x for x in stale if x.get("changed_after") is False]
+    unknown = [x for x in stale if x.get("changed_after") is None]
+    gone = d.get("gone") or []
+    n = d["checked"]
+    if not (stale or gone):
+        out.append(f"  交接檔記的 {len(d['matched'])} 個雜湊這一刻都對得上"
+                   f"（那一節共 {n} 筆）。")
+        out.append("    **這只說這一刻的內容一樣**,不說中間沒有被改過又改回來。")
+        return out + _uncovered_line(d)
+    out.append(f"  交接檔記的雜湊有 {len(stale) + len(gone)} 筆對不上（那一節共 {n} 筆）。")
+    if after:
+        out.append(f"    交接寫完之後才被改的　{len(after)} 筆　"
+                   "這是追尾,重產一次交接檔就對了")
+        out += _drift_rows(
+            after, lambda x: f"      · {x['path']}　{x['was']} → {x['now']}")
+    if before:
+        out.append(f"    **檔案沒被動過,雜湊卻對不上　{len(before)} 筆**　"
+                   "那句記錄在寫下的當下就不成立")
+        out += _drift_rows(
+            before, lambda x: f"      · {x['path']}　{x['was']} → {x['now']}")
+    if unknown:
+        out.append(f"    對不上但量不到它什麼時候被動的　{len(unknown)} 筆　"
+                   "**不歸進上面任何一類**")
+        out += _drift_rows(
+            unknown, lambda x: f"      · {x['path']}　{x['was']} → {x['now']}")
+    if gone:
+        out.append(f"    交接指到的檔案不在了　{len(gone)} 筆")
+        out += _drift_rows(gone, lambda x: f"      · {x['path']}")
+    return out + _uncovered_line(d)
 
 
 def model_from_transcript(path: str | Path | None, tail: int = 400) -> dict:
@@ -1697,3 +2226,10 @@ if __name__ == "__main__":  # pragma: no cover
     # 這裡只印缺口清單，一個路徑都不印。一句叫人去跑而跑了沒有東西的
     # 指示，比不寫更糟 —— 它讓人以為自己查過了。
     print("\n".join(artifact_lines(rep.get("ctx"), limit=10 ** 6)))
+    # 上面那一節是「這一刻工作區是什麼」。這一節問的是另一題:
+    # **已經交出去的那份 `NEXT.md` 上面寫的那幾行,現在還對不對得上。**
+    # 兩題的差就是交接檔過期沒有,而那件事先前只有人記得。
+    _dl = drift_lines(artifact_drift())
+    if _dl:
+        print()
+        print("\n".join(_dl))

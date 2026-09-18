@@ -556,6 +556,8 @@ def _session(rest: list[str]) -> str:
     for i, a in enumerate(rest):
         if a == "--session" and i + 1 < len(rest):
             return rest[i + 1]
+        if a.startswith("--session="):
+            return a.split("=", 1)[1]
     try:
         import forseti
         return forseti.current_session()
@@ -564,11 +566,87 @@ def _session(rest: list[str]) -> str:
 
 
 def _arg(rest: list[str], flag: str, default: str = "") -> str:
+    """`--flag X` 與 `--flag=X` 兩種寫法讀到同一個值。
+
+    等號那一半是 2026-09-18 補的。先前不收，而不收的後果不是報錯，
+    是靜默丟掉：`--root=<某目錄>` 會掉回正本，印出正本那一筆推導，
+    而那個人以為他看到的是自己指定的那個目錄。
+    """
     for i, a in enumerate(rest):
         if a == flag and i + 1 < len(rest):
             return rest[i + 1]
+        if a.startswith(flag + "="):
+            return a.split("=", 1)[1]
     return default
 
+
+def _flag_without_value(argv: list[str], name: str) -> bool:
+    """旗標出現了，可是後面沒有值。
+
+    這跟「旗標沒出現」要分得開。`_arg` 兩種都回 default，而呼叫端拿
+    default 當「沒指定，讀正本」——於是 `--root`（手滑漏掉目錄）會去
+    讀正本並印出一份看起來正常的狀態。`--session` 那一支更重：
+    權限綁在那個值上，掉回 `current_session()` 的意思是
+    **他問的是別條線，拿到的是自己這條線的答案**。
+
+    等號寫法不算在內：`--root=` 是明確給了一個空字串，
+    跟沒寫完不是同一件事，留給呼叫端自己判。
+
+    這三行跟 `metrics` / `attempts` / `evidence` 那三份是同一個判準，
+    各寫一份沒有抽共用 —— 抽出去要新建一個模組，那是設計決定不是查核。
+    """
+    # 「後面那個東西是另一個旗標」也算沒給值。2026-09-18 實測的後果：
+    # `antianchor classify <id> blockers CHANGED_REALITY --by --reason 環境變了`
+    # 會 exit=0、印「記下了」、而磁碟上那一筆 CLASSIFY 的 `by` 是
+    # `--reason`。§39 那四類沒有一類算得出來，所以每一筆分類都要指得回
+    # 是誰判的 —— 指回一個旗標名等於指不回任何人，而畫面上跟成功一樣。
+    # `classify()` 內部本來就擋空字串（`by` 必填），所以擋不住的不是空的，
+    # 是被下一個旗標填滿的。三支 `show --id` 那一半則是診斷指錯：
+    # 回「不在登記簿上」，那個人會以為那筆資料不存在。
+    #
+    # 代價講清楚：真的要傳一個以 `--` 開頭的值，等號那條路還在
+    # （`--by=--reason` 照樣拿得到 `--reason`），所以沒有失去表達能力。
+    # 只認兩個減號，`-1` 這種值不受影響。
+    return any(a == name for a in argv) and not any(
+        (a == name and i + 1 < len(argv)
+         and not str(argv[i + 1]).startswith("--"))
+        or str(a).startswith(name + "=")
+        for i, a in enumerate(argv))
+
+
+
+def _unknown_flags(argv: list, known: tuple) -> list:
+    """認不得的旗標名。打錯字不准靜默走預設。
+
+    2026-09-18 實測，五支的打錯字後果分三級，**沒有一支會說
+    「我不認得這個旗標」**：
+
+    | 寫法 | exit | 實際發生的事 |
+    |---|---|---|
+    | `probe-model run --yes --onlyy X` | 1 | 不過濾，跑滿 36 次真呼叫 |
+    | `antianchor status --roott X` | 0 | 讀正本，畫面跟成功一樣 |
+    | `attempt record --retry-conditionn X` | 0 | 印「登錄了」，那一欄落地是空的 |
+    | `metric template --transcriptt X` | 0 | 模板照印，缺席理由指錯原因 |
+    | `evidence show --idd X` | 2 | 報錯，可是怪「要一個 id」 |
+
+    跟 `_flag_without_value` 不是同一件事：那一支問的是「這個旗標
+    後面有沒有值」，前提是旗標名對得上。名字打錯的時候那一支
+    一律不觸發 —— 它 `any(a == name ...)` 找的是正確的那個名字。
+
+    判準只認兩個減號開頭的 token，取等號之前那一段比對，所以
+    `--by=--reason` 這種明著傳減號開頭的值照樣收（比的是 `--by`）。
+    裸的 `--` 跳過：這五支都沒有實作那個慣例標記，這道守門不替
+    它作決定，維持現況的忽略。
+    """
+    out = []
+    for a in argv:
+        s = str(a)
+        if not s.startswith("--") or s == "--":
+            continue
+        name = s.split("=", 1)[0]
+        if name not in known and name not in out:
+            out.append(name)
+    return out
 
 def _print_state(st: dict) -> None:
     print()
@@ -587,6 +665,13 @@ def _print_state(st: dict) -> None:
     print()
 
 
+#: `main()` 認得的全部旗標。跟底下那幾個 `_arg(rest, "--x")` 與
+#: `_session(rest)` 各寫一份，`tests/test_cli_flag_dispatch.py` 有一條
+#: 盯著不漂開 —— 漂開的話會出現「守門說認得、`main()` 裡沒人讀」的
+#: 旗標，那種打對了也沒用，跟打錯字一樣靜默。
+KNOWN_FLAGS: tuple[str, ...] = ("--root", "--session", "--by", "--reason")
+
+
 def main(argv: list[str]) -> int:
     """`forseti antianchor <status|open|submit|reveal|classify|show>`
 
@@ -594,8 +679,52 @@ def main(argv: list[str]) -> int:
     沒揭曉不分類 —— 那幾條拒絕就是這整套的重點，繞過去之後
     剩下的只是流程表演。
     """
-    sub = argv[0] if argv else "status"
-    rest = argv[1:]
+    # 第一個參數以 `-` 開頭的時候它是旗標不是子指令。少了這一行，
+    # `forseti antianchor --root X` 會把旗標放進 `sub`，掉到最後那條
+    # `print(main.__doc__); return 2`。這一支不像 `metric` 與 `attempt`
+    # 會靜默給錯答案（那兩支沒有未知子指令守門，會掉進 list），
+    # 它是明著退回 exit=2 —— 2026-09-18 實測。所以這裡修的是
+    # 「省略 status 用不了」，不是「答案是錯的」。
+    _flag_first = bool(argv) and str(argv[0]).startswith("-")
+    sub = argv[0] if (argv and not _flag_first) else "status"
+    rest = list(argv) if _flag_first else argv[1:]
+    # 旗標寫了可是後面沒有值 -> 明著退回，不准掉回預設。
+    # 少了這一段，`--root` 會讀正本、`--session` 會掉回這條線自己，
+    # 兩種都是錯的答案長得跟對的一樣（2026-09-18 實測，原始輸出在
+    # 這一輪的自動接續紀錄裡）。
+    for _flag, _why in (
+            ("--root", "後面要接一個專案根目錄。沒接的話會讀正本，"
+                       "而那份狀態看起來跟你指定的目錄一模一樣。"),
+            ("--session", "後面要接一條線的識別。沒接的話會掉回"
+                          "現在這條線，於是你問的是別人、看到的是自己。"),
+            # 這兩個是 2026-09-18 補的。`classify()` 內部擋得住空的 `by`，
+            # 擋不住被下一個旗標填滿的 `by`：實測 `--by --reason 環境變了`
+            # 落地成 `by='--reason'`，exit=0，畫面印「記下了」。
+            ("--by", "後面要接判的人。沒接的話那一筆分類會指回一個旗標名，"
+                     "而 §39 這四類沒有一類算得出來 —— 指不回人就不算分類。"),
+            ("--reason", "後面要接理由。沒接的話會記成空的，"
+                         "而空的理由跟沒寫理由長得一樣。")):
+        if _flag_without_value(rest, _flag):
+            print()
+            print(f"  `{_flag}` {_why}")
+            print("  所以這裡退回，不猜。")
+            print()
+            return 2
+
+    # 旗標名打錯字 -> 明著退回。2026-09-18 實測
+    # `antianchor status --roott <暫存目錄>` exit=0，而印出來的是
+    # **正本**那條線的狀態 —— 跟 `--root` 缺值那一種是同一個後果
+    # （讀正本），只是缺值守門攔不到：它找的是 `--root` 這個名字。
+    # 錯的答案跟對的答案長得一模一樣，正是上面那道守門要防的事。
+    _unknown = _unknown_flags(rest, KNOWN_FLAGS)
+    if _unknown:
+        print()
+        print(f"  不認得這個旗標：{'、'.join(_unknown)}")
+        print(f"  有的是：{'、'.join(KNOWN_FLAGS)}")
+        print("  打錯字不會報錯，那個旗標會被當成沒寫 —— `--root` 會")
+        print("  掉回正本、`--session` 會掉回現在這條線。所以這裡退回。")
+        print()
+        return 2
     root = Path(_arg(rest, "--root")) if _arg(rest, "--root") else REPO
     sess = _session(rest)
 

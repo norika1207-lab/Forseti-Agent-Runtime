@@ -1,3 +1,29 @@
+/* 【2026-09-18 診斷】前端在 Tauri 裡掛掉的時候畫面是全白的，
+   而 Tauri 的 console 從外面看不到、Rust 的 stderr 也不會收到它。
+   於是「白畫面」跟「還在載入」「視窗沒開」長得一模一樣。
+
+   所以把錯誤畫到畫面上。這一段刻意放在檔案最前面，
+   而且不依賴任何其他函式 —— 它要能在別的東西都還沒定義的時候動。 */
+window.addEventListener("error", (e) => {
+  const box = document.createElement("pre");
+  box.style.cssText = "position:fixed;inset:0;z-index:99999;margin:0;padding:12px;"
+    + "background:#1C1C1E;color:#FFB3AE;font:11px/1.5 ui-monospace,monospace;"
+    + "white-space:pre-wrap;overflow:auto";
+  box.textContent = "前端掛了\n\n" + (e.message || "") + "\n\n"
+    + (e.filename || "") + ":" + (e.lineno || "") + ":" + (e.colno || "")
+    + "\n\n" + ((e.error && e.error.stack) || "");
+  document.body && document.body.appendChild(box);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const box = document.createElement("pre");
+  box.style.cssText = "position:fixed;inset:0;z-index:99999;margin:0;padding:12px;"
+    + "background:#1C1C1E;color:#FFCC80;font:11px/1.5 ui-monospace,monospace;"
+    + "white-space:pre-wrap;overflow:auto";
+  box.textContent = "有一個 Promise 沒有人接\n\n" + String(e.reason)
+    + "\n\n" + ((e.reason && e.reason.stack) || "");
+  document.body && document.body.appendChild(box);
+});
+
 // Forseti Widget 前端。
 //
 // 只做呈現。所有判斷來自 tracker.py —— 判斷邏輯只能有一份。
@@ -786,7 +812,22 @@ function renderPollution(d) {
     `${tail ? "　" + esc(tail) : ""}</span></p>` +
     `<div class="plList">${items}</div>` +
     `<p class="plMore" hidden></p>` +
-    `<p class="plNote">${esc(p.guard_note || "")}：${p.guarded} 筆。</p>` +
+    // **這一句的分母是 open，不是 total。**
+    // 2026-09-18 之前它接的是 `summary()['guarded']`（分母是整本登記簿），
+    // 而它上面那一句印的是 `open`。當時 RESOLVED 是 0 所以兩個數字
+    // 剛好對得上 —— 那是巧合不是設計。第一筆推到 RESOLVED 的那天，
+    // 這兩句就會在同一頁上打架，而打架的方向是往「看起來比較好」：
+    // 攔著的筆數會含已經收乾淨的那些。所以分母寫出來，不靠讀的人去猜。
+    `<p class="plNote">${esc(p.guarded_note || "")}：` +
+    `${p.guarded} 筆，分母是${esc(p.guard_denominator || "")}。</p>` +
+    // 只靠人記得的那幾筆要指名道姓。「還有 N 筆沒有」跟「是這幾筆」
+    // 差在後者可以直接去補，前者要先找 —— §40.2 要的是偵測器。
+    (p.unguarded
+      ? `<p class="plNote plRisk">剩下 ${p.unguarded} 筆` +
+        `${esc(p.unguarded_note || "")}：` +
+        `${(p.unguarded_ids || []).map(esc).join("、")}。` +
+        `${esc(p.unguarded_caveat || "")}。</p>`
+      : "") +
     (p.radius_unknown
       ? `<p class="plNote">${p.radius_unknown} 筆量不到擴散半徑。` +
         `${esc(p.radius_note || "")}</p>` : "") +
@@ -3110,15 +3151,47 @@ function fatal(title, detail) {
   $("adviceWhy").textContent = detail;
 }
 
+/* 上一輪還沒回來就跳過這一輪。
+
+   【2026-09-18 事故】輪詢是兩秒一輪（那一行在這個檔最底下），而
+   `strands` 在真實資料上要 17.6 秒（冷）／6.7 秒（熱）。
+   於是每一輪都在上一輪還沒回來的時候又起一個 Python 子行程，
+   八九個同時跑互相搶 CPU，每一個因此更慢，累積得更多 ——
+   **它不是慢，是永遠不會完成。**
+
+   owner 看到的是視窗開著、整片黑、底部寫「啟動中」。
+   `fatal()` 沒被觸發，因為 invoke 既沒成功也沒拋錯，它還在跑。
+   實測 ps:App 跑了 5 分 50 秒，而它底下的 Python 子行程只有 8 秒大。
+
+   這個旗標治的是「重疊」。真正的 17.6 秒要另外治，
+   那是 `_meta_rows` 2.4 秒、四次 subprocess 1.4 秒、
+   `claims.verify` 36 次 1 秒、`blast.summary` 0.9 秒加起來的。 */
+let inFlight = false;
+let slowSince = 0;
+
 async function tick() {
+  if (inFlight) {
+    // 等太久要讓人看得出它在跑，不是死了。
+    // 一片黑加一個小字「啟動中」，跟當掉長得一模一樣。
+    if (slowSince && Date.now() - slowSince > 4000) {
+      const s = $("stat");
+      if (s) {
+        s.textContent = `讀取中 ${Math.round((Date.now() - slowSince) / 1000)}s`;
+      }
+    }
+    return;
+  }
   if (!invoke) {
     fatal("拿不到 Tauri",
       "window.__TAURI__ 不存在。tauri.conf.json 要設 app.withGlobalTauri = true，" +
       "否則前端呼叫不到後端，畫面會是空的。");
     return;
   }
+  inFlight = true;
+  if (!slowSince) slowSince = Date.now();
   try {
     const raw = await invoke("strands", { session: picked });
+    slowSince = 0;
     const d = JSON.parse(raw);
     if (d.error) throw new Error(d.error);
     rows = d.rows || [];
@@ -3164,6 +3237,14 @@ async function tick() {
   } catch (e) {
     // 量不到要說出來，不是畫一個綠燈。
     fatal("讀不到 transcript", String(e).slice(0, 200));
+  } finally {
+    // 【一定要放回去】放在 finally 不放在 try 的結尾:
+    // 拋錯的時候旗標留在 true，之後每一輪都會被跳過，
+    // 畫面從此不再更新，而那跟「沒有新的事情發生」長得一樣。
+    //
+    // （這裡刻意不用另外四個字描述那個狀態,
+    //   `test_sot` 禁止這個檔出現它們 —— 沒量到不等於沒事。）
+    inFlight = false;
   }
 }
 

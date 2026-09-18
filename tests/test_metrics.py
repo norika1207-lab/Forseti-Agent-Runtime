@@ -346,3 +346,94 @@ def test_CLI_走完整條路登記得成(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "夠不夠格當 release claim：不夠" in out
     assert len(MT.load(path=p)) == 1
+
+
+# ---- `--transcript` 這一支 -----------------------------------------------
+# 2026-09-18。上一輪把 `attempts` 那七個內容欄位旗標補上守門之後，寫下
+# 「另外四支沒有逐支查過」。這一輪逐支查完：`antianchor` 四個旗標全守了、
+# `evidence` 三個全守了、`probemodel` 的 `--only` 守了（另外兩個是布林），
+# **只有 `metric` 的 `--transcript` 沒有**。而它的後果跟前幾輪那些不同：
+# 不是把旗標名寫成內容，是讓 `model_id` 變成一筆**帶著假理由的缺席**。
+#
+# 假理由比空著更糟。空著看得出來要補，假理由會被下一個人當成已知
+# ——§40 那張登記簿的機制欄一再記到的同一件事。
+
+def _tpl(capsys, *args):
+    """跑 `metric template`，回 (exit, 解出來的模板或 None)。"""
+    rc = MT.main(["template", *args])
+    out = capsys.readouterr().out
+    try:
+        return rc, json.loads(out)
+    except ValueError:
+        return rc, None
+
+
+def test_transcript缺值_尾端沒接東西就退回而且不印模板(capsys):
+    rc, tpl = _tpl(capsys, "--transcript")
+    assert rc == 2
+    assert tpl is None, "退回了還把模板印出來，那個人會照樣拿去 register"
+
+
+def test_transcript缺值_後面是另一個旗標也算沒給值(capsys):
+    rc, tpl = _tpl(capsys, "--transcript", "--path", "/tmp/x.jsonl")
+    assert rc == 2
+    assert tpl is None
+
+
+def test_transcript缺值_等號寫法照樣通沒有失去表達能力(tmp_path, capsys):
+    j = tmp_path / "t.jsonl"
+    j.write_text(json.dumps({"message": {"role": "assistant",
+                                         "model": "claude-opus-5"}}) + "\n",
+                 encoding="utf-8")
+    rc, tpl = _tpl(capsys, f"--transcript={j}")
+    assert rc == 0
+    assert tpl["model_id"] == "claude-opus-5"
+
+
+def test_transcript缺值_整個旗標不寫是合法的不准擋(capsys):
+    """不指定模型照樣要印得出模板 —— 擋的是手滑，不是這種用法。"""
+    rc, tpl = _tpl(capsys)
+    assert rc == 0
+    assert isinstance(tpl["model_id"], dict)
+    assert tpl["model_id"]["absent"] == MT.UNKNOWN
+
+
+def test_缺席的理由_沒去讀跟讀不到跟沒有那一欄是三句話(tmp_path):
+    """三種原因以前印同一句，而那句只有第三種為真。"""
+    empty = tmp_path / "nomodel.jsonl"
+    empty.write_text(json.dumps({"type": "user"}) + "\n", encoding="utf-8")
+    missing = tmp_path / "不存在.jsonl"
+
+    沒去讀 = MT.model_fields()["model_id"]["why"]
+    讀不到 = MT.model_fields(transcript=missing)["model_id"]["why"]
+    沒有那一欄 = MT.model_fields(transcript=empty)["model_id"]["why"]
+
+    assert len({沒去讀, 讀不到, 沒有那一欄}) == 3, "三種原因共用同一句理由"
+    assert "沒去讀" in 沒去讀
+    assert str(missing) in 讀不到, "讀不到的時候要講是哪一份讀不到"
+    assert "FileNotFoundError" in 讀不到
+    assert 沒有那一欄 == "這一條 session 的 jsonl 讀不到 model 欄位"
+
+
+def test_缺席的理由_讀不到檔的時候不准說那份jsonl沒有model欄位(tmp_path):
+    """這是這一組最重要的一條：那句話會被當成已知帶下去。"""
+    why = MT.model_fields(transcript=tmp_path / "沒這個檔")["model_id"]["why"]
+    assert "不是那份 jsonl 沒有 model 欄位" in why
+    assert "是根本沒讀到" in why
+
+
+def test_缺席的理由_呼叫端直接注入的時候不准扯到jsonl():
+    """`model=` 那條路沒有碰過任何 jsonl，理由不能寫成 jsonl 的事。"""
+    why = MT.model_fields(model={"effort": "high"})["model_id"]["why"]
+    assert "呼叫端直接給了" in why
+    assert "沒有讀過任何 jsonl" in why
+
+
+def test_缺席的理由_讀得到就照常拿得到值不受這一組影響(tmp_path):
+    j = tmp_path / "ok.jsonl"
+    j.write_text(json.dumps({"message": {"role": "assistant",
+                                         "model": "claude-opus-5"},
+                             "effort": "high"}) + "\n", encoding="utf-8")
+    got = MT.model_fields(transcript=j)
+    assert got["model_id"] == "claude-opus-5"
+    assert "high" in got["config_hash"]["why"], "effort 那一段沒帶進理由"

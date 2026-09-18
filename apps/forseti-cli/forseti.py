@@ -406,6 +406,84 @@ def _reading_conformance() -> None:
         print("    政策原文：" + r.get("policy", ""))
     print()
 
+def _artifact_drift() -> None:
+    """交接檔記下的產出雜湊,現在還對不對得上。印進 doctor。
+
+    掛在 doctor 的理由跟 `_reading_conformance()` 同一條:接手的人一定會
+    跑 doctor,不一定會想到去跑一支他不知道存在的工具。而這一項正是
+    接手的第一秒要知道的 —— `NEXT.md` 上那幾行如果已經過期,
+    後面每一個判斷都建在過期的地基上。
+
+    整段包在 try 裡,壞掉要說出來不是靜靜略過。靜靜略過會讓人以為對過了。
+    """
+    try:
+        CT = _sibling("contract")
+        d = CT.artifact_drift()
+        lines = CT.drift_lines(d)
+    except Exception as e:                       # noqa: BLE001
+        print(f"  交接檔的產出雜湊　對帳自己出錯：{type(e).__name__}")
+        print()
+        return
+    if not lines:
+        return
+    print("  交接檔的產出雜湊")
+    for ln in lines:
+        print(ln)
+    print()
+
+
+def _lineage() -> None:
+    """§6.3 的 lineage 邊，此刻有幾條、十條型別裡幾條的兩端指得到。
+
+    掛在 doctor 的理由跟 `_artifact_drift()` 同一條：接手的人會跑
+    doctor，不會跑一支他不知道存在的模組。而這一項答的是
+    「這個系統追不追得回一個結論是怎麼來的」—— 北極星四個軸
+    裡「可驗證」那一軸的地基。
+
+    **0 條邊要印出來，不是不印。** 不印的話這一節在「還沒有邊」
+    跟「有邊而且都好」兩種情況下長得一樣。
+    """
+    try:
+        LN = _sibling("lineage")
+        lines = LN.lines()
+    except Exception as e:                       # noqa: BLE001
+        print(f"  lineage 邊　自己出錯：{type(e).__name__}")
+        print()
+        return
+    if not lines:
+        return
+    print("  lineage 邊（v5.0 §6.3）")
+    for ln in lines:
+        print(ln)
+    print()
+
+
+def _evidence() -> None:
+    """§5 的 Evidence 實體，此刻磁碟上有幾筆、§33.3 的獨立支撐幾個。
+
+    緊接在 `_lineage()` 後面印，理由是它答的是上一節那三條連不起來的邊
+    （DERIVED_FROM / VERIFIES / REFUTES）缺的到底是什麼。
+    兩節分開讀的話，「evidence 擋住三條」會看起來像一個沒有下一步的狀態。
+
+    **0 筆要印出來。** 實體與儲存在了但沒有人登，跟模組不存在，
+    在畫面上長得一樣的話，下一個人會去寫一個已經有的模組 ——
+    那正是 2026-09-18 `pol-ce2f84f5b5` 那一筆的機制。
+    """
+    try:
+        EV = _sibling("evidence")
+        lines = EV.lines()
+    except Exception as e:                       # noqa: BLE001
+        print(f"  證據　自己出錯：{type(e).__name__}")
+        print()
+        return
+    if not lines:
+        return
+    print("  證據（v5.0 §5 Evidence）")
+    for ln in lines:
+        print(ln)
+    print()
+
+
 def cmd_doctor(rep: Report) -> int:
     print()
     print(f"  專案根目錄　{rep.root}")
@@ -502,6 +580,14 @@ def cmd_doctor(rep: Report) -> int:
     #
     # 掛在 doctor 而不是獨立跑,理由是接手的人一定會跑 doctor,
     # 不一定會想到去跑一支他不知道存在的工具。
+    # 交接檔那幾行雜湊還對不對得上。**接手的第一秒就該知道** ——
+    # `NEXT.md` 已經過期的話,後面每個判斷都建在過期的地基上。
+    # 先前這件事靠人記得多重產一次交接檔（2026-09-18 那一輪的
+    # 「還缺什麼」第一條寫著「沒有東西擋」）,這裡就是那個東西。
+    _artifact_drift()
+    _lineage()
+    _evidence()
+
     _reading_conformance()
 
     if rep.missing:
@@ -1378,6 +1464,141 @@ def cmd_reindex(args: list[str]) -> int:
         led.close()
 
 
+def no_extra_args(args: list[str], cmd: str) -> str:
+    """不吃任何參數的那四支。回「哪裡不對」，沒問題回空字串。
+
+    2026-09-18 實測，這四支收到多餘參數的後果一模一樣:
+
+    | 寫法 | exit | 後果 |
+    |---|---|---|
+    | `doctor --yes` | 0 | 旗標被吞掉，印出一份正常的報告 |
+    | `status --limit 5` | 0 | 同上 |
+    | `gate status --yes` | 0 | 同上 |
+    | `gate takeover --bogus x` | 0 | 同上，**而且照樣寫一筆考卷進正本** |
+
+    最後那一支是這四支裡唯一會改變狀態的。量它的方式是攔
+    `sufficiency.open_exam`，三種寫法都走到寫入點（次數各 1），
+    所以「參數被吞掉」在那裡不是顯示問題，是寫進去的那一筆
+    不知道使用者其實下錯了指令。
+
+    **這裡不分旗標與位置參數的對錯，兩種都是錯的** —— 這一支
+    不吃任何參數，所以 exit code 一律 2（用法錯）。長相只拿來挑
+    措辭:`-` 開頭的人以為這支有這個旗標，不是的人多半是子指令
+    打錯或多打了一個字。長相不決定 exit code，就沒有 `transcript_path`
+    那裡「拿長相定罪」的風險，誤判是 0。
+    """
+    if not args:
+        return ""
+    flags = [a for a in args if str(a).startswith("-")]
+    rest = [a for a in args if not str(a).startswith("-")]
+    if flags:
+        what = f"這一支沒有這些旗標：{'、'.join(flags)}"
+    else:
+        what = f"這一支不吃參數，拿到的是：{'、'.join(str(r) for r in rest)}"
+    return (f"{what}\n"
+            f"用法：forseti.py {cmd}\n"
+            "不擋的話這裡會印出一份正常的報告，exit 0，"
+            "而你下錯的那個字不會有任何人提起。")
+
+
+TRANSCRIPT_FLAGS: tuple[str, ...] = ("--limit",)
+
+
+def transcript_path(args: list[str], cmd: str) -> tuple[Path | None, str, int]:
+    """`claims` 與 `overclaim` 的第一個參數。回 `(路徑, 哪裡不對, exit code)`。
+
+    2026-09-18 實測，旗標放在路徑的位置會拿到這個：
+
+    | 寫法 | exit | 印出來的 |
+    |---|---|---|
+    | `claims --limit 2` | 1 | `找不到：--limit` |
+    | `overclaim --limit 2` | 1 | 一模一樣 |
+
+    那句話**是真的**，檔案確實不存在。它的問題是指錯地方：
+    使用者的錯是把旗標放在路徑的位置，而畫面上講的是檔案不存在，
+    於是他會去找那個檔案。比靜默好，比講得準差。
+
+    exit code 也錯了一級。這一支的慣例是 2 = 用法錯、1 = 資料錯，
+    而「旗標放錯位置」是用法錯。
+
+    **先查檔案存不存在，再看它像不像旗標**，順序不能換。
+    反過來寫的話，一個真的叫做 `--limit` 的檔案會被擋在外面 ——
+    那是拿長相定罪，而這裡有 filesystem 可以直接問（`bible.md` Q-01
+    能用確定性驗證就不要用機率性驗證）。順序這樣排，誤判是 0 不是少。
+    """
+    raw = str(args[0])
+    p = Path(raw).expanduser()
+    if p.exists():
+        return p, "", 0
+    if raw.startswith("-"):
+        return None, (f"第一個參數要的是 transcript 的路徑，"
+                      f"拿到的是一個旗標：{raw}\n"
+                      f"用法：forseti.py {cmd} <transcript.jsonl> [--limit N]\n"
+                      "旗標寫在路徑後面。不擋的話這裡會印"
+                      f"「找不到：{raw}」，那句話是真的，"
+                      "可是它講的是檔案不存在，不是你把旗標放錯位置。"), 2
+    return None, f"  找不到：{p}", 1
+
+
+def transcript_limit(args: list[str],
+                     known: tuple[str, ...] = TRANSCRIPT_FLAGS
+                     ) -> tuple[int, str]:
+    """`claims` 與 `overclaim` 的 `--limit`。回 `(limit, 哪裡不對)`。
+
+    **一份判準給兩支用，不在兩支各寫一次。** 各寫一次的代價是
+    2026-09-18 11:2x 在 `probemodel` 量到的那一種：預告跟實際兩份判準，
+    對不上而且沒有人會發現。
+
+    2026-09-18 實測，這兩支打錯旗標的後果分三種，**沒有一種說得出
+    哪裡不對**（材料是六則 assistant 文字）：
+
+    | 寫法 | exit | 實際發生的事 |
+    |---|---|---|
+    | `claims <檔> --limitt 2` | 0 | 靜默跑滿六則，畫面跟成功一樣 |
+    | `claims <檔> --limit` | 0 | 同上，`--limit` 等於沒寫 |
+    | `claims <檔> --limit abc` | 1 | `int()` 的 ValueError traceback |
+    | `overclaim <檔>` 三種 | 同上 | 三種後果完全一樣 |
+
+    第三種看起來最兇，其實最輕 —— 它至少講了一件真的事。前兩種
+    才是「錯的答案長得跟對的一樣」：使用者以為只看了最後兩則，
+    實際看的是整份。
+
+    第一個參數是路徑，**整支都不掃它**。路徑打成旗標長相的東西，
+    上面那一道 `找不到：--limit` 已經擋得住，而且它講得比這裡準。
+
+    「不掃第 0 個」這句話 2026-09-18 寫下來的時候只有前半段做到 ——
+    未知旗標那一段跳過了第 0 個，缺值那一段沒有，於是同一支裡兩套
+    判準。那正是這一支存在的理由（判準只准有一份），被它自己的
+    測試 `test_第一個參數是路徑不掃它` 當場抓到。改成整支共用 `rest`。
+    """
+    rest = args[1:]
+    for a in rest:
+        if not str(a).startswith("--"):
+            continue
+        name = str(a).split("=", 1)[0]
+        if name not in known:
+            return 0, (f"不認得這個旗標：{name}\n"
+                       f"有的是：{'、'.join(known)}\n"
+                       "打錯字不會報錯，`--limit` 會變成沒寫，"
+                       "於是整份都算進去。所以這裡退回。")
+    if "--limit" not in rest:
+        return 0, ""
+    i = rest.index("--limit")
+    if i + 1 >= len(rest):
+        return 0, ("`--limit` 後面沒有數字。要全部就整個拿掉，"
+                   "不然它會靜默算整份。")
+    raw = rest[i + 1]
+    try:
+        n = int(raw)
+    except ValueError:
+        return 0, (f"`--limit` 要一個整數，拿到的是：{raw}\n"
+                   "不擋的話這裡會丟一個 int() 的 traceback，"
+                   "那看起來像程式壞了，不像你打錯字。")
+    if n < 0:
+        return 0, f"`--limit` 不能是負的：{n}"
+    return n, ""
+
+
 def cmd_claims(args: list[str]) -> int:
     """從一份 transcript 抽出宣稱，逐一對現實驗證。階段 2 的出口條件。
 
@@ -1390,15 +1611,14 @@ def cmd_claims(args: list[str]) -> int:
         print("用法：forseti.py claims <transcript.jsonl> [--limit N]",
               file=sys.stderr)
         return 2
-    path = Path(args[0]).expanduser()
-    if not path.exists():
-        print(f"  找不到：{path}")
-        return 1
-    limit = 0
-    if "--limit" in args:
-        i = args.index("--limit")
-        if i + 1 < len(args):
-            limit = int(args[i + 1])
+    path, bad, code = transcript_path(args, "claims")
+    if path is None:
+        print(bad, file=sys.stderr if code == 2 else sys.stdout)
+        return code
+    limit, why = transcript_limit(args)
+    if why:
+        print(why, file=sys.stderr)
+        return 2
 
     texts: list[str] = []
     with path.open(encoding="utf-8") as f:
@@ -1486,15 +1706,14 @@ def cmd_overclaim(args: list[str]) -> int:
         print("用法：forseti.py overclaim <transcript.jsonl> [--limit N]",
               file=sys.stderr)
         return 2
-    path = Path(args[0]).expanduser()
-    if not path.exists():
-        print(f"  找不到：{path}")
-        return 1
-    limit = 0
-    if "--limit" in args:
-        i = args.index("--limit")
-        if i + 1 < len(args):
-            limit = int(args[i + 1])
+    path, bad, code = transcript_path(args, "overclaim")
+    if path is None:
+        print(bad, file=sys.stderr if code == 2 else sys.stdout)
+        return code
+    limit, why = transcript_limit(args)
+    if why:
+        print(why, file=sys.stderr)
+        return 2
 
     # 帳本裡每個 session 留下幾筆觀測。這就是「自己的 receipt」。
     receipts: dict[str, int] = {}
@@ -1574,14 +1793,30 @@ def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "doctor"
 
     if cmd == "doctor":
+        bad = no_extra_args(argv[2:], "doctor")
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
         return cmd_doctor(rep)
     if cmd == "status":
+        bad = no_extra_args(argv[2:], "status")
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
         return cmd_status(rep)
     if cmd == "gate" and len(argv) > 2 and argv[2] == "takeover":
+        bad = no_extra_args(argv[3:], "gate takeover")
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
         return cmd_gate_takeover(rep)
     if cmd == "gate" and len(argv) > 2 and argv[2] == "submit":
         return cmd_gate_submit(rep, argv[3:])
     if cmd == "gate" and len(argv) > 2 and argv[2] == "status":
+        bad = no_extra_args(argv[3:], "gate status")
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
         return cmd_gate_status(rep)
     if cmd == "context":
         return cmd_context(argv[2:])
@@ -1632,6 +1867,14 @@ def main(argv: list[str]) -> int:
         # 仍然可以被拿去講一句沒有證據的話，兩件事各守各的。
         import metrics as MT
         return MT.main(argv[2:])
+    if cmd == "evidence":
+        # §7.2。不併進 `claims`，因為那一支問的是「這句話有沒有被
+        # 查核過」，這一支存的是「某一刻觀察到什麼」。一筆證據不屬於
+        # 任何一個宣稱 —— §6.3 的 VERIFIES 是 evidence -> claim，
+        # 方向是證據先在那裡，宣稱後來指過去。併進去的話登一筆證據會
+        # 被迫先有一個宣稱，而那個順序是反的。
+        import evidence as EV
+        return EV.main(argv[2:])
     if cmd == "attempt":
         # §39.1 failed_attempts。不併進 `metric`，因為那一支問的是
         # 「這個數字說得出尺與材料嗎」，這一支存的是「這條路試過了，

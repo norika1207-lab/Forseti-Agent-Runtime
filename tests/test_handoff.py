@@ -485,6 +485,12 @@ def test_座標排在其他每一節之前():
                   "contract_lines": ["缺口那一節"]})
     assert t.index("## 北極星") < t.index("## 這一份是在哪裡寫的")
     assert t.index("## 這一份是在哪裡寫的") < t.index("## 下一步")
+    # 下面這個 "## 產出在哪裡" **故意是硬寫的,不准改成 contract.ARTIFACT_HEADING**。
+    #
+    # 2026-09-18 起排版側改用那份常數,於是 `test_artifact_drift.py` 整組
+    # 都從同一個值推出來 —— 一旦這裡也收進去,改那個常數對整套測試就完全
+    # 隱形了。實測過:只改 contract 那一份常數,全樹只有這一行會紅。
+    # 這一行是唯一的獨立對照組,收掉它就沒有人看得見改名。
     assert t.index("## 這一份是在哪裡寫的") < t.index("## 產出在哪裡")
 
 
@@ -528,3 +534,289 @@ def test_座標是必要欄位不是可有可無():
     只是從此答不出它是在哪台機器上寫的，跟 2026-09-17 之前一樣。
     """
     assert "coordinate_lines" in H.REQUIRED_KEYS
+
+
+# ---- 2026-09-18 05:2x：那一種殘缺，既有的守備認不出來 ----
+
+def _殘缺state():
+    """重現 2026-09-18 05:2x 那一份。
+
+    那一次拿 `desktop_api.snapshot()` 的回傳餵 `_write_handoff()`,
+    而那一支要的四個 snap 鍵只有 `blockers` 在。後果是
+    `unknowns` / `verified` / `last_good` 全部落到空值,
+    而 `goal` 與 `n` 照樣有值（它們的上游是 `north_star()` 與
+    `work()`,不是 snap）。
+
+    **這個組合才是重點**:有北極星、有輪號,所以它讀起來是正常的。
+    """
+    return {"goal": "讓 AI 的工作狀態變成可觀測、可驗證、可控制、可復原。",
+            "n": 14, "unknowns": [], "verified": [], "last_good": None,
+            "next_actions": [], "awaiting_finish": ["T-x：等收尾"], "stuck": [],
+            "decisions": [], "blocker_lines": [], "invalidated_lines": [],
+            "artifact_lines": [], "contract_lines": [], "recheck_lines": [],
+            "coordinate_lines": [], "at": 0}
+
+
+def test_那兩個殘缺特徵認不出2026_09_18那一種():
+    """`test_真正的那條路仍然寫得出完整的檔` 拿兩個字串當殘缺的特徵:
+    `（北極星還沒設）` 與 `第 ? 輪`。**這一條釘住那個判準的盲區。**
+
+    2026-09-18 05:2x 那一份殘缺版,兩個特徵**一個都沒有** ——
+    北極星在、輪號是 14。所以那一條測試會全綠地放它過去,
+    而它實際掉了「還沒解決的」（`scope_match` 那個未解）與
+    「已驗證的狀態」（必讀 20/30）兩整節。
+
+    真實數字:殘缺版 13345 bytes,正確的那一份 15039。
+    **沒有任何一個字是錯的**,所以讀的人分不出來 ——
+    它只是少講了幾件事。
+
+    這一條不是要去改那一條測試的判準（那要決定「哪幾節缺了算殘缺」,
+    而那個清單一寫下來就會跟著 `render()` 腐爛）。它要守的是
+    **別再有人以為那兩個特徵蓋得住所有殘缺**。
+    """
+    t = H.render(_殘缺state())
+    assert "（北極星還沒設）" not in t, "這一種殘缺的北極星是在的,不然重現得不對"
+    assert "第 ? 輪" not in t, "這一種殘缺的輪號是在的,不然重現得不對"
+
+
+def test_上游缺的時候那兩節整個不見而不是講缺什麼():
+    """殘缺版的形狀,量出來釘住。
+
+    `render()` 對空的 `unknowns` / `verified` 是**整節不印**,
+    不是印一句「這一節的上游沒供」。兩者的差別是接手的人
+    看不看得出少了東西 —— 而這一支的 docstring 自己寫著
+    「不自己判斷任何事」,所以「缺了要講」這件事不該在它裡面加。
+
+    哪天有人讓它改成講缺什麼（那是好事），這一條會先紅，
+    提醒回頭看上面那一條的事故敘述還對不對。
+    """
+    完整 = dict(_殘缺state(),
+                unknowns=["GAC 算不出來，缺 scope_match：規格沒有定義"],
+                verified=["必讀文件 20/30 讀完"])
+    缺 = H.render(_殘缺state())
+    有 = H.render(完整)
+
+    assert "scope_match" in 有 and "必讀文件" in 有, "重現得不對,完整那份就該有這兩句"
+    assert "scope_match" not in 缺 and "必讀文件" not in 缺
+    # 整節不見,不是留一句說明。
+    assert "還沒解決的" not in 缺, (
+        "那一節的標題還在 —— 那就不是「整節不見」,上面那條敘述要改")
+    assert "已驗證的狀態" not in 缺
+    assert len(缺) < len(有), "缺的那一份沒有變短,重現得不對"
+
+
+# ── 「那一支從 snap 取哪些鍵」這個問題，答案只有一份（2026-09-18）──
+#
+# 2026-09-18 之前這個掃描是正則吃原始碼字串，而那種吃法**連註解都算**。
+# `desktop_api.py:1924` 那一行註解寫的是：
+#
+#     # **自己叫 `_blockers()`，不從 snap 拿。** `snap["blockers"]` 只存在於
+#     # `snapshot()`，而這一支收到的是 `strands()` 的 snap，那裡面沒有這個 key。
+#
+# 一句話的內容是「這個鍵不從 snap 來」，被掃成「這個鍵從 snap 來」。
+#
+# 那個誤判有後果，不是潔癖。上一輪拿這個掃法得到的四個鍵去當
+# `_write_handoff()` 的入口守門，於是**正常那條路被自己的門擋掉**
+# （`strands()` 的 snap 從來就沒有 `blockers`），三條既有測試變紅，
+# 而當時把紅的原因記成「測試環境下的 snap 跟真實環境不一樣」。
+# 那句話這一輪量了，是錯的（見最後一條測試）。
+
+
+def _snap_keys_in(src: str, func: str) -> set[str]:
+    """一段原始碼裡，`func` 那一支**真的從 snap 取了哪些鍵**。
+
+    走 AST 不走正則：註解與字串裡長得像 `snap["x"]` 的東西不算。
+    吃字串不吃檔案路徑，所以合成的原始碼餵得進來 ——
+    「註解不算」這件事要驗得到，就不能只有真檔一個入口。
+    """
+    import ast
+
+    i = src.index(f"def {func}")
+    j = src.index("\ndef ", i + 1)
+    tree = ast.parse(src[i:j])
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Name)
+                and node.value.id == "snap"
+                and isinstance(node.slice, ast.Constant)
+                and isinstance(node.slice.value, str)):
+            out.add(node.slice.value)
+        if (isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "snap"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            out.add(node.args[0].value)
+    return out
+
+
+def _calls_in(src: str, func: str) -> set[str]:
+    """一段原始碼裡，`func` 那一支**真的呼叫了哪些名字**。
+
+    走 AST 不走子字串，理由跟 `_snap_keys_in()` 完全一樣，
+    而且是同一行註解害的：`desktop_api.py:1924` 那句「自己叫
+    `_blockers()`，不從 snap 拿」裡面有 `_blockers()` 這七個字，
+    所以 `"_blockers()" in src[i:j]` 在真正的呼叫被拿掉之後**照樣是 True**。
+    2026-09-18 實測過：把那一行的呼叫改名，那條測試仍然 1 passed。
+
+    取 `ast.Name` 也取 `ast.Attribute`（`X.y()` 收 `y`），
+    因為呼叫端寫成 `mod.f()` 的時候問的仍然是「有沒有呼叫 f」。
+    """
+    import ast
+
+    i = src.index(f"def {func}")
+    j = src.index("\ndef ", i + 1)
+    out: set[str] = set()
+    for node in ast.walk(ast.parse(src[i:j])):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Name):
+            out.add(f.id)
+        elif isinstance(f, ast.Attribute):
+            out.add(f.attr)
+    return out
+
+
+def _desktop_api_src() -> str:
+    return (ROOT / "apps" / "forseti-cli" / "desktop_api.py").read_text(
+        encoding="utf-8")
+
+
+def test_註解裡長得像取鍵的東西不算取鍵():
+    """掃描器本身的偵測器。**餵合成原始碼，不依賴真檔此刻的註解長相。**
+
+    真檔那一行註解哪天被改寫，這一條不該跟著紅 ——
+    它守的是掃描器的判準，不是某一行註解還在不在。
+    """
+    fake = (
+        'def _f(snap):\n'
+        '    # 自己叫 _blockers()，不從 snap 拿。snap["blockers"] 只在別處\n'
+        '    """snap.get("docstring_only") 也不算。"""\n'
+        '    note = \'snap["string_only"]\'\n'
+        '    return snap["real"], snap.get("also_real"), note\n'
+        '\ndef _g():\n    pass\n'
+    )
+    got = _snap_keys_in(fake, "_f")
+    assert got == {"real", "also_real"}, (
+        f"掃出來的是 {sorted(got)}。註解、docstring、字串字面值裡的"
+        "`snap[...]` 都不是取鍵 —— 正則吃得下它們，這也正是"
+        "2026-09-18 那道守門把正常那條路擋掉的原因")
+
+
+def test_註解裡長得像呼叫的東西不算呼叫():
+    """`_calls_in()` 自己的偵測器。**餵合成原始碼，不依賴真檔的註解長相。**
+
+    跟上面那條是同一個形狀的第二種：上面守「取鍵」，這條守「有沒有呼叫」。
+    兩條分開是因為 2026-09-18 修掉取鍵那一半之後，**同一輪寫下的
+    另一半仍然是子字串比對**，被同一行註解騙到。
+    一個機制修一半，剩下那一半不會自己好。
+    """
+    fake = (
+        'def _f(snap):\n'
+        '    # 自己叫 _blockers()，不從 snap 拿。\n'
+        '    """docstring 裡的 _docstring_only() 也不算。"""\n'
+        '    note = "_string_only()"\n'
+        '    return _real(), mod._also_real(), note\n'
+        '\ndef _g():\n    pass\n'
+    )
+    got = _calls_in(fake, "_f")
+    assert "_blockers" not in got, (
+        f"掃出來的是 {sorted(got)}。註解裡的 `_blockers()` 被算成呼叫了 —— "
+        "那正是子字串比對犯的錯")
+    assert "_docstring_only" not in got and "_string_only" not in got
+    assert {"_real", "_also_real"} <= got, (
+        f"真正的呼叫沒掃到：{sorted(got)}")
+
+
+def test_那一支不從snap拿blockers而是自己算():
+    """真檔這一側的語義斷言，跟上面那條合成的分工。
+
+    這一條不看註解寫什麼，看的是兩件事同時成立：
+    `_write_handoff()` 沒有從 snap 取 `blockers`，而它自己呼叫了
+    `_blockers()`。哪天有人改成從 snap 拿，這一條先紅 ——
+    而那個改動會讓 `.forseti/BLOCKERS.md` 那一節從此永遠是空的，
+    **不會報錯**（`strands()` 的 snap 沒有這個 key）。
+
+    2026-09-18：第二個斷言原本寫成 `"_blockers()" in src[i:j]`，
+    而 `desktop_api.py:1924` 那一行註解裡就有這七個字。實測把真正的
+    呼叫改名，這一條照樣 1 passed —— 它守的東西整個是空的。
+    改成 `_calls_in()` 走 AST。
+    """
+    src = _desktop_api_src()
+    要的 = _snap_keys_in(src, "_write_handoff")
+    assert "blockers" not in 要的, (
+        "`_write_handoff()` 開始從 snap 取 blockers 了。"
+        "`strands()` 的 snap 沒有這個 key，所以那一節會永遠是空的而且不報錯")
+    呼叫的 = _calls_in(src, "_write_handoff")
+    assert "_blockers" in 呼叫的, (
+        "那一支不再自己呼叫 `_blockers()` 了。"
+        "上面那個斷言於是失去意義 —— 兩邊都沒有的話，那一節是空的")
+
+
+def test_snapshot給不齊那一支要的snap鍵():
+    """上面兩條的前提:**為什麼會餵錯**。
+
+    `_write_handoff()` 從 snap 取的鍵,`snapshot()` 給不齊 ——
+    所以「拿 `snapshot()` 餵它」這條路一定產出殘缺版。
+    正確的來源是 `strands()` 的 snap。
+
+    哪天 `snapshot()` 補齊了（那是好事），這一條會先紅，
+    提醒回頭看上面兩條的事故敘述還成不成立。
+
+    抓法:`_write_handoff()` 的 AST 掃 `snap[...]` 與 `snap.get(...)`,
+    對 `snapshot()` 實際回傳的鍵。讀回傳不讀原始碼,
+    因為那些鍵是 `_safe()` 包著動態塞進去的。
+
+    **2026-09-18 從正則改成 AST。** 正則版掃出來多一個 `blockers`,
+    那個字來自一行寫著「不從 snap 拿」的註解。這一條當時照樣綠 ——
+    因為 `snapshot()` 剛好有 `blockers`,多出來的那個被減掉了。
+    綠的測試蓋著一個錯的中間值,而拿那個中間值去做別的事的人
+    （上一輪）就被咬了。
+    """
+    import desktop_api as D
+
+    要的 = _snap_keys_in(_desktop_api_src(), "_write_handoff")
+    assert 要的, "掃不到那一支從 snap 取哪些鍵,掃描器過期了"
+
+    給的 = set(D.snapshot().keys())
+    缺 = sorted(要的 - 給的)
+    assert 缺, (
+        f"`snapshot()` 現在給得齊 {sorted(要的)} 了 —— 那是好事,"
+        "可是上面兩條測試的事故敘述要回頭改:"
+        "「拿 snapshot() 餵會寫出殘缺版」不再成立")
+    assert "rows" in 缺, f"缺的那幾個換人了,回頭看事故敘述:{缺!r}"
+
+
+def test_測試環境下那三個鍵跟真實環境一樣齊(tmp_path, monkeypatch):
+    """**推翻上一輪寫下的那句話。** §40 那一筆的回歸偵測器。
+
+    上一輪的紀錄寫著：「三條既有測試走 `D.strands("")`，而那條路徑產的
+    snap 給不齊 `rows` / `goal_gate` / `checkpoints`，真實環境下三個都齊
+    （14 / 11 / 6）」。2026-09-18 在真的 pytest 底下攔 `_write_handoff()`
+    量過，三個都在，數量跟真實環境一樣。
+
+    真正沒有的是 `blockers`，而那一個本來就不從 snap 來（上面那條）。
+
+    這一條釘住的是**「測試環境的 snap 形狀有缺」這個說法不准再被寫下來**。
+    數量會隨真實資料變，所以只斷言鍵在不在、以及是不是非空，不斷言數字。
+    """
+    import desktop_api as D
+
+    monkeypatch.setattr(H, "OUT", tmp_path / "NEXT.md")
+    snap = D.strands("")
+    assert not snap.get("error"), f"這一輪連 transcript 都沒挑到：{snap!r}"
+
+    for k in ("rows", "goal_gate", "checkpoints"):
+        assert k in snap, (
+            f"`strands(\"\")` 的 snap 少了 {k}。"
+            "上一輪那句「測試環境下給不齊」這一次成立了 —— "
+            "回頭看 §40 的登記，那一筆要從 RESOLVED 退回去")
+        assert snap[k], f"{k} 在，可是是空的。上面那句話要改成「在但空的」"
+    assert "blockers" not in snap, (
+        "`strands()` 開始供 blockers 了。那是好事，"
+        "可是 `_write_handoff()` 自己算那一份的理由要回頭看")

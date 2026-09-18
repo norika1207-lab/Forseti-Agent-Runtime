@@ -102,12 +102,16 @@ def main(argv: list[str]) -> int:
             rounds = int(argv[i + 1])
 
     exfat_box = REPO / ".forseti" / "probe-stress"
-    apfs_box = Path(tempfile.mkdtemp(prefix="probe-stress-"))
     exfat_box.mkdir(parents=True, exist_ok=True)
 
     print()
     print(f"  每輪寫兩次不同內容，第二次寫完立刻 probe。大小輪流用 {SIZES}")
     print()
+    # 借的動作貼著 `try`，中間不夾任何敘述。2026-09-18 之前它在
+    # `exfat_box.mkdir()` 與三個 print 之前借，那幾個敘述丟例外的時候
+    # 目錄就留在暫存區沒人收。跟 `jsbridge.py` 當天修掉的是同一個形狀：
+    # 借到進 try 之間的那一段，`finally` 罩不到。
+    apfs_box = Path(tempfile.mkdtemp(prefix="probe-stress-"))
     try:
         results = [run("exFAT（這個 repo）", exfat_box, rounds),
                    run("APFS（/tmp，對照組）", apfs_box, rounds)]

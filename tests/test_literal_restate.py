@@ -597,7 +597,16 @@ class 這個repo現在的小寫狀態(unittest.TestCase):
         # 不影響這個數字。查法是把那支暫時移開再掃一次：72/290 回來了。
         # 2026-09-17: 73/292 → 75/296。desktop_api.MISSING 與 KIND_LABEL
         # 帶進來的（功能盤點那一頁「還沒做的」那一區）。
-        self.assertEqual((up.enums, up.members), (75, 296))
+        #
+        # 2026-09-18: 75/296 → 78/310。`apps/forseti-cli/lineage.py`
+        # 帶進來的，**只有它一個**。查法照這個 class 的慣例：
+        # 把那支暫時移開再掃一次，75/296 回來了，放回去 78/310。
+        # 三個列舉是 `EDGE_ENDPOINTS`、`SPEC_TEXT`、`READINESS`。
+        # 成員多 14 不是 24，因為前兩個的鍵是同一組十個邊名 ——
+        # **那是刻意的**：邊名的唯一來源是 `event_ledger.LINEAGE_EDGES`，
+        # 這兩張表是它的兩個欄位不是兩份清單，`test_lineage.py` 的
+        # `test_兩張表的邊名字一模一樣` 釘著這件事。
+        self.assertEqual((up.enums, up.members), (78, 310))
         self.assertEqual(up.unexempted, [])
 
     def test_stale_total與stall_total是兩個活的東西(self):
@@ -618,12 +627,29 @@ class 這個repo現在的小寫狀態(unittest.TestCase):
         self.assertIn("stale_total", LR.attr_names())
 
     def test_把真檔的小寫鍵名打錯會紅(self):
-        """反向驗證做成常設測試。在記憶體裡改，不動磁碟。"""
+        """反向驗證做成常設測試。在記憶體裡改，不動磁碟。
+
+        ## 2026-09-18 錨點搬了位置
+
+        先前替換的是 `summary()` 那一行（結尾帶 `)]` 的清單推導式）。
+        那一輪 `pollution.py` 加了 `guard_split()`，把同一個判斷式
+        照抄了兩次，於是**這一條當場變成 0 命中** ——
+        打錯的版本跟著出現三次，而條件 2 是「全 repo 超過一次就
+        當成真的鍵名」，所以偵測器把它放過了。
+
+        修法是讓那個判斷式在 `pollution.py` 只有一處
+        （`_has_guard()`），錨點跟著搬到那一處。**沒有調鬆這一條** ——
+        它照樣要求恰好一個命中，而且現在替換的是唯一定義，
+        所以下一次重複出現時這一條會再紅一次。
+
+        那一處還在不在，`tests/test_pollution_guard_split.py` 有一條
+        專門守著（`test_有守門的判斷式只有一處`）。
+        """
         src = (REPO / "apps" / "forseti-cli" / "pollution.py").read_text(
             encoding="utf-8")
         typo = "regression_" + "prope"
-        bad = src.replace('r.get("regression_probe"))]',
-                          f'r.get("{typo}"))]')
+        bad = src.replace('r.get("regression_probe"))',
+                          f'r.get("{typo}"))')
         self.assertNotEqual(bad, src, "pollution.py 那一行變了，這條要改")
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)

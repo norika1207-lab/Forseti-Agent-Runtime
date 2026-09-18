@@ -706,9 +706,41 @@ def summary(*, baseline_path: Path | None = None) -> dict:
     }
 
 
+SUBCOMMANDS: tuple[str, ...] = ("list", "baseline", "run")
+
+
+def case_ids() -> tuple[str, ...]:
+    """`run` 的題名收得了哪些值。**來源只有 PACK 一個。**
+
+    另抄一份寫死清單的話，加題目的人要記得改兩個地方，
+    而忘記改的那一次不會報錯 —— 它會說「沒有這一題」。
+    """
+    return tuple(s.id for s in PACK)
+
+
 def main(argv: list[str]) -> int:
     args = list(argv)
+    # 子指令的位置放了一個旗標 -> 明著退回。2026-09-18 實測沒有這一道的
+    # 後果：`probe --only goal_persistence` 的 `--only` 落進 `cmd`，
+    # 三個 if 都對不上，於是掉到最後那一行跑**全部十題**、exit=0。
+    # 使用者要的是一題，拿到的是全部，而畫面跟成功一模一樣。
+    # 排在未知子指令守門之前，因為「你給的是旗標」比「不認得這個指令」
+    # 講得更準 —— 這一支根本沒有任何旗標。
+    if args and str(args[0]).startswith("-"):
+        print(f"這一支沒有旗標：{args[0]}", file=sys.stderr)
+        print(f"子指令是：{'、'.join(SUBCOMMANDS)}"
+              "（題名寫在 run 後面，例如 `probe run goal_persistence`）",
+              file=sys.stderr)
+        return 2
     cmd = args[0] if args else "run"
+    # 子指令打錯字 -> 明著退回。實測 `probe lisst` 靜默跑滿十題、exit=0：
+    # 要清單的人拿到一份跑完的報告，而且它是綠的。
+    if cmd not in SUBCOMMANDS:
+        print(f"不認得這個指令：{cmd}", file=sys.stderr)
+        print(f"有的是：{'、'.join(SUBCOMMANDS)}", file=sys.stderr)
+        print("不擋的話這裡不會報錯，它會掉進 run 跑滿整包然後印綠的。",
+              file=sys.stderr)
+        return 2
 
     if cmd == "list":
         for s in PACK:
@@ -719,6 +751,17 @@ def main(argv: list[str]) -> int:
 
     if cmd == "baseline":
         by = args[1] if len(args) > 1 else ""
+        # `by` 是自由文字，所以旗標長相的東西照樣收得進去。
+        # `baseline --by me` 會記成 by="--by"，而 `record_baseline` 只查
+        # 空字串，擋不住它。一條記著 by="--by" 的基準線滿足「有人負責」
+        # 這個條件的字面，卻答不出當時是誰按的 —— 那正是那條規則要防的。
+        # **這一條沒有實跑過**：跑它就會往正本寫一條基準線。
+        # 量測改在測試裡攔 `record_baseline` 做（`ProbeBaselineBy`）。
+        if by.startswith("-"):
+            print(f"這不是人名：{by}", file=sys.stderr)
+            print("用法：`probe baseline <誰按的>`。這一支沒有旗標。",
+                  file=sys.stderr)
+            return 2
         try:
             out = record_baseline(by=by)
         except ProbeError as e:
@@ -728,6 +771,17 @@ def main(argv: list[str]) -> int:
         return 0
 
     only = args[1] if len(args) > 1 and cmd == "run" else None
+    # 題名不在 PACK 裡 -> 明著退回。上面兩道守的是「指令的位置放錯東西」，
+    # 這一道守的是「指令對了，值不存在」，三個相鄰的洞。
+    # 2026-09-18 實測沒有這一道的後果：`probe run bogus_case` 挑出 0 題，
+    # 印「可量的 0 個：PASS 0、REGRESSED 0」、exit=0 —— 那是一份**綠的
+    # 空報告**，比報錯難發現得多，因為通過率的分母也是 0。
+    if only is not None and only not in case_ids():
+        print(f"沒有這一題：{only}", file=sys.stderr)
+        print(f"有的是：{'、'.join(case_ids())}", file=sys.stderr)
+        print("不擋的話這裡不會報錯，它會挑出 0 題然後印 PASS 0、exit=0，"
+              "看起來像跑過而且全綠。", file=sys.stderr)
+        return 2
     r = run(only=only)
     for x in r["results"]:
         print(f"{x['state']:<12} {x['id']:<24} {x['why']}")

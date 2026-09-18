@@ -230,13 +230,19 @@ def gac(anchors: list[dict]) -> dict:
         return {"ok": False, "gac": None, "may_confirm_drift": False,
                 "why": "找不到 node，GAC 算不了" if not n else "找不到 src/"}
 
+    stage = "寫暫存檔"
     tmp = Path(tempfile.mkdtemp(prefix="forseti-gac-"))
+    # 收尾的結構本來就對（mkdtemp 的下一個敘述就是這個 try）。
+    # 2026-09-18 加的只有 `stage`：兩個 write_text 也會丟 OSError，
+    # 而底下那一句先前一律講成「叫不動 node」—— 寫檔失敗的時候
+    # 那是一句指著 node 的假指控。
     try:
         runner = tmp / "run.mjs"
         runner.write_text(_RUNNER, encoding="utf-8")
         data = tmp / "payload.json"
         data.write_text(json.dumps({"anchors": anchors}, ensure_ascii=False),
                         encoding="utf-8")
+        stage = "叫 node"
         r = subprocess.run([n, str(runner), str(SRC), str(data)],
                            capture_output=True, text=True, timeout=TIMEOUT)
     except subprocess.TimeoutExpired:
@@ -244,7 +250,7 @@ def gac(anchors: list[dict]) -> dict:
                 "why": f"node 超過 {TIMEOUT} 秒沒回"}
     except OSError as e:
         return {"ok": False, "gac": None, "may_confirm_drift": False,
-                "why": f"叫不動 node：{e}"}
+                "why": f"{stage}失敗：{e}"}
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

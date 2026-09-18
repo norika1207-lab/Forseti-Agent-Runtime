@@ -268,11 +268,19 @@ REG_KINDS = ("REFERENCE", "DECLARED_ONLY", "LEFTOVER")
 
 # ── 空殼：名字宣稱了行為，行為不存在 ──────────────────────
 
-_reg("event_ledger", "LINEAGE_EDGES", "DECLARED_ONLY",
-     "十個 lineage 邊的名字都在，一條都沒有實作。註解自己寫著"
-     "「這裡先定義不實作 —— 邊要有兩端才畫得出來，而現在只有事件"
-     "還沒有 claim 與 decision」。這是 §40 污染登記簿第一筆的主角，"
-     "`pol-` 那一筆的機制正是「看到常數名稱就當成功能存在」。")
+# 【2026-09-18 移除】`event_ledger.LINEAGE_EDGES` 先前登記成 DECLARED_ONLY。
+# `lineage.py` 把它接成 `add()` 的邊型別白名單之後，它不再是空殼:
+# 不在這張表裡的型別會被拒收，而且有測試植入不合法的型別驗過退回
+# （`tests/test_lineage.py` 的 `拒收` 那一組）。
+#
+# **移除的理由是行為，不是「現在有人讀」。** 只是被讀到就把登記拿掉
+# 的話，等於為了讓偵測器變綠而插一個讀取 —— 那正是 B-15
+# 「不要做的事」那一段講的形狀。
+#
+# 同一天 `event_ledger.SPEC_DEVIATIONS` 也從 REFERENCE 移除:
+# 它先前的理由是「本來就是寫給人讀的」，而 2026-09-18 起
+# `tests/test_lineage.py` 會驗它那一行講的理由跟量到的一致。
+# 一個有人守著不會腐爛的常數，不需要一筆豁免。
 
 _reg("worker", "RAW_INLINE_LIMIT", "DECLARED_ONLY",
      "2026-09-17 這一支第一次執行就找到的，先前沒有人知道。"
@@ -297,11 +305,6 @@ _reg("authority", "DECISIONS", "REFERENCE",
 _reg("betrayal", "GRADE_MEANING", "REFERENCE",
      "兩個等級的意思，給人讀的說明。隔壁 `GRADES` 有人讀，"
      "`\"CANDIDATE\"` 在同檔以字面字串出現 4 次。")
-
-_reg("event_ledger", "SPEC_DEVIATIONS", "REFERENCE",
-     "已知與規格的偏離。註解自己寫著存在理由："
-     "「寫在程式碼裡而不是只寫在文件裡，因為改這個檔的人"
-     "不一定會去讀文件」—— 也就是它本來就是寫給人讀的。")
 
 _reg("evidence", "EPISTEMIC", "REFERENCE",
      "§8.3 的九個認知狀態。`\"UNSUPPORTED_FILL\"` 在同檔以字面字串"
