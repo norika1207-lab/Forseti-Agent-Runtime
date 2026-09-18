@@ -58,9 +58,7 @@ class TestReachesScreen(unittest.TestCase):
     def test_backend_still_writes_both(self):
         self.assertIn('row["claims"] = uniq', API,
                       "row['claims'] 不見了，或改了寫法，畫面那一塊會永遠空白")
-        # 【2026-09-18】原本還釘 `snap["claim_total"]`。那個總數沒有
-        # 任何消費端(畫面不讀、交接檔不讀),這一輪砍掉了。
-        # 明細 `row["claims"]` 還在畫,所以留著上面那一條。
+        self.assertIn('snap["claim_total"]', API)
 
 
 class TestStylesExist(unittest.TestCase):
@@ -126,6 +124,12 @@ class TestRealSnapshot(unittest.TestCase):
             raise unittest.SkipTest(f"跑不起來：{e}")
         if not cls.snap.get("rows"):
             raise unittest.SkipTest("這台機器沒有 session 資料")
+
+    def test_total_matches_rows(self):
+        want = sum(len(r.get("claims") or []) for r in self.snap["rows"])
+        self.assertEqual(self.snap.get("claim_total"), want,
+                         "claim_total 跟 rows 裡實際有的對不上。"
+                         "一個自己算的總數，會跟明細各講各的")
 
     def test_no_duplicates_within_a_row(self):
         for r in self.snap["rows"]:
