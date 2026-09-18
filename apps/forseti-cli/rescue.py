@@ -156,7 +156,7 @@ def run(rows: list, *, session: str, checkpoints: list | None = None,
         goal: str = "", unknowns: list | None = None) -> dict:
     """走完一次救援。三筆事件、一次 fork、一張收據。
 
-    `fork_fn(session, n, dry_run)` 預設用 `desktop_api.fork_at`。
+    `fork_fn(session, n, dry_run)` 預設用 `forkline.fork_at`。
     可以換掉是為了測試能在沙箱裡跑完整條路，而不是只測到一半。
 
     `ledger` 預設用 `event_ledger.EventLedger()`（正本）。測試要傳沙箱的。
@@ -288,8 +288,11 @@ def _ledger(given):
 
 
 def _default_fork(session: str, n: int, dry_run: bool) -> dict:
-    import desktop_api as DA
-    return DA.fork_at(session, n, dry_run=dry_run)
+    # 2026-09-18 從 `desktop_api` 改接 `forkline`。行為一樣（那支就是
+    # 從 `desktop_api` 搬過去的),差別在 rescue 不再為了一個 fork
+    # 把整個畫面層(四千行、幾十個 import)拖進來。
+    import forkline as FK
+    return FK.fork_at(session, n, dry_run=dry_run)
 
 
 def _emit(el, ts: float, etype: str, session: str, incident: str, *,

@@ -60,10 +60,18 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import uuid as _uuid
 from pathlib import Path
 
 PROJECTS = Path.home() / ".claude" / "projects"
+
+#: 桌面版自己記的 session 清單。2026-09-18 跟著 `fork_at` 從
+#: `desktop_api` 搬過來 —— 那支是畫面的資料來源,而 fork 是
+#: `rescue` 也要用的東西,把 fork 放在畫面層等於任何要 fork 的人
+#: 都得把整個畫面層拖進來。
+SESSIONS_META = (Path.home() / "Library" / "Application Support" / "Claude"
+                 / "claude-code-sessions")
 
 
 def resolve(arg: str) -> Path:
@@ -181,3 +189,98 @@ def fork(path: Path, at_line: int, *, dry_run: bool = False) -> dict:
     return info
 
 
+def fork_at(session: str, n: int, dry_run: bool = True) -> dict:
+    """從第 n 輪 fork 出一個新 session。§27
+
+    owner 2026-09-11 要的形狀:看到紅的那一節，從紅色之前那一節 fork，
+    任務接著跑。2026-09-14:「這樣才能 Fork 啊，不然都是單向的
+    還要自己慢慢往前面翻。」
+
+    切點是那一輪的**起點**（她發話那一行），因為那一輪之後發生的事
+    正是要丟掉的部分。
+
+    **原檔一個位元組都不動。** fork 是建立，不是修改 ——
+    一個會改到原始對話的 fork，等於把「回頭看當時發生什麼」毀掉，
+    而那正是這整個 Widget 存在的理由。
+
+    【2026-09-14 實測到的限制，不要拿掉這段註解】
+    fork 出來的 jsonl 桌面版看不到，因為它的側邊欄清單在記憶體裡，
+    不會即時重掃目錄。在 `claude-code-sessions/` 補一份 metadata
+    可以讓它重啟後出現，但 deep link 當下開不了它（測過，焦點沒變）。
+
+    所以回傳裡給兩條真的走得通的路，不假裝可以當場開:
+      重啟 Claude 之後它在側邊欄
+      或者現在就 `claude --resume <新 id>`
+    """
+    import tracker as TK
+
+    base = Path.home() / ".claude" / "projects"
+    hits = sorted(base.glob(f"*/{session}*.jsonl"))
+    if not hits:
+        return {"error": f"找不到 {session}"}
+    path = hits[0]
+
+    tk = TK.Tracker(path)
+    tk.poll()
+    row = next((x for x in tk.strands if x.n == n), None)
+    if row is None:
+        return {"error": f"這條線裡沒有第 {n} 輪"}
+
+    try:
+        info = fork(path, row.owner_line, dry_run=dry_run)
+    except SystemExit as e:
+        return {"error": str(e)}
+    except OSError as e:
+        return {"error": f"寫不出來：{e}"}
+
+    info["n"] = n
+    info["owner_text"] = " ".join((row.owner_text or "").split())[:60]
+    if not dry_run:
+        # metadata 寫不出來不該讓 fork 算失敗 —— jsonl 已經寫好了,
+        # `claude --resume` 那條路走得通,少的只是側邊欄會不會出現它。
+        try:
+            info["meta"] = _write_fork_meta(path.stem, info["new_session_id"], n)
+        except (OSError, ValueError):
+            info["meta"] = ""
+        info["resume"] = f"claude --resume {info['new_session_id']}"
+    return info
+
+
+def _write_fork_meta(src_cli: str, new_cli: str, n: int) -> str:
+    """給 fork 出來的分支補一份桌面版 metadata。
+
+    從原 session 那份複製，只改該改的欄位 ——
+    自己憑空編一份等於猜它的格式，而猜錯的那天沒有人會知道。
+
+    **要重啟 Claude 才看得到。** 桌面版不重掃目錄。
+    """
+    import uuid as _uuid
+
+    src = None
+    for f in SESSIONS_META.rglob("local_*.json"):
+        try:
+            o = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if o.get("cliSessionId") == src_cli:
+            src = (f, o)
+            break
+    if src is None:
+        return ""
+    f_src, o = src
+    new_ui = "local_" + str(_uuid.uuid4())
+    now = int(time.time() * 1000)
+    o = dict(o)
+    o.update({
+        "sessionId": new_ui,
+        "cliSessionId": new_cli,
+        "title": f"{o.get('title', '')} · 從第 {n} 輪".strip(" ·"),
+        "titleSource": "user",
+        "createdAt": now,
+        "lastActivityAt": now,
+        "lastFocusedAt": 0,
+        "completedTurns": n,
+    })
+    dest = f_src.parent / f"{new_ui}.json"
+    dest.write_text(json.dumps(o, ensure_ascii=False), encoding="utf-8")
+    return new_ui
