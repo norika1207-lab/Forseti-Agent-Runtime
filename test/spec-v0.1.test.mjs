@@ -18,6 +18,7 @@
  * 最後一種最容易變成藏東西的地方,所以它必須少,而且「不好測」不算理由。
  */
 import assert from 'node:assert';
+import { ungatedExitsWhy } from './_hookgate.mjs';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -104,17 +105,9 @@ spec(9, '不准只因啟發式分數高就擋低風險的正常工作', 'CHECK',
   assert.equal(r.allowed, false, '光是溫度高不能硬擋');
   // 閘門對不代表有人問。2026-09-08 的教訓:三個 exit(2) 一個都沒問過它,
   // 而擁有者的夜間工作被擋了九個小時。所以這條要一起驗真的會擋人的那段。
-  for (const f of ['forseti-hook.mjs', 'forseti-stop-hook.mjs']) {
-    const text = readFileSync(join(HERE, '..', 'hooks', f), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-      .replace(/^([^\n]*?)\/\/[^\n]*$/gm, (m, keep) => keep);
-    const lines = text.split('\n');
-    lines.forEach((line, i) => {
-      if (!/process\.exit\(2\)/.test(line)) return;
-      const before = lines.slice(Math.max(0, i - 15), i).join('\n');
-      assert.match(before, /g\.allowed|gate\(/, `${f}:${i + 1} 有沒問過閘門的 exit(2)`);
-    });
-  }
+  // 判準在 `test/_hookgate.mjs`,`hooks.e2e.test.mjs` 的 AT-HOOK-R3 用同一份。
+  const why = ungatedExitsWhy(join(HERE, '..', 'hooks'));
+  assert.equal(why, '', why);
   return `溫度 0.99 → allowed=false;兩個 hook 裡沒有繞過閘門的 exit(2)`;
 });
 

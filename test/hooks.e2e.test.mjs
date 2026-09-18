@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert';
+import { ungatedExitsWhy } from './_hookgate.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PRE = join(HERE, '..', 'hooks', 'forseti-hook.mjs');
@@ -412,20 +413,11 @@ t('AT-HOOK-R2 撞車也不准 deny,除非閘門真的放行', async () => {
 });
 
 t('AT-HOOK-R3 三個 hook 的原始碼裡不准有沒問過閘門的 exit(2)', () => {
-  for (const f of ['forseti-hook.mjs', 'forseti-stop-hook.mjs']) {
-    // 先把註解換成等長的空行,不然這條會抓到解釋這件事的註解本身。
-    const text = readFileSync(join(HERE, '..', 'hooks', f), 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
-      .replace(/^([^\n]*?)\/\/[^\n]*$/gm, (m, keep) => keep);
-    const lines = text.split('\n');
-    lines.forEach((line, i) => {
-      if (!/process\.exit\(2\)/.test(line)) return;
-      // 往上找 15 行,必須看得到閘門
-      const before = lines.slice(Math.max(0, i - 15), i).join('\n');
-      assert.match(before, /g\.allowed|gate\(/,
-        `${f}:${i + 1} 有一個沒問過閘門的 exit(2)。這正是擋掉擁有者一整晚的那種寫法。`);
-    });
-  }
+  // 判準在 `test/_hookgate.mjs`,`spec-v0.1.test.mjs` 第 9 條用同一份。
+  // 2026-09-18 之前這裡跟那裡各有一份,視窗大小與認得的閘門種類都不同,
+  // 於是同一個檔案在一邊 FAIL、在另一邊 VIOLATES,修好一邊另一邊照樣紅。
+  const why = ungatedExitsWhy(join(HERE, '..', 'hooks'));
+  assert.equal(why, '', why);
 });
 
 // ── 壞掉的時候要讓路 ──────────────────────────────────────────
