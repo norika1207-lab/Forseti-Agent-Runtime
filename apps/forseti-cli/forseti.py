@@ -1317,15 +1317,22 @@ def cmd_handoff(args: list[str]) -> int:
         return 1
     # B-10：worker 能不能執行指令,是派工方本來就知道的事。
     # 沒宣告就是 unknown,那不是「大概可以」,是「沒問過」。
+    # 名字與它對應的 can_report 都從 `HANDOFF_CAPABILITY` 讀,這裡一個
+    # 字面量都不留。抄一份的話守門認得的名單與實作認得的會分歧,而
+    # 兩邊在畫面上都講得通。
+    #
+    # **拿掉的是全部,不是挑一個拿掉。** 原本的寫法是 if/elif,兩個都
+    # 給的時候只拿掉 `--no-shell`,`--shell` 會留在 args 裡佔住位置參數
+    # 那一格 —— 2026-09-18 18:1x 實測它以 worker 的身分走到了 `dispatch`。
+    # `main()` 的 `flags` 現在會先退回那一種,可是這一支也給人直接呼叫
+    # （測試就是）,所以這裡不留那條路。
     cap = "unknown"
-    if "--no-shell" in args:
-        cap = "write_only"
-        args = [a for a in args if a != "--no-shell"]
-    elif "--shell" in args:
-        cap = "full"
-        args = [a for a in args if a != "--shell"]
+    present = [f for f in HANDOFF_CAPABILITY if f in args]
+    if present:
+        cap = HANDOFF_CAPABILITY[present[0]]
+        args = [a for a in args if a not in HANDOFF_CAPABILITY]
     try:
-        if args and args[0] == "--new":
+        if args and args[0] == HANDOFF_NEW:
             if len(args) < 3:
                 print('用法：forseti.py handoff --new <worker> "目標" [verifier ...]',
                       file=sys.stderr)
@@ -1757,6 +1764,113 @@ def membership(args: list[str], cmd: str, spec: tuple[int, str, str, str]) -> st
             f"而不是 2（用法錯）。")
 
 
+HANDOFF_NEW: str = "--new"
+"""`handoff` 的模式旗標。只認第一格,不是放哪裡都算。"""
+
+
+HANDOFF_CAPABILITY: dict[str, str] = {
+    "--no-shell": "write_only",
+    "--shell": "full",
+}
+"""`handoff` 那兩個能力旗標,各自宣告的 `can_report` 是什麼。
+
+**一處定義,兩個讀法。** `cmd_handoff` 從這裡讀旗標名與它對應的
+`can_report`,`COMMAND_FLAGS` 從這裡讀認得的名字。抄一份的話兩邊會
+分歧,而分歧的症狀是「守門說認得、實作說不認得」—— 畫面上兩邊都
+講得通,沒有人會發現。
+
+順序有意義:兩個都給的時候,`cmd_handoff` 取這張表裡先出現的那一個。
+改順序會改行為,所以它不是排版。
+"""
+
+
+COMMAND_FLAGS: dict[str, tuple[str, ...]] = {
+    "handoff": (HANDOFF_NEW,) + tuple(HANDOFF_CAPABILITY),
+}
+"""哪一支**真的吃旗標**,以及它認得哪幾個。
+
+`handoff` 是這支 CLI 裡唯一的一支。這不是讀出來的,是 AST 數出來的:
+掃過所有 `cmd_*` 函式裡以 `-` 開頭的字串常數,只有 `cmd_handoff`
+有東西（`--new` / `--shell` / `--no-shell`）。
+
+`claims` 與 `overclaim` 的 `--limit` 刻意不在這裡。那兩支由
+`transcript_limit(known=TRANSCRIPT_FLAGS)` 自己守,而它守的是
+「旗標名打錯」加上「旗標後面沒有值」—— 這一支沒有帶值的旗標,
+所以兩份判準管的不是同一組問題,合併會讓其中一邊多守或少守。
+"""
+
+
+EXCLUSIVE_FLAGS: dict[str, tuple[tuple[str, ...], ...]] = {
+    "handoff": (tuple(HANDOFF_CAPABILITY),),
+}
+"""哪幾個旗標不准同時出現。名字從 `HANDOFF_CAPABILITY` 拿,不寫死。
+
+兩個都給的時候實作沒有辦法照兩個都做,它只能挑一個,而挑哪一個是
+實作順序決定的,不是使用者說的。B-10 那一欄的意思是「派工方本來
+就知道 worker 能不能執行指令」,同時宣告兩種等於沒有宣告。
+"""
+
+
+def flags(args: list[str], cmd: str, known: tuple[str, ...],
+          exclusive: tuple[tuple[str, ...], ...] = ()) -> str:
+    """真的吃旗標的那一支。回「哪裡不對」,沒問題回空字串。
+
+    **這是第四種判準,跟前三種不重疊。** `no_extra_args` 問「該不該有
+    參數」,`operands` 問「位置與長相對不對」,`membership` 問「這個值
+    在不在名單裡」—— 三支都把以 `-` 開頭的 token 當成錯的。`handoff`
+    是唯一一支旗標本來就合法的,所以前三支沒有一支管得到它。
+
+    2026-09-18 18:1x 攔三個寫入點量過現況（假帳本,沒碰正本）。
+    後果分兩種,而**第二種比第一種重一級**:
+
+    | 寫法 | 改之前 exit | 改之前走到寫入點 | 帳本收到什麼 |
+    |---|---|---|---|
+    | `handoff --bogus <真 task> s1 w` | 1 | 沒有 | ── |
+    | `handoff --shel <真 task> s1 w` | 1 | 沒有 | ── |
+    | `handoff --no-shell --shell <真 task> s1 w` | 1 | 沒有 | ── |
+    | `handoff --new --bogus w 目標` | ── | **`accept`+`transition`+`dispatch`** | objective=`w`、worker=`--bogus` |
+    | `handoff --new --no-shell --shell w 目標` | ── | 同上三個 | objective=`w`、worker=`--shell`、can_report=`write_only` |
+
+    前三列是**訊息指錯地方加上 exit code 錯一級**:畫面回
+    「找不到任務：--bogus」,那句話是真的（確實沒有這個任務）,可是
+    他錯的是旗標名,不是任務名,於是他會去查任務。exit 1 是資料錯,
+    而旗標打錯是用法錯,該是 2。這跟 `transcript_path` 記的
+    「比靜默好,比講得準差」是同一個形狀。
+
+    後兩列**整筆錯位寫進帳本**:認不得的旗標沒有被拿掉,於是它佔住
+    worker 那一格,worker 的名字被擠去當目標,目標被擠去當驗證條件
+    （實測 `definition_of_done=['目標']`）。帳本是 append-only,
+    這一筆收不回來 —— 跟 `operands` 那一組第二格的嚴重性同級。
+
+    最後那一列還多一層:`--no-shell` 生效了（`can_report` 真的是
+    `write_only`）,而 `--shell` 同時變成了 worker 的名字。**一個旗標
+    同時被當成旗標與位置參數**,而畫面從頭到尾沒有提過這件事。
+
+    兩半的順序:先講名字認不得,再講不准同時出現。名字都對不上的
+    時候講不出它屬於哪一組,順序反過來會讓 `--bogus --shell --no-shell`
+    先講互斥,而他真正先要修的是那個打錯的名字。
+    """
+    # 判準只有一份,在 `cliargs`。這一支不自己再寫一次「什麼算旗標」——
+    # 那正是 `cliargs` 的 docstring 記著要杜絕的那個機制。
+    unknown = _sibling("cliargs").unknown_flags(args, known)
+    if unknown:
+        return (f"{cmd} 認不得這個旗標：{'、'.join(unknown)}\n"
+                f"認得的是：{'、'.join(known)}\n"
+                f"不擋的話它不會被拿掉,會佔住位置參數那一格 —— "
+                f"實測 `{cmd} --new --bogus w 目標` 會把 w 當成目標、"
+                f"把 --bogus 當成 worker 寫進帳本,而帳本收不回來。")
+    for group in exclusive:
+        both = [f for f in group if f in args]
+        if len(both) > 1:
+            return (f"{'、'.join(both)} 不准同時給,它們講的是同一件事的"
+                    f"兩個答案。\n"
+                    f"不擋的話只有其中一個算數,另一個不會被拿掉,"
+                    f"會佔住位置參數那一格 —— 實測 "
+                    f"`{cmd} --new --no-shell --shell w 目標` 生效的是 "
+                    f"--no-shell,而 --shell 同時變成了 worker 的名字。")
+    return ""
+
+
 GATE_SUBCOMMANDS: tuple[str, ...] = ("takeover", "submit", "status")
 
 
@@ -2089,6 +2203,20 @@ def main(argv: list[str]) -> int:
     # 那裡寫著它是怎麼量出來的，以及為什麼 reindex 與 watch 比另外兩支重。
     if cmd in NO_ARG_COMMANDS:
         bad = no_extra_args(argv[2:], cmd)
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
+
+    # 第四種判準：真的吃旗標的那一支。排在 `operands` **前面**，
+    # 因為那一支把每一個以 `-` 開頭的 token 都當成錯的，而 `handoff`
+    # 的 `--shell` / `--no-shell` 是合法的。順序反過來的話，合法的旗標
+    # 會被「旗標放在位置參數的位置」擋掉。
+    # `handoff` 今天不在 OPERAND_SHAPES 裡，所以兩支現在不會同時攔到
+    # 同一個呼叫 —— **哪天要把它加進去，得先決定位置參數要不要先把
+    # 認得的旗標剝掉**，那是一個協定決定，不在這一輪自己補。
+    flag_spec = COMMAND_FLAGS.get(cmd)
+    if flag_spec is not None:
+        bad = flags(argv[2:], cmd, flag_spec, EXCLUSIVE_FLAGS.get(cmd, ()))
         if bad:
             print(bad, file=sys.stderr)
             return 2

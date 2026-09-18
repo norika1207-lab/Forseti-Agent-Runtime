@@ -277,46 +277,6 @@ def _skip(rel: str) -> bool:
     return any(part.startswith(SKIP_PREFIX) for part in Path(rel).parts)
 
 
-def _snapshot(root: Path = FORSETI_DIR) -> dict[str, tuple[int, int]]:
-    """把目錄底下每個檔案的 (mtime_ns, 大小) 掃成一張表。
-
-    掃不到的不當成不存在，記進 `_SCAN_ERRORS`，
-    因為「掃不到」跟「沒有這個檔」在比對的時候長得一樣。
-
-    **2026-09-17：sidecar 不算。** 其餘一律照實記，
-    包含 `cache/` 底下的東西 —— 那些要不要算成「動到正本」
-    是判斷，判斷在 `_allowed()` 那裡，不在這支。
-    """
-    out: dict[str, tuple[int, int]] = {}
-    if not root.exists():
-        return out
-    for p in root.rglob("*"):
-        try:
-            st = p.stat()
-        except OSError as exc:
-            _SCAN_ERRORS.append(f"{p}: {exc}")
-            continue
-        if not p.is_file():
-            continue
-        rel = str(p.relative_to(root))
-        if _skip(rel):
-            continue
-        out[rel] = (st.st_mtime_ns, st.st_size)
-    return out
-
-
-def _diff(
-    before: dict[str, tuple[int, int]], after: dict[str, tuple[int, int]]
-) -> list[str]:
-    """兩張表之間不一樣的相對路徑：新增、刪除、內容或時間變過的都算。"""
-    changed = set()
-    for k, v in after.items():
-        if before.get(k) != v:
-            changed.add(k)
-    for k in before:
-        if k not in after:
-            changed.add(k)
-    return sorted(changed)
 
 
 def _created(
@@ -338,41 +298,6 @@ def _created(
 APPEND_CAPTURE_LIMIT = 256 * 1024
 
 
-def _appended(rel: str, before_size: int, after_size: int,
-              root: Path = FORSETI_DIR) -> str | None:
-    """檔案變大的時候，把多出來的那一段位元組讀回來。
-
-    **只讀尾巴，不驗前面那一段有沒有被改過。** 驗前綴要在每一條
-    測試前後對整個目錄多跑一次雜湊，那個成本會讓這支量測本身
-    變成拖慢全套的原因。
-
-    代價由判斷層吸收，方向是安全的：前面被改過的話，從
-    `before_size` 讀起會切在某一行中間，解不出 JSON ——
-    而判斷層的規則是**解不出來就不放行**。所以這個省略
-    只會多紅，不會少紅。
-
-    讀不到、太大、或者不是文字，一律回 `None`（= 沒有量到），
-    不回空字串 —— 空字串在判斷層跟「量到了而且是空的」同形。
-    """
-    n = after_size - before_size
-    if n <= 0 or n > APPEND_CAPTURE_LIMIT:
-        return None
-    try:
-        with (root / rel).open("rb") as f:
-            f.seek(before_size)
-            blob = f.read(n)
-    except OSError as exc:
-        _SCAN_ERRORS.append(f"{rel}: 讀新增段失敗 {exc}")
-        return None
-    try:
-        return blob.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-
-
-def append_record() -> dict[str, dict[str, str]]:
-    """給判斷層讀的。回傳複本，讀的人改不到正本。"""
-    return {k: dict(v) for k, v in _APPENDED.items() if v}
 
 
 def created_record() -> dict[str, list[str]]:
@@ -384,13 +309,6 @@ def created_record() -> dict[str, list[str]]:
     return {k: list(v) for k, v in _CREATED.items() if v}
 
 
-def write_record() -> dict[str, list[str]]:
-    """給守門那一組讀的。回傳的是複本，讀的人改不到正本。"""
-    return {k: list(v) for k, v in _RECORD.items() if v}
-
-
-def scan_errors() -> list[str]:
-    return list(_SCAN_ERRORS)
 
 
 def session_elapsed_s() -> float:
@@ -421,46 +339,3 @@ def pytest_configure(config):
     config._forseti_recorder = sys.modules[__name__]
 
 
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_protocol(item, nextitem):
-    """罩住 setup / call / teardown 整段，不是只罩 call。
-
-    fixture 的 teardown 也會寫檔，只罩 call 會把那些算在下一條頭上。
-    """
-    before = _snapshot()
-    yield
-    after = _snapshot()
-    changed = _diff(before, after)
-    _RECORD[item.nodeid] = changed
-
-    created = _created(before, after)
-    if created:
-        _CREATED[item.nodeid] = created
-
-    # 變動的檔裡面，純粹長大的那些，把長出來的那一段留下來。
-    # 判斷層要拿它分辨「這條測試寫的」跟「別人在這段時間寫的」。
-    caps: dict[str, str] = {}
-    for rel in changed:
-        b, a = before.get(rel), after.get(rel)
-        if b is None or a is None:
-            continue
-        blob = _appended(rel, b[1], a[1])
-        if blob is not None:
-            caps[rel] = blob
-    if caps:
-        _APPENDED[item.nodeid] = caps
-
-
-def pytest_sessionfinish(session, exitstatus):
-    """設了環境變數才把量到的東西倒出來，預設什麼都不寫。"""
-    out = os.environ.get("FORSETI_WRITE_ATTRIBUTION_OUT")
-    if not out:
-        return
-    payload = {
-        "writers": write_record(),
-        "appended": append_record(),
-        "created": created_record(),
-        "scan_errors": scan_errors(),
-        "total_tests": len(_RECORD),
-    }
-    Path(out).write_text(json.dumps(payload, ensure_ascii=False, indent=2))

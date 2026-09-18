@@ -2752,3 +2752,260 @@ class MemberSlots(unittest.TestCase):
                 self.assertLess(slot, len(shape.slots))
                 self.assertEqual(shape.slots[slot][0], name,
                                  "兩張表對同一格的稱呼不一樣，畫面會前後不一")
+
+
+class HandoffFlags(unittest.TestCase):
+    """真的吃旗標的那一支。**第四種判準，跟前三種不重疊。**
+
+    `LedgerNoArgSubcommand` 問「該不該有參數」、`PositionalOperands`
+    問「位置與長相對不對」、`MemberSlots` 問「這個值在不在名單裡」——
+    **三支都把以 `-` 開頭的 token 當成錯的。** `handoff` 是這支 CLI 裡
+    唯一一支旗標本來就合法的，所以那三支沒有一支管得到它。
+
+    它是唯一一支這不是讀出來的，是 AST 數出來的：掃所有 `cmd_*`
+    函式裡以 `-` 開頭的字串常數，只有 `cmd_handoff` 有東西。
+    （`claims` / `overclaim` 的 `--limit` 由 `TranscriptLimit` 守，
+    那一組連「旗標後面沒有值」一起管，這一支沒有帶值的旗標。）
+
+    ## 改之前量到什麼（2026-09-18 18:1x，假帳本，沒碰正本）
+
+    量的方式是攔 `accept` / `transition` / `dispatch` 三個寫入點。
+    **前兩個放行才走得到第三個** —— 第一版只攔第一個，於是只看得到
+    `accept` 收到什麼，看不到帳本裡那一筆的 worker 是誰。
+
+    | 寫法 | 改之前 exit | 走到寫入點 | 帳本收到什麼 |
+    |---|---|---|---|
+    | `handoff --bogus <真 task> s1 w` | 1 | 沒有 | ── |
+    | `handoff --shel <真 task> s1 w` | 1 | 沒有 | ── |
+    | `handoff --no-shell --shell <真 task> s1 w` | 1 | 沒有 | ── |
+    | `handoff --new --bogus w 目標` | ── | **三個都走到** | objective=`w`、worker=`--bogus` |
+    | `handoff --new --no-shell --shell w 目標` | ── | 同上 | objective=`w`、worker=`--shell`、can_report=`write_only` |
+
+    前三列是**訊息指錯地方加 exit code 錯一級**：畫面回
+    「找不到任務：--bogus」。那句話是真的，可是他錯的是旗標名，
+    於是他會去查任務。跟 `transcript_path` 記的是同一個形狀。
+
+    後兩列**整筆錯位寫進帳本**：認不得的旗標沒被拿掉，佔住 worker
+    那一格，worker 的名字被擠去當目標，目標被擠去當驗證條件
+    （實測 `definition_of_done=['目標']`）。帳本 append-only，收不回來。
+
+    最後一列還多一層：`--no-shell` 生效了（`can_report` 真的是
+    `write_only`），而 `--shell` 同時變成 worker 的名字 —— **一個旗標
+    同時被當成旗標與位置參數**，畫面從頭到尾沒提過。
+
+    ## 這一組刻意不守什麼
+
+    `handoff <真 task> --shell s1 w` 改前改後都走到寫入點。旗標從
+    args 裡任何位置被拿掉，是這一支原本的設計，**這一輪沒有改它** ——
+    改了會讓現在合法的寫法退回，那是另一個決定。
+    """
+
+    REAL_TASK = "T-real"
+    REAL_STEP = "T-real/s1"
+    WRITE_POINTS = ("accept", "transition", "dispatch")
+
+    UNKNOWN = (["handoff", "--bogus", REAL_TASK, "s1", "w"],
+               ["handoff", "--shel", REAL_TASK, "s1", "w"],
+               ["handoff", "--new", "--bogus", "w", "目標"],
+               ["handoff", REAL_TASK, "s1", "w", "--bogus"])
+
+    BOTH = (["handoff", "--no-shell", "--shell", REAL_TASK, "s1", "w"],
+            ["handoff", "--shell", "--no-shell", REAL_TASK, "s1", "w"],
+            ["handoff", "--new", "--no-shell", "--shell", "w", "目標"])
+
+    CLEAN = (["handoff", REAL_TASK, "s1", "w"],
+             ["handoff", "--shell", REAL_TASK, "s1", "w"],
+             ["handoff", "--no-shell", REAL_TASK, "s1", "w"],
+             ["handoff", "--new", "w", "目標"],
+             ["handoff", "--new", "--shell", "w", "目標"])
+
+    def _fake_led(self, hits: list):
+        """一本假帳本。**前兩個寫入點放行，第三個才中止** ——
+
+        只攔第一個的話拿不到 worker 是誰，而 worker 那一格正是這一組
+        存在的理由。完全不碰正本，不開 sqlite，不寫任何檔案。
+        """
+        real_step, real_task = self.REAL_STEP, self.REAL_TASK
+
+        class _Led:
+            def __init__(self):
+                self.con = self
+                self._last = ()
+
+            def execute(self, sql, params=()):
+                self._last = params
+                return self
+
+            def fetchone(self):
+                ref = self._last[0] if self._last else ""
+                return (real_step,) if ref == real_step else None
+
+            def fetchall(self):
+                return []
+
+            def state_of(self, task):
+                return "RUNNING" if task == real_task else ""
+
+            def close(self):
+                pass
+
+            def sid(self, task, local):
+                return f"{task}/{local}"
+
+            def accept(self, *a, **k):
+                hits.append(("accept", a, k))
+                return "T-new"
+
+            def transition(self, *a, **k):
+                hits.append(("transition", a, k))
+
+            def dispatch(self, *a, **k):
+                hits.append(("dispatch", a, k))
+                raise SystemExit(99)
+
+        return _Led()
+
+    class _FakeMod:
+        @staticmethod
+        def is_terminal(state):
+            return False
+
+        class Step:
+            def __init__(self, *a, **k):
+                self.a, self.k = a, k
+
+    def _run(self, argv: list):
+        """回 `(exit code, 走到哪些寫入點, 印出來的東西, 每一筆的參數)`。"""
+        hits: list = []
+        orig = FS._open_ledger
+        FS._open_ledger = lambda: (self._FakeMod, self._fake_led(hits))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                try:
+                    rc = FS.main(["forseti"] + argv)
+                except SystemExit as e:
+                    rc = f"SystemExit({e.code})"
+        finally:
+            FS._open_ledger = orig
+        return rc, [h[0] for h in hits], buf.getvalue(), hits
+
+    def test_乾淨呼叫五種都照樣走到寫入點(self):
+        """先釘這一條。只守退回的話，把整支擋死也會全綠 ——
+        而擋死整支的症狀是「合法的旗標也不能用了」。"""
+        for argv in self.CLEAN:
+            with self.subTest(argv=argv):
+                rc, hits, _, _ = self._run(argv)
+                self.assertEqual(rc, "SystemExit(99)")
+                self.assertIn("dispatch", hits)
+
+    def test_認不得的旗標四種都退回而且一個寫入點都沒碰到(self):
+        """改之前前兩種 exit 1 講「找不到任務」，第三種整筆錯位
+        寫進帳本，第四種被靜默吞掉。"""
+        for argv in self.UNKNOWN:
+            with self.subTest(argv=argv):
+                rc, hits, out, _ = self._run(argv)
+                self.assertEqual((rc, hits), (2, []))
+                self.assertIn("認不得這個旗標", out)
+
+    def test_兩個能力旗標同時給退回而且一個寫入點都沒碰到(self):
+        """這一組存在的理由的後半。改之前 `--no-shell` 生效、
+        `--shell` 同時變成 worker 的名字，寫進 append-only 的帳本。"""
+        for argv in self.BOTH:
+            with self.subTest(argv=argv):
+                rc, hits, out, _ = self._run(argv)
+                self.assertEqual((rc, hits), (2, []))
+                self.assertIn("不准同時給", out)
+
+    def test_名字認不得排在互斥前面(self):
+        """兩種都犯的時候先講哪一個。名字都對不上就講不出它屬於
+        哪一組，先講互斥會把他指向一個他還沒打對的名字。"""
+        rc, hits, out, _ = self._run(
+            ["handoff", "--bogus", "--shell", "--no-shell", self.REAL_TASK,
+             "s1", "w"])
+        self.assertEqual((rc, hits), (2, []))
+        self.assertIn("認不得這個旗標", out)
+        self.assertNotIn("不准同時給", out)
+
+    def test_守門認得的名單跟實作讀的是同一份(self):
+        """抄一份的話症狀是「守門認得、實作不認得」，兩邊在畫面上
+        都講得通，沒有人會發現。所以判準是**改掉常數行為要跟著變**，
+        不是 grep 它出現幾次。"""
+        self.assertEqual(
+            set(FS.COMMAND_FLAGS["handoff"]),
+            {FS.HANDOFF_NEW} | set(FS.HANDOFF_CAPABILITY))
+        orig = dict(FS.HANDOFF_CAPABILITY)
+        try:
+            FS.HANDOFF_CAPABILITY.clear()
+            FS.HANDOFF_CAPABILITY["--sandbox"] = "write_only"
+            FS.COMMAND_FLAGS["handoff"] = (
+                (FS.HANDOFF_NEW,) + tuple(FS.HANDOFF_CAPABILITY))
+            FS.EXCLUSIVE_FLAGS["handoff"] = (tuple(FS.HANDOFF_CAPABILITY),)
+            rc, hits, out, calls = self._run(
+                ["handoff", "--sandbox", self.REAL_TASK, "s1", "w"])
+            self.assertEqual(rc, "SystemExit(99)", out)
+            self.assertEqual(
+                [c for c in calls if c[0] == "dispatch"][0][2],
+                {"can_report": "write_only"},
+                "實作沒有跟著新名單走，代表它讀的是另一份")
+            rc, hits, out, _ = self._run(
+                ["handoff", "--shell", self.REAL_TASK, "s1", "w"])
+            self.assertEqual((rc, hits), (2, []))
+            self.assertIn("認不得這個旗標", out)
+        finally:
+            FS.HANDOFF_CAPABILITY.clear()
+            FS.HANDOFF_CAPABILITY.update(orig)
+            FS.COMMAND_FLAGS["handoff"] = (
+                (FS.HANDOFF_NEW,) + tuple(FS.HANDOFF_CAPABILITY))
+            FS.EXCLUSIVE_FLAGS["handoff"] = (tuple(FS.HANDOFF_CAPABILITY),)
+
+    def test_直接呼叫也不留那條漏(self):
+        """`main()` 那一道守得住從 CLI 進來的人。`cmd_handoff` 給人
+        直接呼叫（測試就是），所以那一支自己也不准把沒生效的那個
+        旗標留在 args 裡。改之前 if/elif 只拿掉 `--no-shell`。"""
+        hits: list = []
+        orig = FS._open_ledger
+        FS._open_ledger = lambda: (self._FakeMod, self._fake_led(hits))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                try:
+                    FS.cmd_handoff(["--new", "--no-shell", "--shell",
+                                    "w", "目標"])
+                except SystemExit:
+                    pass
+        finally:
+            FS._open_ledger = orig
+        sent = [c for c in hits if c[0] == "dispatch"]
+        self.assertTrue(sent, buf.getvalue())
+        self.assertEqual(sent[0][1][1], "w",
+                         "沒生效的那個旗標留下來佔住了 worker 那一格")
+
+    def test_能力旗標對應的can_report是表裡那個(self):
+        """`cap` 不准是第二份對應表。改掉表裡的值，畫面與寫入點
+        要跟著變。"""
+        for flag, expect in FS.HANDOFF_CAPABILITY.items():
+            with self.subTest(flag=flag):
+                _, _, _, calls = self._run(
+                    ["handoff", flag, self.REAL_TASK, "s1", "w"])
+                sent = [c for c in calls if c[0] == "dispatch"]
+                self.assertEqual(sent[0][2], {"can_report": expect})
+
+    def test_沒有多擋別的子指令(self):
+        """這張表只有 `handoff`。別支進來的話，它們的參數會被拿去
+        對一張跟它無關的旗標名單。"""
+        self.assertEqual(set(FS.COMMAND_FLAGS), {"handoff"})
+        self.assertEqual(set(FS.EXCLUSIVE_FLAGS), {"handoff"})
+
+    def test_互斥的那幾個名字都在認得的名單裡(self):
+        """互斥表引用一個守門不認得的名字的話，那一組永遠觸發不到 ——
+        因為名字那一關會先把它退回去。"""
+        for cmd, groups in FS.EXCLUSIVE_FLAGS.items():
+            known = set(FS.COMMAND_FLAGS.get(cmd, ()))
+            for group in groups:
+                with self.subTest(cmd=cmd, group=group):
+                    self.assertGreater(len(group), 1, "一個名字不叫互斥")
+                    self.assertTrue(set(group) <= known,
+                                    f"{group} 有名字不在 {cmd} 認得的名單裡")

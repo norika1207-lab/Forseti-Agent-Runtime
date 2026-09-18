@@ -27,7 +27,9 @@
 
 from __future__ import annotations
 
+import builtins
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,7 +40,133 @@ sys.path.insert(0, str(ROOT / "apps" / "forseti-cli"))
 import contract as C          # noqa: E402
 import runtimenode as R       # noqa: E402
 
-from test_forseti_dir_writes import _WriteSpy   # noqa: E402
+FORSETI = (ROOT / ".forseti").resolve()
+
+# 2026-09-18:`test_forseti_dir_writes.py` 砍掉了（它守的是守門本身），
+# 而這一支只借用它的 `_WriteSpy`。為一個類別留著 534 行不划算，
+# 所以把那個類別搬進來。
+
+class _WriteSpy:
+    """攔四種寫入動作，記下落在 `.forseti/` 底下的那些。
+
+    四種是數出來的不是猜的：`apps/forseti-cli/*.py` 底下
+    `write_text` 20 處、`open()` 寫模式 13 處、`write_bytes` 0 處、
+    `os.replace` / `os.rename` 0 處，而 `Path.replace`
+    有（`identity.py:290`、`blast.py:422`）。`write_bytes` 現在沒有人用，
+    仍然攔著，因為新增一個用它的模組不該是無聲的。
+
+    **第五種 `Path.open` 是 2026-09-17 補的，補之前這張網瞎掉一半。**
+    `p.open("a")` 走的是 `Path.open`，**不經過 `builtins.open`** ——
+    Python 3.9.6 實測：換掉 `builtins.open` 之後 `p.open("a")` 一次都
+    攔不到，而檔案照樣寫出去。這個 repo 底下用這種寫法的有 13 處：
+    `advicetrack.py:102`、`blockread.py:165`、`checkpoint.py:79`、
+    `commit.py:81`、`coverage.py:294`、`event_ledger.py:351`、
+    `forkline.py:178`、`gate.py:101`、`identity.py:499`、`notes.py:67`、
+    `pollution.py:195`、`sufficiency.py:313`、`workflow.py:307`。
+    **粉紅點、checkpoint、事件帳本、fork 的寫檔全部在這張名單上**，
+    所以補這一種之前，上面那些「零寫入」的斷言證到的比它們宣稱的少。
+
+    補進來之後 `Path.write_text` 會被記兩次（它內部呼叫 `self.open`），
+    這是刻意留著的：`tops()` 與 `paths()` 都回集合，多記一次不影響判定，
+    而把它去掉要靠猜哪一次是內層，猜錯就漏掉真的那一次。
+
+    **`shutil` 不攔**：全檔只有 `which` 兩處與 `rmtree(tmp)` 四處
+    （`goalgate.py`、`jsbridge.py`、`blast.py` 兩支 —— `blast.py`
+    那兩處是 2026-09-17 補的，先前它借了臨時目錄不還，
+    見 `tests/test_tempdir_cleanup.py`），沒有一處寫進這個目錄。
+    這是讀過之後的決定，不是遺漏 —— 哪天有人用 `shutil.copy`
+    寫進來，這個攔截網會看不到，所以寫在這裡。
+    """
+
+    def __init__(self, scope: Path | None = FORSETI) -> None:
+        #: 只記落在 `scope` 底下的寫入。**`None` 代表整個檔案系統** ——
+        #: 2026-09-17 加的，因為上一輪自己寫下「零寫入只驗了 `.forseti/`
+        #: 底下，它會不會寫 repo 其他地方或家目錄沒有量」。
+        #: 判定範圍是這一層的事，攔截網本身攔的是動作不是路徑，
+        #: 所以放寬範圍不需要動下面任何一個 hook。
+        self.scope = scope
+        self.hits: list[tuple[str, str]] = []
+        self.on = False
+        self._orig: dict = {}
+
+    def _under(self, p) -> bool:
+        if self.scope is None:
+            return True
+        try:
+            return str(Path(p).resolve()).startswith(str(self.scope))
+        except Exception:
+            return False
+
+    def _note(self, kind: str, p) -> None:
+        if self.on and self._under(p):
+            try:
+                self.hits.append((kind, str(Path(p).resolve())))
+            except Exception:
+                self.hits.append((kind, repr(p)))
+
+    def __enter__(self) -> "_WriteSpy":
+        self._orig = {
+            "open": builtins.open,
+            "write_text": Path.write_text,
+            "write_bytes": Path.write_bytes,
+            "replace": Path.replace,
+            "path_open": Path.open,
+        }
+        o, wt, wb, rp, po = (self._orig[k] for k in
+                             ("open", "write_text", "write_bytes",
+                              "replace", "path_open"))
+        spy = self
+
+        def _open(file, mode="r", *a, **k):
+            if any(c in mode for c in "wax+"):
+                spy._note("open:" + mode, file)
+            return o(file, mode, *a, **k)
+
+        def _wt(self_, *a, **k):
+            spy._note("write_text", self_)
+            return wt(self_, *a, **k)
+
+        def _wb(self_, *a, **k):
+            spy._note("write_bytes", self_)
+            return wb(self_, *a, **k)
+
+        def _rp(self_, target):
+            spy._note("replace", target)
+            return rp(self_, target)
+
+        def _po(self_, mode="r", *a, **k):
+            if any(c in mode for c in "wax+"):
+                spy._note("Path.open:" + mode, self_)
+            return po(self_, mode, *a, **k)
+
+        builtins.open = _open
+        Path.write_text, Path.write_bytes, Path.replace = _wt, _wb, _rp
+        Path.open = _po
+        self.on = True
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self.on = False
+        builtins.open = self._orig["open"]
+        Path.write_text = self._orig["write_text"]
+        Path.write_bytes = self._orig["write_bytes"]
+        Path.replace = self._orig["replace"]
+        Path.open = self._orig["path_open"]
+
+    def paths(self) -> set[str]:
+        """被寫到的相異絕對路徑。**用集合不是次數** ——
+        `write_text` 一次會被記兩下（它內部呼叫 `self.open`），
+        所以次數不是可以拿來斷言的東西，位置才是。
+        """
+        return {p for _, p in self.hits}
+
+    def tops(self) -> set[str]:
+        """被寫到的路徑，相對 `.forseti/` 的第一段。"""
+        out = set()
+        for _, p in self.hits:
+            rel = Path(p).relative_to(FORSETI)
+            out.add(rel.parts[0] if rel.parts else str(rel))
+        return out
 
 #: 注入用的假硬體 UUID。真的那個不寫進測試檔。
 FAKE_A = "AAAAAAAA-1111-2222-3333-444444444444"
