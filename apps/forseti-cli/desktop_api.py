@@ -50,9 +50,6 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 sys.path.insert(0, str(HERE))
 
-LEVELS = ("OK", "WATCH", "ATTENTION")
-
-
 def _safe(fn, default=None):
     """一個分項壞掉，不該讓整個快照拿不到。
 
@@ -942,152 +939,6 @@ def spec_reading() -> dict:
     }
 
 
-def block_reading() -> dict:
-    """區塊閱讀的現況，加上要拷問 owner 的那張清單。§41
-
-    owner 2026-09-14：
-
-        FORSETI 應該要協助 AI 在讀文件時用區塊方式去讀完，
-        然後讀完一個區塊就記錄下來，最後再跟開發者做確認
-        這些規格有沒有問題才對
-
-        這樣有文件的開發者，至少是安心地按照文件跟北極星在做，
-        而不是碰運氣賭 AI 只讀 18%
-
-    兩個方向都要有。Grill-me 那個 skill 是 AI 開工前拷問人類，
-    把需求問清楚；這裡反過來多一邊:Forseti 出題考 AI，
-    考的是文件讀懂了沒。題目從原文抽，不是 AI 自己出的 ——
-    自己出的題只會考自己記得的部分，而記得的部分正是不用考的部分。
-    """
-    try:
-        import blockread as BR
-    except ImportError as e:                                # noqa: BLE001
-        return {"has": False, "why": f"讀不到模組：{e}"}
-
-    spec = _safe(spec_reading, {}) or {}
-    if not spec.get("has"):
-        return {"has": False, "why": spec.get("why", "算不出必讀清單")}
-
-    log = BR.BlockLog(REPO)
-    done_all = log.all()
-    by_path: dict = {}
-    for r in done_all:
-        by_path.setdefault(r.get("path", ""), set()).add(r.get("index"))
-
-    files, blocks_total, blocks_done, quiz_total = [], 0, 0, 0
-    for row in (spec.get("rows") or []):
-        name = row.get("name", "")
-        path = _find_must(name)
-        if path is None or not path.is_file():
-            continue
-        bs = BR.split(path)
-        if not bs:
-            continue
-        done = by_path.get(str(path), set())
-        qn = sum(len(BR.quiz(path, b)) for b in bs)
-        blocks_total += len(bs)
-        blocks_done += len([b for b in bs if b.index in done])
-        quiz_total += qn
-        files.append({
-            "name": name,
-            "state": row.get("state", ""),
-            "blocks": len(bs),
-            "done": len([b for b in bs if b.index in done]),
-            "quiz": qn,
-            "lines": sum(b.lines for b in bs),
-        })
-
-    files.sort(key=lambda f: (f["done"] / f["blocks"] if f["blocks"] else 1,
-                              -f["lines"]))
-    qs = log.questions()
-    return {
-        "has": True,
-        "files": files,
-        "blocks": blocks_total,
-        "done": blocks_done,
-        "quiz": quiz_total,
-        "questions": [{"file": Path(q.get("path", "")).name,
-                       "title": q.get("title", ""),
-                       "q": q.get("question", ""),
-                       "lo": q.get("lo"), "hi": q.get("hi")}
-                      for q in qs],
-        "note": "題目從原文抽，不是 AI 自己出的",
-    }
-
-
-def sufficiency_state(session: str = "") -> dict:
-    """接管閘門現在擋不擋得住人。v5.0 §17.3 / §19.2 / §39
-
-    `BLOCKERS.md` 的 B-08：`gate takeover` 只列題目不驗答案。
-    所以 `REQUIRED_READING.md` 那張七級量表上，任何文件最高只能到
-    level 5（我說我讀完了），到不了 level 6（有人考過我）。
-
-    這一頁把那件事變成看得到的狀態：這條線考過沒有、五個維度裡
-    有幾個根本沒有來源可考、上一次判決是什麼。
-
-    **不在這裡出卷。** 出卷會寫進帳本，而一個重新整理畫面就多一筆
-    考卷的東西，帳本會被畫面的刷新次數填滿。出卷走 CLI。
-    """
-    try:
-        import sufficiency as SF
-    except ImportError as e:                                # noqa: BLE001
-        return {"has": False, "why": f"讀不到模組：{e}"}
-
-    sess = (session or "").strip()
-    if not sess:
-        try:
-            import tracker as TK
-            f = TK.latest_session()
-            sess = f.stem if f else ""
-        except Exception:                                    # noqa: BLE001
-            sess = ""
-
-    st = SF.state(REPO, session=sess)
-    paper = _safe(lambda: SF.compose(REPO), {}) or {}
-    dims = []
-    for key, en, zh, _d in SF.DIMENSIONS:
-        d = (paper.get("dims") or {}).get(key, {})
-        dims.append({
-            "key": key, "en": en, "zh": zh,
-            "state": d.get("state", "NO_SOURCE"),
-            "source": d.get("source", ""),
-            "why": d.get("why", ""),
-            "asked": d.get("asked", 0),
-        })
-    rows = SF.Log(REPO).results(sess)
-    rows.sort(key=lambda r: r.get("at", 0), reverse=True)
-    return {
-        "has": True,
-        "session": sess,
-        "write": st["write"],
-        "verdict": st.get("verdict", ""),
-        "why": st.get("why", ""),
-        "attempts": st.get("attempts", 0),
-        "enforced": st.get("enforced", False),
-        "threshold": paper.get("threshold", SF.DEFAULT_THRESHOLD),
-        "questions": len(paper.get("questions") or []),
-        "dims": dims,
-        "no_source": [d["zh"] for d in dims if d["state"] != "OK"],
-        "history": [{"at": r.get("at"), "verdict": r.get("verdict", ""),
-                     "rate": r.get("rate"), "why": r.get("why", "")}
-                    for r in rows[:6]],
-        "note": "題目從原文抽，答案不寫進考卷。出卷與交卷走 "
-                "`forseti gate takeover` 與 `gate submit`",
-    }
-
-
-def _find_must(name: str) -> Path | None:
-    """從檔名找回必讀檔的實際路徑。名字在三個地方出現過，全找一遍。"""
-    base = (Path.home() / "Dropbox" / "My project" / "Forseti Agent Runtime")
-    cands = [REPO / name, REPO / "docs" / name, REPO / ".forseti" / name,
-             base / "forseti_20260909-2_Modular_Spec" / name,
-             base / "forseti 20260909-1" / name]
-    for c in cands:
-        if c.is_file():
-            return c
-    return None
-
-
 def js_layer(strands: list) -> dict:
     """src/ 那 40 支 JavaScript。§38
 
@@ -1103,207 +954,6 @@ def js_layer(strands: list) -> dict:
     """
     import jsbridge as JB
     return JB.scan(strands)
-
-
-def recall_index() -> dict:
-    """查得回來的段落。§37
-
-    `recall.py` 把每一份 transcript 切成「一次交換」為單位的段落
-    （使用者說一句，AI 做了一串事，到下一句使用者訊息為止），
-    建成可查詢的索引。
-
-    壓縮之後要找回「當時到底講了什麼」，靠的就是這個 ——
-    摘要會遺失細節，索引不會。
-    """
-    import recall as RC
-
-    db = Path.home() / ".forseti" / "recall.db"
-    if not db.is_file():
-        return {"has": False, "why": "索引還沒建"}
-    try:
-        c = RC.connect(db)
-        rows = c.execute("select count(*) from segments").fetchone()[0]
-        sess = c.execute(
-            "select count(distinct session) from segments").fetchone()[0]
-        c.close()
-    except Exception as e:                                 # noqa: BLE001
-        return {"has": False, "why": f"讀不到：{e}"}
-    return {"has": True, "segments": rows, "sessions": sess,
-            "size_mb": round(db.stat().st_size / 1048576, 1),
-            "db": str(db).replace(str(Path.home()), "~")}
-
-
-def rehydration_packet(snap: dict) -> dict:
-    """壓縮之後該補回去的脈絡。Vol3 §4.1 的 RehydrationPacket。
-
-    【2026-09-15 接上】`rehydration.build()` 先前只有測試在碰。
-
-    **這一支跟 `rehydrate_state()` 是兩件事。** 那一支回答「補回了多少」，
-    這一支產出「該補什麼」。前者是溫度計，後者是可以直接貼給 AI 的東西。
-
-    片段選的是 owner 在壓縮點之前講過的話。理由是 `Fragment.why` 逼出來的:
-    說不出為什麼要放這一段就不該放,而壓縮之後最可能消失、消失代價最大的，
-    就是她講過的指示 —— 那是唯一 OBSERVED 級的輸入。
-
-    超出預算時 `build()` 砍片段不砍 decisions/constraints/unknowns，
-    因為那三樣是骨架，片段還查得回來（provenance 還在）。
-    """
-    import rehydration as RH
-
-    comps = [r for r in (snap.get("rows") or []) if r.get("compaction")]
-    if not comps:
-        return {"has": False, "why": "這段對話還沒被壓縮過，不需要補"}
-
-    ns = _safe(north_star, {}) or {}
-    goal = (ns.get("text") or ns.get("objective") or "").strip()
-    w = _safe(work, {}) or {}
-    tasks = w.get("tasks") or []
-    task = (tasks[0].get("objective") if tasks else "") or ""
-
-    # 約束用北極星的非目標。那是明文寫下來的邊界，不是我推的。
-    cons = []
-    try:
-        import goalgate as GG
-        cons = GG.non_goals()[:6]
-    except Exception:                                       # noqa: BLE001
-        pass
-
-    # 未解的:被擋住的步驟,加上還沒讀完的必讀文件。
-    unknowns = []
-    for b in (w.get("blocked") or [])[:4]:
-        unknowns.append(f"被擋住：{b}")
-    sp = _safe(spec_reading, {}) or {}
-    if sp.get("has") and not sp.get("ok"):
-        for r in (sp.get("rows") or []):
-            if r.get("state") != "讀完":
-                unknowns.append(f"沒讀完：{r.get('name', '')}")
-                if len(unknowns) >= 8:
-                    break
-
-    # 決策用帳本裡真的發生過的狀態轉換,不是我事後整理的心得。
-    decisions = []
-    for t in tasks[:2]:
-        for e in (t.get("events") or []):
-            if e.get("kind") in ("TASK_STATE", "HANDOFF", "STOP") and e.get("cause"):
-                decisions.append(f"{e['kind']}：{e['cause'][:70]}")
-            if len(decisions) >= 6:
-                break
-
-    # 片段:壓縮點之前 owner 講過的話。
-    frags = []
-    cut = comps[-1].get("n")
-    for r in (snap.get("rows") or []):
-        if cut is not None and (r.get("n") or 0) >= cut:
-            break
-        t = (r.get("owner_text") or "").strip()
-        if len(t) < 12:
-            continue
-        frags.append(RH.Fragment(
-            text=t[:400],
-            source=RH.ORIGINAL,
-            provenance=f"第 {r.get('n')} 輪",
-            why="壓縮之前 owner 親口講的，壓縮之後最可能不在 context 裡"))
-    frags = frags[-24:]
-
-    try:
-        pk = RH.build(goal=goal or "（北極星還沒設）",
-                      task=task or "（沒有進行中的任務）",
-                      fragments=frags, decisions=decisions,
-                      constraints=cons, unknowns=unknowns)
-    except Exception as e:                                  # noqa: BLE001
-        return {"has": False, "why": f"組不出來：{e}"}
-
-    lines = [f"這是壓縮之後該補回去的脈絡（Vol3 §4.1）", "",
-             f"目標　{pk.current_goal}", f"任務　{pk.current_task}"]
-    if pk.constraints:
-        lines += ["", "不要做的事："] + [f"　- {x}" for x in pk.constraints]
-    if pk.key_decisions:
-        lines += ["", "已經發生過的決定："] + [f"　- {x}" for x in pk.key_decisions]
-    if pk.unresolved_unknowns:
-        lines += ["", "還沒解決的："] + [f"　- {x}" for x in pk.unresolved_unknowns]
-    if pk.original_fragments:
-        lines += ["", "壓縮之前她講過的話（原文）："]
-        lines += [f"　[{f.provenance}] {f.text}" for f in pk.original_fragments]
-
-    return {
-        "has": True,
-        "at_round": comps[-1].get("n"),
-        "size": pk.size,
-        "limit": RH.PACKET_LIMIT,
-        "fragments": len(pk.original_fragments),
-        "dropped": pk.dropped_for_budget,
-        "decisions": len(pk.key_decisions),
-        "constraints": len(pk.constraints),
-        "unknowns": len(pk.unresolved_unknowns),
-        "say": "\n".join(lines),
-        "note": "超出預算時砍的是片段，不砍決定與約束 —— "
-                "那三樣是骨架，片段還查得回來",
-    }
-
-
-def rehydrate_state(snap: dict) -> dict:
-    """壓縮之後恢復了多少。§37
-
-    F08 §5 的七級涵蓋度。壓縮把大部分內容丟掉，
-    而「後來補讀回多少」是可以算的 —— 從實際讀過的行數範圍算，
-    不從宣稱算。
-
-    **`is_full_understanding` 只有最高那一級才回 True。**
-    讀完不等於讀懂，這個界線寫在模組裡不是我在這裡定的。
-    """
-    import rehydration as RH
-
-    cov = _safe(reading_coverage, {}) or {}
-    comps = [r for r in (snap.get("rows") or []) if r.get("compaction")]
-    if not comps:
-        return {"has": False, "why": "這段對話還沒被壓縮過"}
-    last = comps[-1]
-    meta = last.get("compaction_meta") or {}
-    pre, post = meta.get("pre_tokens") or 0, meta.get("post_tokens") or 0
-    kept = round(post / pre * 100, 1) if pre else None
-    lvl = _safe(lambda: RH.coverage_report(
-        read_ranges=[(1, cov.get("records") or 0)],
-        total_lines=max(cov.get("records") or 1, 1)), None)
-    level = ""
-    if isinstance(lvl, dict):
-        level = lvl.get("level", "") or ""
-    else:
-        level = getattr(lvl, "level", "") or ""
-    return {
-        "has": True,
-        "at_round": last.get("n"),
-        "kept_pct": kept,
-        "dropped": (pre - post) if pre and post else None,
-        "level": level,
-        "full": _safe(lambda: RH.is_full_understanding(level), False),
-        "note": "這個數字是上界。算得出最多讀回多少，算不出有沒有讀懂",
-    }
-
-
-def worker_packets() -> dict:
-    """多 session 交回來的成果有沒有合規。§37
-
-    F03-CSI-001。sub-session 做完把結果交回主線時，
-    要附一份 Worker Result Packet，而那份 packet 有 schema。
-
-    `validate()` 回違規清單，空清單才准收。
-    `check_scope()` 看交回來的產物有沒有超出當初說好的範圍 ——
-    多交的跟少交的一樣是問題。
-    """
-    import worker as WK
-
-    store = _safe(lambda: WK.default_store(
-        Path.home() / ".forseti" / "ledgers"), None)
-    n = 0
-    if store and Path(store).is_dir():
-        n = sum(1 for _ in Path(store).glob("*.json"))
-    return {
-        "store": str(store).replace(str(Path.home()), "~") if store else "",
-        "packets": n,
-        "schema_fields": len(
-            getattr(WK.WorkerResult, "__dataclass_fields__", {})),
-        "has_validate": hasattr(WK, "validate"),
-    }
 
 
 def north_star() -> dict:
@@ -1369,71 +1019,6 @@ def north_star() -> dict:
         "goal_gap": gap,"has": bool(body), "text": body,
             "fields": len(getattr(NS.NorthStar, "__dataclass_fields__", {})),
             "path": str(f).replace(str(REPO), ".")}
-
-
-def reading_coverage() -> dict:
-    """規格讀了幾行。§35
-
-    `coverage.py` 分辨的是「翻過」跟「讀完」——
-    F08 §5 七級涵蓋度裡 SAMPLED 與 FULL_READ 的界線。
-
-    **它的數字是上界不是下界。** 一次 Read 涵蓋哪幾行是從工具紀錄
-    推出來的，推得出「最多讀到這裡」，推不出「真的看懂了」。
-    這個標記不可關閉。
-    """
-    import coverage as CV
-
-    log = REPO / ".forseti" / "reading_coverage.jsonl"
-    if not log.is_file():
-        return {"has": False, "why": "還沒有涵蓋記錄"}
-    n, files = 0, set()
-    try:
-        with log.open(encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                n += 1
-                try:
-                    files.add(json.loads(line).get("path", ""))
-                except ValueError:
-                    continue
-    except OSError as e:
-        return {"has": False, "why": f"讀不到：{e}"}
-    return {"has": True, "records": n, "files": len([f for f in files if f]),
-            "note": "這是上界。推得出最多讀到哪裡，推不出有沒有讀懂",
-            "has_api": hasattr(CV, "CoverageLog")}
-
-
-def stop_reasons(strands: list) -> dict:
-    """每一輪為什麼停。§35
-
-    F06 §4 的八種停止理由。`owner.is_nudge` 判斷她是不是只叫我繼續，
-    而那代表上一輪停在一個不該停的地方。
-
-    **這是整個專案最初的理由。**
-    """
-    import owner as O
-    import stopreason as SR
-
-    nudged = []
-    for i, st in enumerate(strands):
-        nxt = strands[i + 1] if i + 1 < len(strands) else None
-        if nxt is None:
-            continue
-        if O.is_nudge(getattr(nxt, "owner_text", "") or ""):
-            nudged.append(getattr(st, "n", 0))
-    verdict = ""
-    if nudged:
-        a = _safe(lambda: SR.classify_stop(
-            "UNKNOWN_STOP", has_authorized_next_action=True), None)
-        verdict = getattr(a, "why", "") or getattr(a, "verdict", "") or ""
-    return {
-        "count": len(nudged),
-        "rounds": nudged[-8:],
-        "verdict": verdict,
-        "kinds": len(getattr(SR, "STOP_REASONS", ()) or ()),
-    }
 
 
 def verified_claims(strands: list, limit: int = 40) -> list[dict]:
@@ -1911,341 +1496,6 @@ def add_note(session: str, n: int, text: str) -> dict:
         return {"ok": False, "why": f"輪號不對：{e}"}
 
 
-# §40 PollutionRegistry 的畫面投影。
-#
-# **後端從 2026-09-16 19:2x 就算得出來，缺的一直是入口** ——
-# 跟 blast 明細那一次同一種缺口，所以這一支不寫任何新的判斷邏輯，
-# 只把 `pollution.summary()` 與 `pollution.records()` 挑成畫面要的形狀。
-# 不在這裡重算狀態、不在這裡重算 guarded，那會變成兩份會分歧的實作。
-#
-# 三條誠實條款跟著資料走，不留在註解裡：
-#
-#   一，`propagation_radius` 是 None 不是 0。規格列了欄位沒定義單位，
-#       所以每一筆帶著 `radius_basis` 說為什麼算不出來。
-#   二，**0 筆不等於沒有污染。** 這份登記簿沒有自動掃描（B-05），
-#       它只有人登進去的那些，所以空的時候畫面要說的是
-#       「登記簿是空的」不是「沒有被推翻的結論」。
-#   三，`guarded` 以外那些「現在只靠人記得」，這句話要看得到 ——
-#       一筆 OPEN 的污染跟一筆有偵測器攔著的，在總數上長得一樣。
-def pollution_panel() -> dict:
-    import pollution as PO
-
-    rows = PO.records()
-    s = PO.summary()
-    g = PO.guard_split()
-    out = []
-    for r in rows:
-        out.append({
-            "id": r.get("id", ""),
-            "status": r.get("status", "OPEN"),
-            "original": r.get("original_claim", ""),
-            "corrected": r.get("corrected_claim", ""),
-            "mechanism": r.get("failure_mechanism", ""),
-            # None 就是 None。畫面那邊不准把它顯示成 0。
-            "radius": r.get("propagation_radius"),
-            "radius_basis": r.get("radius_basis", ""),
-            # 有沒有東西攔著它再犯，不是它對不對。
-            # **叫 `pollution.has_guard()`，這裡不另外判一次。**
-            # 這一行 2026-09-18 之前是自己抄的一份，而那一份多了
-            # `.strip()` —— 兩份語意不完全一樣，只是現有 21 筆剛好
-            # 都測不出差別。那種「巧合相等」正是這個專案付過代價的
-            # 形狀，所以消掉的不是重複，是分歧。
-            "guarded": PO.has_guard(r),
-            "sources": list(r.get("source_events") or []),
-        })
-    return {
-        "has": True,
-        "total": s.get("total", 0),
-        "open": s.get("open", 0),
-        "by_status": s.get("by_status", {}),
-        "radius_unknown": s.get("radius_unknown", 0),
-        "radius_note": s.get("radius_note", ""),
-        # **`guarded` 的分母是 open，不是 total。**
-        # 這一欄先前接的是 `summary()['guarded']`（分母 `records()` 全部），
-        # 而畫面上緊鄰它的那一句印的是 `open`。此刻 RESOLVED 是 0，
-        # 所以 total == open，兩個數字剛好對得上 —— 那是巧合不是設計。
-        # 第一筆推到 RESOLVED 的那天，畫面上就會出現
-        # 「N 筆還沒收乾淨 ⋯ 攔著的筆數：M 筆」而 M 含已收乾淨的那些。
-        # `guard_split()` 自己對 open 組算，並且把分母帶在回傳值裡。
-        "guarded": g.get("guarded", 0),
-        "unguarded": g.get("unguarded", 0),
-        "unguarded_ids": list(g.get("unguarded_ids") or []),
-        "guard_denominator": g.get("denominator", ""),
-        # 兩行各一句，不共用 `guard_note`（它一句講完兩堆，
-        # 拿去當第一行的說明會跟第二行整句重複）。
-        "guarded_note": g.get("guarded_note", ""),
-        "unguarded_note": g.get("unguarded_note", ""),
-        "unguarded_caveat": g.get("unguarded_caveat", ""),
-        "guard_basis": g.get("basis", ""),
-        "guard_note": s.get("guard_note", ""),
-        "source": s.get("source", ""),
-        # 這一句是這一格最重要的誠實條款，不是說明文字。
-        "not_scanned_why": ("這份登記簿沒有自動掃描，只有人登進去的那些。"
-                            "空的或少的，代表沒有人登，不代表沒有被推翻的結論"),
-        "rows": out,
-    }
-
-
-# §12.2 Source-of-truth precedence 的畫面投影。
-#
-# 這一格回答的是一個很窄的問題：**這一類狀態該信哪個來源。**
-# 跟 pollution 那一格同一條原則，這裡不寫任何新的判斷 ——
-# `sot.assess()` 已經算完，這一支只挑畫面要的形狀。
-#
-# 兩條誠實條款跟著資料走：
-#
-#   一，**七行裡只有一行有即時量測。** 其餘六行的 `live` 是 None，
-#       那是「沒量」不是「健康」。一個沒有被檢查過的綠燈比沒有燈更糟，
-#       因為它會讓人不去看。
-#   二，`NOT_APPLICABLE` 跟「還沒接」在畫面上必須分得出來。
-#       前者是查證過這個 repo 沒有這一類狀態，後者是欠工。
-#       兩個都畫成灰色的話，欠的那一塊會消失。
-def sot_panel() -> dict:
-    import sot as SOT
-
-    a = SOT.assess()
-    rows = []
-    for r in a["rows"]:
-        live = r.get("live")
-        rows.append({
-            "key": r["key"],
-            "state_type": r["state_type"],
-            "preferred_zh": r["preferred_zh"],
-            "preferred": r["preferred"],
-            "not_source": r["not_source"],
-            "state": r["state"],
-            "uses": r["uses"],
-            "note": r["note"],
-            "spec": r["spec"],
-            "evidence_ok": r["evidence_ok"],
-            "evidence_drifted": r["evidence_drifted"],
-            # None 就是 None。畫面那邊不准把它顯示成「正常」。
-            "live": (None if not live else {
-                "measured": live.get("measured", False),
-                "why": live.get("why", ""),
-                "git_authoritative": live.get("git_authoritative"),
-                "divergent": live.get("divergent"),
-            }),
-        })
-    return {
-        "has": True,
-        "total": a["total"],
-        "by_state": a["by_state"],
-        "evidence_stale": a["evidence_stale"],
-        "evidence_drifted": a["evidence_drifted"],
-        "live_measured": a["live_measured"],
-        "live_note": a["live_note"],
-        "not_applicable_note": a["not_applicable_note"],
-        "source": a["source"],
-        "rows": rows,
-    }
-
-
-def sot_ask(question: str) -> dict:
-    """拿一句話去問該信誰。§12.2
-
-    對不上就不回答 —— `sot.lookup()` 自己會擋，這一層不另外做一套
-    比對，理由跟 `blast_detail` 不重驗路徑同一條。
-    """
-    import sot as SOT
-    return _safe(lambda: SOT.lookup(str(question or "")),
-                 {"ok": False, "why": "查不動"})
-
-
-# §11.1 持久身份。這一格回答的是:**這個 repo 分得開身份與那五樣東西嗎。**
-#
-# 跟 sot 那一格同一條原則，這裡不寫任何新的判斷 ——
-# `identity.assess()` 已經算完，這一支只挑畫面要的形狀。
-#
-# 三條誠實條款跟著資料走：
-#
-#   一，`NO_SOURCE` 不是「這一軸沒問題」，是這個 repo 沒有資料來源。
-#       三軸沒有來源就是三軸答不出來，畫面上不准畫成綠的。
-#   二，model 那一軸的分母是抽樣的，不是磁碟上全部的 session。
-#       兩個數字都印出來，因為同一個分子在不同分母底下不是同一件事。
-#   三，alias 不靠命名相似度配對。前綴一樣不代表同一個身份。
-def identity_panel() -> dict:
-    import identity as ID
-
-    a = ID.assess()
-    rows = []
-    for r in a["rows"]:
-        live = r.get("live")
-        rows.append({
-            "key": r["key"],
-            "axis": r["axis"],
-            "axis_zh": r["axis_zh"],
-            "question": r["question"],
-            "state": r["state"],
-            "evidence": r["evidence"],
-            "spec": r["spec"],
-            # None 就是 None。畫面那邊不准把它顯示成 0。
-            "live": (None if not live else {
-                "value": live.get("value"),
-                "of": live.get("of"),
-            }),
-        })
-    d = a["drift"]
-    sv = a["survey"]
-    return {
-        "has": True,
-        "total": a["total"],
-        "by_state": a["by_state"],
-        "rows": rows,
-        "registered": d["registered"],
-        "actors_seen": d["actors_seen"],
-        "unregistered": d["unregistered"][:20],
-        "unregistered_total": len(d["unregistered"]),
-        "stale": d["stale"][:20],
-        "stale_total": len(d["stale"]),
-        "scanned": sv["scanned"],
-        # **一個用上一次結果算出來的數字，跟一個剛剛量出來的，
-        # 在畫面上長得一模一樣。** 跟 blast 那一格標「快取」同一條理由。
-        # 0 條命中就不給句子（全部都是這一次量的，沒有要交代的事）。
-        "cache_note": (
-            f"這一次有 {sv['cache_hits']} 條 session 用的是上一次量的結果，"
-            f"動過的那幾條重讀過了"
-            if sv.get("cache_hits") else ""),
-        "total_sessions": sv["total_sessions_on_disk"],
-        "sampled": sv["sampled"],
-        "multi_model_count": sv["multi_model_count"],
-        "multi_session_count": sv["multi_session_count"],
-        "models_seen": sv["models_seen"][:8],
-        "synthetic_note": sv["synthetic_note"],
-        "sampled_note": a["sampled_note"],
-        "no_source_note": a["no_source_note"],
-        "no_fuzzy_note": a["no_fuzzy_note"],
-        "source": a["source"],
-    }
-
-
-# §5 Workflow / WorkflowStep 加 §17.1 Workflow Reconstruction。
-# 這一格回答的是:**程序剛死掉，我現在接哪一步。**
-#
-# 跟 identity 那一格同一條原則，這裡不寫任何新的判斷 ——
-# `workflow.assess()` 已經算完，這一支只挑畫面要的形狀。
-# 重算會變成兩份會分歧的實作，而分歧那天不會有錯誤訊息。
-#
-# 四條誠實條款跟著資料走：
-#
-#   一，`commit_boundary` 沒登記是 UNDECLARED 不是 NONE。前者是
-#       「沒有人回答過」，後者是「有人看過而且說不跨」，
-#       畫面上不准把前者畫成後者。
-#   二，`external_refs` 沒有資料來源，所以它不在畫面上冒充空清單。
-#   三，規格 §6.2 那四種事件實際幾種有出現，直接寫出來。
-#       不做同義詞對映 —— STEP_STATE 不是 STEP_COMMIT。
-#   四，dangling(依賴指到不存在的 step)單獨一格，不併進 blocked。
-#       資料壞了跟在等人，下一步剛好相反。
-def workflow_panel() -> dict:
-    import workflow as WF
-
-    a = WF.assess()
-    if not a.get("available"):
-        return {"has": False, "why": "任務帳本讀不到，不是沒有 workflow"}
-    ev = a["spec_events"]
-    fl = a["fields"]
-    return {
-        "has": True,
-        "total": a["total"],
-        "live": a["live"],
-        "resumable": [{
-            "workflow_id": r["workflow_id"],
-            "objective": r["objective"],
-            "state": r["state"],
-            "counts": r["counts"],
-            "ready_ids": r["ready_ids"][:8],
-            "blocked_ids": r["blocked_ids"][:8],
-            "boundary": r["boundary"],
-        } for r in a["resumable"][:8]],
-        "wf_coverage": fl["workflow"]["coverage"],
-        "step_coverage": fl["step"]["coverage"],
-        "missing": [{"field": f["field"], "state": f["state"],
-                     "why": f["why"]}
-                    for f in (*fl["workflow"]["fields"],
-                              *fl["step"]["fields"])
-                    if f["state"] != "PRESENT"],
-        "spec_events_present": ev.get("spec_present", 0),
-        "spec_events_total": ev.get("spec_total", 4),
-        "spec_events": ev.get("spec_kinds", {}),
-        "actual_top": ev.get("actual_top", [])[:4],
-        "undeclared_live": a["boundary_registry"]["undeclared_live"][:8],
-        "declared": a["boundary_registry"]["declared"],
-        "honesty": a["honesty"],
-        "source": a["source"],
-    }
-
-
-def probe_panel() -> dict:
-    """§15 Probe Packs。這一格回答「換了東西之後，哪一類判準退化了」。
-
-    這一格最容易被畫成謊話的地方有四個，所以四個都寫在畫面上，
-    不是寫在這個註解裡:
-
-      一，NO_VERIFIER 不是 PASS。一個沒有東西可量的情境，跟一個量過
-          而且通過的情境，在一張綠色的表上長得一模一樣。所以
-          通過率的分母是 `measurable`，不是十。
-      二，沒有基準線的時候，十個 NEW 也會讓這一格看起來沒有紅字。
-          「還沒有基準線」要自己講出來，不能靠使用者從 NEW 推。
-      三，基準線是什麼時候、誰按的要印出來。一條三個月前的基準線
-          跟一條剛剛錄的，在「跟基準線一致」這句話裡分量差很多。
-      四，跨不了的那兩軸每一次都要帶著。這一版量得到程式碼改動造成的
-          退化（versions），量不到換模型或改路由造成的退化。
-
-    `probe.run()` 不碰基準線檔，只有 `record_baseline(by=...)` 會寫，
-    所以這一格反覆重畫不會把退化洗成新常態。
-    """
-    import probe as PB
-
-    t = PB.summary()
-    cv = t.get("pack_covers_spec") or {}
-    return {
-        "has": True,
-        "counts": t["counts"],
-        "measurable": t["measurable"],
-        "pass_rate": t["pass_rate"],
-        "has_baseline": t["has_baseline"],
-        "baseline_by": t["baseline_by"],
-        "baseline_at": t["baseline_at"],
-        "axes_covered": t["axes_covered"],
-        "axes_missing": t["axes_missing"],
-        "axes_why": t["axes_why"],
-        # §15.2 的十類蓋滿了沒有。missing 不是空的時候，通過率那個
-        # 數字的分母本來就少算了，那件事要跟通過率放在一起看。
-        "spec_ok": bool(cv.get("ok")),
-        "spec_missing": list(cv.get("missing") or []),
-        "spec_total": len(cv.get("required") or []),
-        "rows": t["rows"],
-        "source": "v5.0 §15 Probe Packs，資料在 .forseti/probe_baseline.json",
-    }
-
-
-def workflow_resume(workflow_id: str) -> dict:
-    """§17.1 的那一行:從耐久存放區重組一件可續做的 workflow。
-
-    `workflow.resume()` 自己會擋不存在的 id（回 `ok: False` 帶原因），
-    所以這一層不另外驗一次 —— 兩套驗法會分歧，而分歧的那一天
-    沒有人會發現。
-    """
-    import workflow as WF
-    return _safe(lambda: WF.resume(str(workflow_id or "")),
-                 {"ok": False, "why": "重組不動"})
-
-
-def blast_detail(target: str) -> dict:
-    """點一個節點，看誰依賴它。§16.1 那一句的 files 那一種。
-
-    畫面上那張排行榜回答的是「哪些檔案最貴」，這一支回答的是
-    **「這一個檔貴在哪裡」** —— 是哪十個檔會被波及，不只是十這個數字。
-
-    `blast.detail()` 自己會擋不在圖裡的路徑（回 `known: False`），
-    所以這一層不另外驗一次路徑 —— 兩套驗法會分歧，而分歧的那一天
-    沒有人會發現（`jsbridge.py` 檔頭那句話）。
-    """
-    import blast as BL
-    return _safe(lambda: BL.detail(str(target or "")),
-                 {"has": False, "target": target, "why": "算不出來"})
-
-
 def act(kind: str, target: str = "", worker: str = "") -> dict:
     """畫面上的動作。會改變狀態的東西全部走這裡。§30
 
@@ -2492,584 +1742,6 @@ def work() -> dict:
     }
 
 
-# 功能說明。§36
-#
-# owner 2026-09-14：「我老闆會用 AI，他會要我打開 Forseti 全部功能說明，
-# 然後要我 demo，你他媽的不要給我漏掉任何一個。」
-#
-# 每一項三件事:它抓什麼、憑什麼（規格編號）、現在的真實數字。
-# **沒有形容詞。** 一句「強大的偵測能力」在 demo 現場換不到任何東西，
-# 一個「這段對話你說了 14 次繼續」換得到。
-FEATURES = [
-    # 【2026-09-14 新增四項】owner 讀完文件後指出的三件事:
-    # 線要會飄、不是儀表板、文件沒讀完不可能變綠。
-    ("必讀文件讀完了沒", "spec_full",
-     "必讀清單上每一份的閱讀狀態。沒有閱讀紀錄一律算沒讀，"
-     "拿不出證據就不算讀過。只要有一份沒讀完，整條線從第一格就是紅的",
-     "§40　REQUIRED_READING + coverage"),
-    ("區塊閱讀與反向拷問", "spec_blocks",
-     "把文件切成區塊，讀一塊記一塊，疑問集中成清單給你裁。"
-     "另一邊 Forseti 從原文抽題反過來考 AI，題目不是 AI 自己出的",
-     "§41　Vol2 §4 七級涵蓋度的 level 6"),
-    ("目標距離與飄移", "goal_trend",
-     "線的水平位置就是 1 減去目標支持率。偏得越遠推得越外面，"
-     "回到中軸時標出飄了幾輪才回來。算的是跟目標的距離，不是工具失敗率",
-     "§22.7　FP-09 GDA / FP-17 FSD"),
-    ("體溫與八個維度", "temp_c",
-     "一個體溫加八個分開的維度。溫度量的是退化不是容量，"
-     "而且一定同時顯示證據覆蓋率，低覆蓋率的高分不能裝作確定",
-     "工程書 §11.3 §22.1　FS-RSK-001"),
-    ("說了沒做", "betrayal_total",
-     "它說寫了檔案、跑了指令、用了某個工具，而那一輪的紀錄裡沒有對應的動作",
-     "FP-11 / FP-24 / FP-13"),
-    ("宣稱對現實查證", "claim_unknown",
-     "把文字裡的宣稱抽出來，真的去磁碟查。查不到就說查不到，"
-     "沒資格判假的不判假",
-     "§7.3　claims + verifier"),
-    ("宣稱大於證據", "overclaim_total",
-     "證據範圍小於宣稱範圍、別人查的講成自己查的、說逐條核對實際只核一部分",
-     "FP-02 / FP-03 / FP-07"),
-    ("空輸出與停擺", "starving_total",
-     "拿了你的 token 卻回你空白，或者做完了卻沒說出來",
-     "F07-OUT-001"),
-    ("停滯風險", "stall_total",
-     "長時間沒有動作。算的是風險值加復原階梯，不是計時器",
-     "F05-WDG-001"),
-    ("記憶用量預警", None,
-     "現在用掉多少 context、離壓縮還有多遠。門檻用這個 session 自己"
-     "壓縮過的實際觸發點，不是拿模型上限去猜",
-     "F08-CTX-001"),
-    ("停在不該停的地方", None,
-     "你必須開口說「繼續」的次數。應該趨近於零",
-     "F06 §4 / F06-EXC-001"),
-    ("任務帳本", None,
-     "未完成的義務被自動暴露，不需要你盤問。append-only 的正本",
-     "F02 §6　obligation ledger"),
-    ("換機器盤點", None,
-     "換電腦該搬什麼、現在有幾個。少的那一項會自己跳出來",
-     "§31"),
-    ("從某一輪切分支", None,
-     "從對話中間任何一輪切出新 session，原檔一個位元組都不動",
-     "§27　clean fork"),
-    ("北極星與版本鏈", None,
-     "不預設存在。要等人自己說出來才啟用",
-     "v5.0 §8.1"),
-    ("規格讀了幾行", None,
-     "分辨「翻過」跟「讀完」。數字是上界，這個標記不可關閉",
-     "F08 §5　七級涵蓋度"),
-    ("查得回來的段落", None,
-     "把每一份對話切成「一次交換」為單位的段落建成索引。"
-     "壓縮之後要找回當時講了什麼，靠的是它不是摘要",
-     "階段 C1"),
-    ("壓縮後恢復了多少", None,
-     "壓縮把內容丟掉，後來補讀回多少是算得出來的。"
-     "只有最高那一級才算「讀懂」",
-     "F08 §5　七級涵蓋度"),
-    ("多 session 成果驗收", None,
-     "sub-session 交回來的成果要附一份有 schema 的封包。"
-     "多交的跟少交的一樣是問題",
-     "F03-CSI-001"),
-    ("執行層偵測器", None,
-     "src/ 底下 40 支 JavaScript、13,190 行的 failure primitive registry。"
-     "Python 起 node 跑它們，判斷邏輯不重寫成第二份",
-     "§38　FP-01 到 FP-25"),
-    ("功能自檢", None,
-     "每一項餵一筆刻意造的違規，抓得到才算活的。"
-     "一個回 0 的偵測器跟一個壞掉的偵測器，在真實資料上長得一樣",
-     "§33"),
-]
-
-
-#: 還沒做的。**這一份跟上面那份一樣要指得回證據**,
-#: 每一筆的 `blocked` 講的是「被什麼擋住」,不是「還沒排到」。
-#:
-#: 四種擋法分開,因為處理方式完全不同:
-#:   NO_CODE    一行都沒有,要從頭寫
-#:   JS_ONLY    src/ 有實作,Python 這邊沒接。硬接會得到一排
-#:              NOT_APPLICABLE,因為那些吃的是結構化事件不是 transcript
-#:   NO_DATA    程式碼可以寫,但沒有資料它只會輸出噪音
-#:   OWNER      要 owner 決定,不是工程問題
-#:
-#: **把這四種混成一句「還沒做」,會讓人以為它們可以用同一種方式推進。**
-MISSING: tuple[dict, ...] = (
-    {"name": "因果 X 光", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "一個壞掉的結果,往回追出是哪一個決定、哪一份證據、"
-             "哪一次 context 變動造成的。不是看那一輪做了什麼,"
-             "是看那一輪為什麼會那樣做",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。§16.4 要求因果歸因除非有決定性連結"
-                "否則一律標成機率性,那需要一個 lineage 圖,現在沒有"},
-    {"name": "脈絡 MRI", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "這個決定是被哪些脈絡、記憶、快取、證據促成的。"
-             "壓縮之後最該問的就是這個:它現在憑什麼還這樣想",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。需要 ContextFragment 這個物件,Vol2 十五個"
-                "核心物件裡缺的那十個之一"},
-    {"name": "系譜瀏覽", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "一個宣稱從哪裡來、被誰引用過、中途有沒有被改寫。"
-             "白點抓的是單點對不上,這個看的是一條鏈",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。evidence lineage 是 v5.0 副標新增的兩個"
-                "概念之一,目前只有單點的 E0 到 E4,沒有鏈"},
-    {"name": "權限地圖", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "誰有權改什麼、誰批准過什麼、哪兩個東西在爭同一個權威。"
-             "authority.py 算得出單次判定,這個要的是整張圖",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。authority.py 有八級信任階層與衝突偵測,"
-                "但沒有把它畫成圖的那一層"},
-    {"name": "執行拓樸", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "有幾個 agent 在跑、它們各自看到什麼版本的真實、"
-             "哪一個的世界觀跟別人不一樣",
-     "barrier": "JS_ONLY",
-     "blocked": "src/topology.js 203 行有實作,Python 這邊沒接。"
-                "它吃的是結構化事件不是 transcript,硬接會得到"
-                "一排 NOT_APPLICABLE,那比不接更糟"},
-    {"name": "金點", "spec": "WIDGET_SPEC §5.3",
-     "what": "你這次的決策跟過去不一樣,語氣是供你參考不是警告。"
-             "它不判對錯,只指出差異",
-     "barrier": "NO_DATA",
-     "blocked": "需要粉紅點當訓練資料,目前 0 則。規格明寫不要提前做:"
-                "沒有資料的分類器只會輸出噪音,而噪音會讓整個提示系統"
-                "失去信任"},
-    {"name": "北極星版本鏈", "spec": "v5.0 §6 Goal Evolution",
-     "what": "北極星換過幾版、每一版是誰拍板的、一個舊決定當時"
-             "對著哪一版。沒有它,所有舊決定都會被拿現在的標準評",
-     "barrier": "NO_DATA",
-     "blocked": "northstar.Chain 寫好了,但北極星到現在換版 0 次,"
-                "那條鏈是空的。adopt 是權威行為,要等第一次真的換版"},
-    {"name": "紫點下判決", "spec": "docs/spec-v2.0 §6.2",
-     "what": "偏離目標從「可疑」升成「確認」。現在只出得了 SUSPECTED,"
-             "因為下判決要四個條件,一個都還沒做",
-     "barrier": "OWNER",
-     "blocked": "GAC 算不出來,缺 scope_match 這個因子。那要你定義"
-                "什麼算離開北極星的範圍 —— 我定過兩次,兩次都誤判"},
-    {"name": "換模型會不會變差", "spec": "v5.0 §15 三軸的 models 與 contexts",
-     "what": "同一個判斷題餵給不同模型、在 context 被塞滿之後再問一次,"
-             "看它還做不做得對。這是唯一能回答「Forseti 自己有沒有"
-             "變差」的機制",
-     "barrier": "OWNER",
-     "blocked": "probemodel.py 九題與執行器做完了,一次都還沒跑成:"
-                "claude CLI 沒有登入(claude auth status 回 loggedIn "
-                "false)。登入之後跑一次就量得到"},
-    {"name": "五個病症分類", "spec": "docs/spec-v2.0 §12.2",
-     "what": "「需要注意」那一頁的第二層。現在照 registry 的 axis 分,"
-             "規格要的是問題、轉折、錯誤、飄移、欺騙五類",
-     "barrier": "OWNER",
-     "blocked": "規格列了五類但沒有給 FP 編號的對應表。"
-                "自己編一個等於發明分類"},
-    {"name": "團隊與方法論共享", "spec": "Vol2 L2 之後",
-     "what": "Workspace、Project、Methodology、Insight 四個實體。"
-             "多人協作、把一套協作方法分享出去",
-     "barrier": "OWNER",
-     "blocked": "Vol4 §1 明寫下一階要等前一階的核心假設被真實使用"
-                "驗證才解鎖,而九個 Stage 目前一階都沒過出口條件。"
-                "現在做這些就是用終極願景掩蓋目前產品不好用"},
-)
-
-BARRIER_LABEL = {
-    "NO_CODE": "一行都沒有",
-    "JS_ONLY": "有實作沒接上",
-    "NO_DATA": "等資料長出來",
-    "OWNER": "等你決定",
-}
-
-
-def features() -> dict:
-    """功能說明加當場驗證。§36"""
-    st = _safe(selftest, {}) or {}
-    alive = {x["name"]: x for x in (st.get("items") or [])}
-    rows = []
-    for name, _key, what, spec in FEATURES:
-        a = alive.get(name)
-        rows.append({
-            "name": name, "what": what, "spec": spec,
-            "alive": bool(a and a.get("alive")),
-            "live": (a or {}).get("live", ""),
-        })
-    return {
-        "items": rows,
-        "alive": sum(1 for r in rows if r["alive"]),
-        "total": len(rows),
-        "scale": _safe(scale_now, {}) or {},
-        # 沒接的照實列。owner 2026-09-14：
-        # 「明天是赤裸裸的給人看」——
-        # 藏起來的那一項，正是會被問到的那一項。
-        # 2026-09-14 之後這裡是空的。全部接完了。
-        "not_wired": [],
-        # 還沒做的。上面那份是「做了而且證明得了它是活的」，
-        # 這一份是「還沒做，以及被什麼擋住」。
-        #
-        # **兩份一起出才誠實。** 只列做好的那一份，21/21 全綠，
-        # 看起來像做完了 —— 而實際上八個 X-Ray 視圖只有三個、
-        # 紫點下不了判決、換模型會不會變差一次都還沒量過。
-        "missing": [dict(m, barrier_label=BARRIER_LABEL.get(m["barrier"], m["barrier"]))
-                    for m in MISSING],
-        "missing_by_barrier": {
-            BARRIER_LABEL[k]: sum(1 for m in MISSING if m["barrier"] == k)
-            for k in ("NO_CODE", "JS_ONLY", "NO_DATA", "OWNER")
-        },
-    }
-
-
-def scale_now() -> dict:
-    """規模數字。當場算，不寫死。"""
-    import ast
-    app = REPO / "apps" / "forseti-cli"
-    mods = [f for f in app.glob("*.py") if not f.name.startswith("._")]
-    fns = 0
-    lines = 0
-    for f in mods:
-        try:
-            src = f.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        lines += len(src.splitlines())
-        try:
-            tree = ast.parse(src)
-        except SyntaxError:
-            continue
-        fns += sum(1 for n in tree.body
-                   if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
-                                     ast.ClassDef))
-                   and not n.name.startswith("_"))
-    js = REPO / "src"
-    js_files = [f for f in js.glob("*.js")
-                if not f.name.startswith("._")] if js.is_dir() else []
-    js_lines = 0
-    for f in js_files:
-        try:
-            js_lines += len(f.read_text(encoding="utf-8",
-                                        errors="replace").splitlines())
-        except OSError:
-            continue
-    tests = REPO / "tests"
-    return {
-        "modules": len(mods),
-        "functions": fns,
-        "lines": lines,
-        "js_files": len(js_files),
-        "js_lines": js_lines,
-        "tests": len([f for f in tests.glob("*.py")
-                      if not f.name.startswith("._")]) if tests.is_dir() else 0,
-    }
-
-
-def selftest() -> dict:
-    """每一個功能，當場證明它是活的。§33
-
-    owner 2026-09-14：「我要列出來的功能表上的所有功能都可以被驗證。」
-
-    **一個回 0 的偵測器，跟一個壞掉的偵測器，在真實資料上長得一模一樣。**
-    所以每一項都跑兩次:一次餵真實資料，一次餵一筆刻意造的違規。
-    真實資料那次回幾筆是現況，合成那次一定要抓到 ——
-    抓不到就是這個功能死了，畫面上直接說死了。
-    """
-    import tracker as TK
-
-    target = TK.latest_session()
-    rows = []
-
-    def probe(name, spec, live, synth_fn):
-        """live = 真實資料的結果數；synth_fn 回 True 表示合成違規有抓到。"""
-        alive = _safe(synth_fn, False)
-        rows.append({
-            "name": name, "spec": spec,
-            "live": live,
-            "alive": bool(alive),
-            "verdict": "活的" if alive else "沒反應",
-        })
-
-    tk = None
-    if target and target.is_file():
-        tk = TK.Tracker(target)
-        tk.poll()
-
-    strands = tk.strands if tk else []
-
-    # 0-A 必讀文件。合成:造一份不存在的必讀檔,一定要判成沒讀完。
-    def _spec():
-        """合成驗:造一個必讀檔而且不給它任何閱讀紀錄，一定要判成沒讀。
-
-        【2026-09-15 修】第一版寫的是「真實資料裡要同時看得到讀完
-        與沒讀完兩種狀態」。那讓這條檢查依賴真實狀態 ——
-        文件全部讀完之後它反而報「死」。
-        **一個在狀態變好之後就失效的檢查，跟一個永遠回 OK 的檢查
-        是同一種壞掉。** 改成完全用合成資料。
-        """
-        import tempfile
-        with tempfile.TemporaryDirectory() as td:
-            fake = Path(td)
-            (fake / ".forseti").mkdir()
-            (fake / "docs").mkdir()
-            (fake / ".forseti" / "ONLY.md").write_text("x\n", encoding="utf-8")
-            old_repo = globals()["REPO"]
-            try:
-                globals()["REPO"] = fake
-                d = spec_reading()
-            finally:
-                globals()["REPO"] = old_repo
-        rows = d.get("rows") or []
-        mine = [r for r in rows if r["name"] == "ONLY.md"]
-        return bool(mine) and mine[0]["state"] == "沒有閱讀紀錄" \
-            and d.get("ok") is False
-    _sp = _safe(spec_reading, {}) or {}
-    probe("必讀文件讀完了沒", "§40　REQUIRED_READING + coverage",
-          f"{_sp.get('full', 0)} / {_sp.get('total', 0)} 份讀完", _spec)
-
-    # 0-B 區塊閱讀。合成:給一段假的 markdown,一定要切得出區塊並出得了題。
-    def _blk():
-        import blockread as BR, tempfile, pathlib as _pl
-        with tempfile.TemporaryDirectory() as td:
-            f = _pl.Path(td) / "t.md"
-            # 出題器對句子有 12 字下限(太短的句子挖空沒有意義)，
-            # 合成文字要過得了那一關，不然測到的是長度不是判準。
-            f.write_text(
-                "# 標題\n\n## 一節\n\n"
-                "不准把沒有驗證過的數字直接寫進正式檔案裡面。\n"
-                "每個結論至少要有三份互相獨立的證據支撐才算數。\n",
-                encoding="utf-8")
-            bs = BR.split(f)
-            if not bs:
-                return False
-            qs = [q for b in bs for q in BR.quiz(f, b)]
-            return any(q["kind"] == "禁令" for q in qs)
-    _bk = _safe(block_reading, {}) or {}
-    probe("區塊閱讀與反向拷問", "§41　Vol2 §4 七級涵蓋度的 level 6",
-          f"{_bk.get('done', 0)} / {_bk.get('blocks', 0)} 塊，題庫 {_bk.get('quiz', 0)}",
-          _blk)
-
-    # 0-C 目標距離。合成:造一串「每一輪都被糾正」,距離一定要是 1。
-    def _goal():
-        import vitals as VT
-        # 每一輪都被糾正。注意 classify_turn 看的是「下一輪有沒有糾正」，
-        # 所以最後一輪永遠分類不到 CONFLICTING ——
-        # 8 輪的理論上界是 7/8 = 0.875，判準照這個寫。
-        fake = [{"n": i, "dots": [{"kind": "write"}],
-                 "corrected_by_owner": True} for i in range(8)]
-        gs = VT.goal_support(fake)
-        clean = [{"n": i, "dots": [{"kind": "write"}],
-                  "corrected_by_owner": False} for i in range(8)]
-        gc = VT.goal_support(clean)
-        return (gs and gs[-1]["distance"] >= 0.8
-                and gc and gc[-1]["distance"] <= 0.01)
-    probe("目標距離與飄移", "§22.7　FP-09 GDA / FP-17 FSD",
-          f"{len(strands)} 輪可算", _goal)
-
-    # 0-D 體溫。合成:八個維度全部推到 1,溫度一定要進 CRITICAL。
-    def _temp():
-        import vitals as VT
-        hot = {k: {"score": 1.0, "evidence": "合成", "coverage": 1.0}
-               for k, _ in VT.DIMENSIONS}
-        t = VT.temperature(hot)
-        cold = {k: {"score": 0.0, "evidence": "合成", "coverage": 1.0}
-                for k, _ in VT.DIMENSIONS}
-        c = VT.temperature(cold)
-        return t["c"] >= 39.0 and c["c"] <= 37.0
-    probe("體溫與八個維度", "工程書 §11.3 §22.1　FS-RSK-001",
-          f"{len(__import__('vitals').DIMENSIONS)} 個維度", _temp)
-
-    # 1 說了沒做
-    def _b():
-        import betrayal as B
-        return len(B.inspect("我把 `apps/forseti-cli/tracker.py` 寫好了。", [])) > 0
-    probe("說了沒做", "FP-11 / FP-24 / FP-13",
-          len(_safe(lambda: __import__("betrayal").scan(strands), []) or []), _b)
-
-    # 2 空輸出
-    def _s():
-        import starvation as SV
-        d = SV.diagnose(has_receipts=False, has_final_output=False,
-                        tool_calls=0, progress_healthy=False, blank_run=3)
-        return not d.is_healthy
-    probe("空輸出與停擺", "F07-OUT-001",
-          len(_safe(lambda: starving(strands), []) or []), _s)
-
-    # 3 宣稱大於證據
-    def _o():
-        import overclaim as OC
-        f = OC.provenance_collapse("我親自查過整個資料庫，全部都沒問題。",
-                                   own_receipts=0, other_source_observations=3)
-        return _fired(f)
-    probe("宣稱大於證據", "FP-02 / FP-03 / FP-07",
-          len(_safe(lambda: overclaims(strands), []) or []), _o)
-
-    # 4 停滯風險
-    def _w():
-        import watchdog as WD
-        a = WD.assess(age_sec=7200, progress_changed=False,
-                      events_since=0, expected_to_progress=True)
-        return float(getattr(a, "risk", 0)) > 0.5
-    probe("停滯風險", "F05-WDG-001",
-          len(_safe(lambda: stalls(strands), []) or []), _w)
-
-    # 5 執行連續性
-    def _c():
-        import continuity as CT
-        return "心跳" in CT.burden_verdict(15) or CT.burden_verdict(15) != ""
-    burden = 0
-    w = _safe(work, {}) or {}
-    for t in (w.get("tasks") or []):
-        burden = max(burden, (t.get("continuity") or {}).get("burden") or 0)
-    probe("執行連續性", "F06-EXC-001", burden, _c)
-
-    # 6 記憶用量
-    def _m():
-        return bool(target) and (_safe(lambda: context_state(target), {}) or {}).get("ok")
-    ctx = _safe(lambda: context_state(target), {}) if target else {}
-    probe("記憶用量預警", "F08-CTX-001", ctx.get("pct") or 0, _m)
-
-    # 7 任務帳本
-    def _l():
-        import ledger as L
-        return L.default_db().exists()
-    probe("任務帳本", "F02 §6 obligation ledger",
-          (w.get("total") or 0), _l)
-
-    # 8 換機器盤點
-    def _mg():
-        import migrate as MG
-        inv = MG.inventory()
-        return len(inv.get("items") or []) >= 7
-    mg = _safe(machine, {}) or {}
-    probe("換機器盤點", "§31",
-          sum(1 for x in (mg.get("items") or []) if x.get("ok")), _mg)
-
-    # 9 宣稱對現實
-    def _cl():
-        import claims as C
-        cl = C.Claim(text="我把 這個檔案絕對不存在.py 寫好了。", kind="file",
-                     subject="這個檔案絕對不存在.py")
-        try:
-            C.verify(cl, cwd=REPO)
-        except Exception:                                  # noqa: BLE001
-            return False
-        # 驗得出 VERIFIED、也判得出「查不到」，就是活的。
-        return cl.state in ("REFUTED", "UNVERIFIABLE", "UNKNOWN")
-    probe("宣稱對現實查證", "§7.3　claims + verifier",
-          len(_safe(lambda: verified_claims(strands), []) or []), _cl)
-
-    # 10 北極星
-    def _ns():
-        import northstar as NS
-        return hasattr(NS, "NorthStar") and hasattr(NS, "Chain")
-    ns = _safe(north_star, {}) or {}
-    probe("北極星與版本鏈", "v5.0 §8.1　十個欄位",
-          1 if ns.get("has") else 0, _ns)
-
-    # 11 閱讀涵蓋
-    def _cv():
-        import coverage as CV
-        return hasattr(CV, "CoverageLog") and hasattr(CV, "from_full_read")
-    cv = _safe(reading_coverage, {}) or {}
-    probe("規格讀了幾行", "F08 §5　七級涵蓋度", cv.get("records") or 0, _cv)
-
-    # 12 停止理由
-    def _sr():
-        import stopreason as SR
-        a = SR.classify_stop("UNKNOWN_STOP", has_authorized_next_action=True)
-        return not getattr(a, "ok", True)
-    sr = _safe(lambda: stop_reasons(strands), {}) or {}
-    probe("停在不該停的地方", "F06 §4　八種停止理由",
-          sr.get("count") or 0, _sr)
-
-    # 13 查得回來的段落
-    def _rc():
-        import recall as RC
-        return callable(RC.segment_session) and callable(RC.build_index)
-    rc = _safe(recall_index, {}) or {}
-    probe("查得回來的段落", "階段 C1　索引與查詢",
-          rc.get("segments") or 0, _rc)
-
-    # 14 壓縮後恢復
-    def _rh():
-        import rehydration as RH
-        r = RH.coverage_report(read_ranges=[(1, 10)], total_lines=100)
-        lv = r.get("level") if isinstance(r, dict) else getattr(r, "level", "")
-        return bool(lv) and not RH.is_full_understanding(lv)
-    probe("壓縮後恢復了多少", "F08 §5　七級涵蓋度", 0, _rh)
-
-    # 15 多 session 成果驗收
-    def _wk():
-        import worker as WK
-        bad = WK.WorkerResult(task_id="", step_id="", status="",
-                              summary="", artifacts=[])
-        return len(WK.validate(bad)) > 0
-    wk = _safe(worker_packets, {}) or {}
-    probe("多 session 成果驗收", "F03-CSI-001　Worker Result Packet",
-          wk.get("packets") or 0, _wk)
-
-    # 16 執行層偵測器
-    def _js():
-        import jsbridge as JB
-        return JB.available().get("ok", False)
-    jsr = _safe(lambda: js_layer(strands), {}) or {}
-    probe("執行層偵測器", "src/　FP registry 25 筆",
-          len(jsr.get("findings") or []) if jsr.get("ok") else 0, _js)
-
-    # 17 從某一輪切出新分支
-    def _f():
-        import forkline as FK
-        return callable(FK.fork)
-    probe("從某一輪切分支", "§27　clean fork", len(strands), _f)
-
-    # 自檢自己也要被檢。
-    #
-    # 它跑到這裡就代表它是活的 —— 前面每一項都已經跑過一次合成違規。
-    # 不列它的話，功能表上會有一項永遠顯示「沒反應」，
-    # 而那正是 demo 現場最難解釋的東西。
-    rows.append({
-        "name": "功能自檢",
-        "spec": "§33",
-        "live": sum(1 for r in rows if r["alive"]),
-        "alive": True,
-        "verdict": "活的",
-    })
-
-    dead = [r["name"] for r in rows if not r["alive"]]
-    return {
-        "at": time.time(),
-        "session": target.stem if target else "",
-        "items": rows,
-        "alive": sum(1 for r in rows if r["alive"]),
-        "total": len(rows),
-        "dead": dead,
-    }
-
-
-def machine() -> dict:
-    """這台機器上該搬的東西現在是什麼數字。§31
-
-    owner 2026-09-14 換機器那一晚：
-
-        一個舊電腦搬到新電腦這麼簡單的事情，Forseti 說什麼可以看到
-        我們做了什麼，但沒有一個功能幫的到我。
-
-    那一晚漏掉的是 `claude-code-sessions/` 底下 142 個 local_*.json，
-    也就是每個 session 的工作目錄綁定。少了它，新機器看得到對話標題
-    卻開不了工作目錄，只能走遠端連回舊機 —— 而那件事沒有任何東西
-    會主動說出來，是人一個個發現的。
-
-    這支把「哪些東西該搬、現在有幾個」變成畫面上的一列數字。
-    """
-    import migrate as MG
-    try:
-        return MG.inventory()
-    except Exception as e:                                 # noqa: BLE001
-        return {"error": f"掃不出來：{e}"}
-
-
-def timeline(session: str) -> dict:
-    r = subprocess.run(
-        [sys.executable, str(REPO / "tools" / "timeline.py"), session,
-         "--out", "/tmp/forseti_desktop_timeline.json"],
-        capture_output=True, text=True, timeout=1800)
-    p = Path("/tmp/forseti_desktop_timeline.json")
-    if not p.is_file():
-        return {"error": "timeline 沒有產生輸出",
-                "stderr": r.stderr[-400:]}
-    return json.loads(p.read_text(encoding="utf-8"))
-
-
 # 追蹤器是有狀態的:它記著讀到哪裡,下一次只讀新增的部分。
 # 所以同一個檔案要重用同一個 Tracker,不能每次呼叫都開新的 ——
 # 開新的等於每次重讀 24 MB。
@@ -3144,7 +1816,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
         if fs:
             row["betrayals"] = fs
             hit += len(fs)
-    snap["betrayal_total"] = hit
     # 提早收工。§31
     #
     # owner 2026-09-14 那一整晚的根因:帳本上有已授權的下一步，
@@ -3153,7 +1824,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     import yieldcheck as YC
     yields = _safe(lambda: YC.confirmed(tk.strands), []) or []
     by_yield = {x["n"]: x for x in yields}
-    snap["premature_total"] = len(yields)
 
     starve = _safe(lambda: starving(tk.strands), []) or []
     by_starve = {x["n"]: x for x in starve}
@@ -3164,7 +1834,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
         y = by_yield.get(row.get("n"))
         if y:
             row["premature"] = y
-    snap["starving_total"] = len(starve)
 
     # 宣稱大於證據。betrayal 之外的另一類。
     over = _safe(lambda: overclaims(tk.strands), []) or []
@@ -3175,7 +1844,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
         hits = by_over.get(row.get("n"))
         if hits:
             row["overclaims"] = hits
-    snap["overclaim_total"] = len(over)
 
     # 停滯風險。F05 的正式判定，不是計時器。
     st = _safe(lambda: stalls(tk.strands), []) or []
@@ -3184,7 +1852,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
         x = by_stall.get(row.get("n"))
         if x:
             row["stall"] = x
-    snap["stall_total"] = len(st)
 
     # 宣稱對現實。唯一真的去磁碟查的一組。
     vc = _safe(lambda: verified_claims(tk.strands), []) or []
@@ -3206,16 +1873,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
                 seen.add(k)
                 uniq.append(h)
             row["claims"] = uniq
-    # 查了現實之後沒被證實的宣稱，總數。
-    #
-    # **這個數字不是「說謊幾次」。** `can_refute()` 的規則是沒資格判假
-    # 就不判假，所以絕大多數會停在 UNKNOWN —— 那代表驗證器搆不到，
-    # 不代表它騙人。畫面上必須照這個意思講，不然這個數字會變成
-    # 另一種 overclaim:拿「我查不到」當「你說謊」。
-    snap["claim_total"] = sum(
-        len(r.get("claims") or []) for r in snap.get("rows", []))
-    snap["north_star"] = _safe(north_star, {"has": False}) or {"has": False}
-    snap["recall"] = _safe(recall_index, {"has": False}) or {"has": False}
     js = _safe(lambda: js_layer(tk.strands), {"ok": False}) or {"ok": False}
     snap["js"] = js
     by_js: dict = {}
@@ -3225,20 +1882,8 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
         hits = by_js.get(row.get("n"))
         if hits:
             row["js_findings"] = hits
-    snap["worker"] = _safe(worker_packets, {}) or {}
-    snap["coverage"] = _safe(reading_coverage, {"has": False}) or {"has": False}
-    snap["stops"] = _safe(lambda: stop_reasons(tk.strands), {}) or {}
-    snap["claim_refuted"] = sum(1 for x in vc if x["state"] == "REFUTED")
-    snap["claim_unknown"] = sum(1 for x in vc if x["state"] == "UNKNOWN")
-    snap["claim_unverifiable"] = sum(
-        1 for x in vc if x["state"] == "UNVERIFIABLE")
     snap["context"] = _safe(lambda: context_state(target),
                             {"ok": False, "why": "算不出來"})
-    snap["rehydrate"] = _safe(lambda: rehydrate_state(snap),
-                              {"has": False}) or {"has": False}
-    # 「補回了多少」是溫度計，「該補什麼」是可以直接貼給 AI 的東西。
-    snap["rehydrate_packet"] = _safe(lambda: rehydration_packet(snap),
-                                     {"has": False}) or {"has": False}
     # ── 生命徵象。§22.1 八維度、§11.3 體溫、§22.7 目標距離 ──────
     #
     # 這一段取代先前那個把工具失敗率壓成一個 tint 再染線的做法。
@@ -3257,55 +1902,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     _gs = _safe(lambda: VT.goal_support(_rows), []) or []
     for _r, _g in zip(_rows, _gs):
         _r["goal"] = _g
-    snap["dims"] = _safe(lambda: VT.dimensions(_rows, snap, _gs), {}) or {}
-    snap["temp"] = _safe(lambda: VT.temperature(snap["dims"]), {}) or {}
-    # Health Curve §16.1。不是新演算法，是同一個 dimensions + temperature
-    # 沿著輪次重跑。脈絡與連續性兩維被排除，理由在 vitals.CURVE_EXCLUDED。
-    snap["health_curve"] = _safe(
-        lambda: VT.curve(_rows, snap, _gs),
-        {"has": False, "points": []}) or {"has": False, "points": []}
-    # Blast Radius §16.1。演算法在 `src/cost.js`（M4 CostVector），
-    # `blast.py` 只負責把真實的 import 邊掃出來餵進去。不重寫演算法，
-    # 理由跟 jsbridge.py 檔頭那句一樣：兩份實作會分歧，而分歧那天沒人發現。
-    #
-    # 這一格要起一個 node 子行程，所以放在 _safe 裡，node 不在就整格不顯示。
-    import blast as BL
-    snap["blast"] = _safe(lambda: BL.summary(),
-                          {"has": False, "why": "算不出來"}) \
-        or {"has": False, "why": "算不出來"}
-    # §40 污染登記簿。先前只在 `.forseti/NEXT.md` 上，桌面沒有入口。
-    # 算不出來時 has=False 帶原因，**不回一個空清單** ——
-    # 空清單在畫面上讀起來是「沒有被推翻的結論」，那是一句沒有根據的話。
-    snap["pollution"] = _safe(
-        pollution_panel,
-        {"has": False, "why": "讀不到登記簿，不是沒有污染"}) \
-        or {"has": False, "why": "讀不到登記簿，不是沒有污染"}
-    # §12.2 來源優先序。算不出來時 has=False 帶原因，**不回空清單** ——
-    # 空清單讀起來是「沒有這種狀態」，而實情是「這一格沒算出來」。
-    snap["sot"] = _safe(
-        sot_panel,
-        {"has": False, "why": "算不出來，不是沒有來源問題"}) \
-        or {"has": False, "why": "算不出來，不是沒有來源問題"}
-    # §11.1 持久身份。算不出來時 has=False 帶原因，**不回空清單** ——
-    # 空清單讀起來是「五個軸都沒事」，而實情是「這一格沒算出來」。
-    snap["identity"] = _safe(
-        identity_panel,
-        {"has": False, "why": "算不出來，不是身份沒問題"}) \
-        or {"has": False, "why": "算不出來，不是身份沒問題"}
-    # §5 / §17.1 Workflow。算不出來時 has=False 帶原因，**不回空清單** ——
-    # 空清單讀起來是「沒有待續的工作」，而實情是「這一格沒算出來」。
-    snap["workflow"] = _safe(
-        workflow_panel,
-        {"has": False, "why": "算不出來，不是沒有待續的 workflow"}) \
-        or {"has": False, "why": "算不出來，不是沒有待續的 workflow"}
-    # §15 Probe Packs。算不出來時 has=False 帶原因，**不回空清單** ——
-    # 空清單讀起來是「沒有哪一類退化」，而實情是「這一格沒算出來」。
-    snap["probe"] = _safe(
-        probe_panel,
-        {"has": False, "why": "算不出來，不是沒有哪一類退化"}) \
-        or {"has": False, "why": "算不出來，不是沒有哪一類退化"}
-    snap["goal_trend"] = _safe(lambda: VT.distance_trend(_gs), 0.0)
-    snap["progress"] = _safe(lambda: VT.progress_layers(_rows), {}) or {}
     # 偏離北極星的警示。§5.4 三條件同時成立才跳，掛在那一輪上，
     # 因為「你看到的位置就是它發生的位置」(§5.1)。
     # GAC 閘門。§28.6 / FS-GOL-001。2026-09-15 接上。
@@ -3335,6 +1931,11 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
             if _dd:
                 _acts.append(str(_dd))
     _gate = _safe(lambda: GG.gate(actions=_acts, turns_since_owner=_since), None)
+    # 【2026-09-18 砍完之後補回來】畫面上沒有人讀這一欄,可是
+    # `_write_handoff()` 讀它 —— 交接檔不是畫面,它是另一個消費端。
+    # 這一輪照「畫面有沒有讀」砍欄位,把它跟 `checkpoints` 一起砍掉了,
+    # `tests/test_handoff.py` 抓到。判準要寫清楚:
+    # **一個欄位有沒有用,看的是有沒有消費端,不是有沒有畫出來。**
     snap["goal_gate"] = _gate or {"ok": False,
                                   "note": "goalgate 跑不起來",
                                   "gac": None, "may_confirm_drift": False}
@@ -3344,12 +1945,7 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
         _a = _by_n.get(_r.get("n"))
         if _a:
             _r["drift_alert"] = dict(_a, prompt=VT.drift_prompt(_a))
-    snap["drift_alerts"] = len(_alerts)
 
-    snap["spec"] = _safe(spec_reading, {}) or {}
-    # advice 先算，卡片要吸收它 —— 頂部只留一組建議，不並排兩組。
-    snap["corrections"] = sum(1 for _r in _rows if _r.get("corrected_by_owner"))
-    snap["nudges"] = sum(1 for _r in _rows if _r.get("nudge_by_owner"))
 
     # 介入面。§32
     #
@@ -3357,51 +1953,12 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     # 那會改變正在被量測的東西。所以這裡只算「現在可以做什麼」，
     # 真的要做的是人，而且每一次都要記進帳本。
     import intervene as IV
-    snap["interventions"] = _safe(lambda: IV.decide(snap), []) or []
-    # 【2026-09-15 接上】每個介入動作附一個可以被查核的探針。
-    #
-    # `build_probe` 的規則是這一支存在的理由:**不准問「你是不是飄移了」。**
-    # 問了只會拿到流利的否認，而否認本身是 DECLARED，
-    # 在對照到可觀測的現實之前不會升級成事實。
-    for _iv in snap["interventions"]:
-        _pb = _safe(lambda a=_iv: IV.build_probe(
-            reason=a.get("why") or a.get("action") or "",
-            window_ref=f"第 {snap.get('strands') or 0} 輪為止"), None)
-        if _pb:
-            _iv["probe"] = {
-                "forbidden": _pb.get("forbidden") or [],
-                "ceiling": _pb.get("answer_epistemic_ceiling", ""),
-                "must_log": _pb.get("must_log_as_intervention", True),
-            }
 
     snap["advice"] = _safe(
         lambda: session_advice(snap.get("rows") or [], hit,
                                snap.get("total_failed") or 0, snap),
         {"text": "建議算不出來", "why": "", "tone": "info", "n": 0, "say": ""})
-    # 卡片吸收 advice，所以一定要排在它後面。
-    snap["cards"] = _safe(lambda: VT.cards(snap, snap.get("advice")), []) or []
 
-    # 壓縮過就多一張卡:該補回去的脈絡，可以直接複製貼給 AI。
-    # §6.2 要求差集寫成一張條子掛在黑點上 —— 一份組好了卻沒有出口的
-    # packet，跟沒組是一樣的。排在最前面因為失憶是所有問題的上游。
-    _pk = snap.get("rehydrate_packet") or {}
-    if _pk.get("has") and _pk.get("say"):
-        snap["cards"].insert(0, {
-            "key": "rehydrate",
-            "title": "對話壓縮過，把這段脈絡貼回去給它",
-            "say": _pk["say"],
-            "why_now": f"第 {_pk.get('at_round')} 輪發生過壓縮，"
-                       f"壓縮前你講過的話有 {_pk.get('fragments', 0)} 段"
-                       f"可能已經不在它的記憶裡",
-            "evidence": f"packet {_pk.get('size', 0)}/{_pk.get('limit', 0)} bytes，"
-                        f"決定 {_pk.get('decisions', 0)}、"
-                        f"約束 {_pk.get('constraints', 0)}、"
-                        f"未解 {_pk.get('unknowns', 0)}",
-            "confidence": "高　片段是你親口講的原文，不是我的摘要",
-            "if_ignored": "它會拿壓縮後的摘要繼續做，"
-                          "而摘要裡沒有你講過的那些限制",
-            "n": _pk.get("at_round"),
-        })
 
     # 建議軌跡。§11 / owner 2026-09-15「每個決定都會跟 forseti 的建議做分岔」。
     #
@@ -3409,7 +1966,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     # 這裡把每一輪呈現出來的卡片記進帳本，下一輪如果同一張還在，
     # 代表那個狀況沒有解除，分岔就往外開一格。
     import advicetrack as AT
-    _cards = snap.get("cards") or []
     _n_now = (snap.get("rows") or [{}])[-1].get("n")
     # 問題軌道。owner 2026-09-16:「改成用問題來畫軌道」。
     #
@@ -3429,26 +1985,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     snap["notes"] = _safe(lambda: NT.summary(_sid0),
                           {"total": 0, "turns": []}) or {"total": 0}
 
-    # Authority。§9 誰有權把提議變成事實。
-    #
-    # claims 收的是真實存在過的權威競爭。現在有兩筆,都是已經發生過
-    # 而且被解決掉的:北極星的單向對雙向（owner 2026-09-15 拍板單向）,
-    # 以及 FP-11 的家族 A 對 B（兩份清單分歧,spec 第 664 行判 A）。
-    # **留著是因為「曾經有兩個來源說自己說了算」這件事本身要看得見** ——
-    # 這種東西平常不會報錯，兩邊各自都成功，然後結果不一致。
-    import authority as AU
-    _claims = [
-        {"resource": ".forseti/NORTH_STAR.md 的方向",
-         "principal": "OWNER", "detail": "2026-09-15 拍板單向"},
-        {"resource": ".forseti/NORTH_STAR.md 的方向",
-         "principal": "CANONICAL_STATE", "detail": "Vol1 §2 寫的是雙向"},
-        {"resource": "FP-11 的家族",
-         "principal": "CANONICAL_STATE", "detail": "spec-v2.0 第 664 行判 A"},
-        {"resource": "FP-11 的家族",
-         "principal": "AGENT_INFERENCE", "detail": "betrayal.py 手寫表曾寫 B"},
-    ]
-    snap["authority"] = _safe(lambda: AU.summary(_claims),
-                              {"has_collision": False}) or {}
 
     # 修正延遲。白皮書 §5.4 從偏離開始到被拉回來隔了多久。
     #
@@ -3459,13 +1995,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     import latency as LT
     snap["latency"] = _safe(lambda: LT.summary(_rows), {"has": False}) or {"has": False}
 
-    # 接手閘門。§17.3 沒證明讀懂之前，高風險工作只准讀不准寫。
-    #
-    # 這一條可以合法硬擋:can_intervene 的 BLOCK_HIGH_RISK 要的是
-    # 「硬前提不明或被推翻」，而「接手的人沒證明自己讀懂規格」正是那個。
-    import gate as GT
-    snap["gate"] = _safe(lambda: GT.status(_sid0),
-                         {"writable": False, "reason": "UNKNOWN"}) or {}
 
     # 第一個分歧點。§16.4 / §6.3
     #
@@ -3477,15 +2006,12 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     snap["divergence"] = _safe(lambda: DV.summary(_rows),
                                {"has": False}) or {"has": False}
 
-    # Two-Phase Commit。§9.3 準備跟提交是兩個權限等級。
-    #
-    # **停在半路的要看得見。** 一個停在 PREPARED 的東西，跟一個沒開始的
-    # 東西，在畫面上必須有差別，不然人會以為它沒做 —— 然後再做一次。
-    import commit as CM
-    snap["commits"] = _safe(CM.summary, {"total": 0, "pending": []}) or {"total": 0}
 
     # Checkpoint。§17 可以回去的那一刻。
     import checkpoint as CP
+    # 交接檔的「最後一個已知良好的點」讀這一欄。它一定要排在
+    # `_write_handoff()` 之前,不然那一格永遠印「沒有」——
+    # 那是 2026-09-16 真的發生過的 bug,`test_handoff.py` 守著它。
     snap["checkpoints"] = _safe(lambda: CP.summary(_sid0),
                                 {"total": 0, "rows": []}) or {"total": 0}
     _cplist = _safe(lambda: CP.load(session=_sid0), []) or []
@@ -3535,10 +2061,6 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     _sid = str(snap.get("session") or snap.get("ui_id") or "")
     if _n_now is not None:
         _safe(lambda: AT.record(_cards, n=_n_now, session=_sid), [])
-    _now_ids = {AT.advice_id(c) for c in _cards}
-    snap["advice_track"] = _safe(
-        lambda: AT.summary(AT.load(session=_sid), _now_ids),
-        {"has": False, "offset_now": 0, "divergence": []}) or {"has": False}
     return snap
 
 
@@ -3744,11 +2266,6 @@ def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else "snapshot"
     if cmd == "snapshot":
         print(json.dumps(snapshot(), ensure_ascii=False))
-    elif cmd == "timeline":
-        if len(argv) < 3:
-            print(json.dumps({"error": "要給 session id"}, ensure_ascii=False))
-            return 2
-        print(json.dumps(timeline(argv[2]), ensure_ascii=False))
     elif cmd == "strands":
         print(json.dumps(strands(argv[2] if len(argv) > 2 else ""),
                          ensure_ascii=False))
@@ -3768,48 +2285,8 @@ def main(argv: list[str]) -> int:
             return 2
         print(json.dumps(act(argv[2], argv[3], argv[4] if len(argv) > 4 else ""),
                          ensure_ascii=False))
-    elif cmd == "audit":
-        print(json.dumps(audit(), ensure_ascii=False))
     elif cmd == "spec_reading":
         print(json.dumps(spec_reading(), ensure_ascii=False))
-    elif cmd == "block_reading":
-        print(json.dumps(block_reading(), ensure_ascii=False))
-    elif cmd == "sufficiency":
-        print(json.dumps(sufficiency_state(argv[2] if len(argv) > 2 else ""),
-                         ensure_ascii=False))
-    elif cmd == "features":
-        print(json.dumps(features(), ensure_ascii=False))
-    elif cmd == "selftest":
-        print(json.dumps(selftest(), ensure_ascii=False))
-    elif cmd == "machine":
-        print(json.dumps(machine(), ensure_ascii=False))
-    elif cmd == "work":
-        print(json.dumps(work(), ensure_ascii=False))
-    elif cmd == "blast_detail":
-        # blast_detail <檔案路徑>　點一個節點看誰依賴它。
-        if len(argv) < 3:
-            print(json.dumps({"error": "用法：blast_detail <檔案路徑>"},
-                             ensure_ascii=False))
-            return 2
-        print(json.dumps(blast_detail(argv[2]), ensure_ascii=False))
-    elif cmd == "pollution":
-        # pollution　§40 登記簿：哪些話已經被推翻了，為什麼會錯。
-        print(json.dumps(pollution_panel(), ensure_ascii=False))
-    elif cmd == "workflow":
-        # workflow [workflow_id]　§5 / §17.1：程序死掉之後接哪一步。
-        if len(argv) > 2:
-            print(json.dumps(workflow_resume(argv[2]), ensure_ascii=False))
-        else:
-            print(json.dumps(workflow_panel(), ensure_ascii=False))
-    elif cmd == "identity":
-        # identity　§11.1：身份跟 model / session / process 分得開嗎。
-        print(json.dumps(identity_panel(), ensure_ascii=False))
-    elif cmd == "sot":
-        # sot [問句]　§12.2：這一類狀態該信哪個來源。
-        if len(argv) > 2:
-            print(json.dumps(sot_ask(" ".join(argv[2:])), ensure_ascii=False))
-        else:
-            print(json.dumps(sot_panel(), ensure_ascii=False))
     elif cmd == "sessions":
         print(json.dumps(sessions(), ensure_ascii=False))
     elif cmd == "fork":

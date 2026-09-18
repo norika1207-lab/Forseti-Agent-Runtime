@@ -204,9 +204,12 @@ BINDINGS: tuple[dict, ...] = (
         "key": "owner_decision",
         "state": "PARTIAL",
         "uses": "帳本裡真的發生過的狀態轉換（TASK_STATE / HANDOFF / STOP）",
+        # 【2026-09-18 換憑據】原本指的是 `desktop_api.rehydration_packet()`
+        # 裡那一行註解,而那是消費端 —— 消費端消失(那一輪砍掉畫面上
+        # 沒有人看的東西)憑據就腐爛,可是來源一直都在。
+        # 換成帳本真的寫下那種事件的那一行,它才是這條說法的來源。
         "evidence": (
-            ("apps/forseti-cli/desktop_api.py", 1133,
-             "決策用帳本裡真的發生過的狀態轉換"),
+            ("apps/forseti-cli/ledger.py", 468, 'self._event("TASK_STATE"'),
             ("apps/forseti-cli/contract.py", 1387, '"claims_allowed": NoSource'),
         ),
         "note": "帳本這一半在。簽署過的政策物件不存在 ——"
