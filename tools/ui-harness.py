@@ -85,7 +85,15 @@ def build(out: Path, fake: bool, session: str = "") -> None:
     # harness 起不來。查不到的那些由 stub 回「沒有預先算」，不回空的。
     blast_rows = {"__by_arg": "target", "rows": {}}
     try:
-        import blast as BL
+        # 【2026-09-18】走 `desktop_api.blast_detail()`,不是 `blast.detail()`。
+        #
+        # 先前直接叫 `BL.detail()`,那繞過了畫面真正會叫的那一層。
+        # 後果是 harness 的 fixture 跟真的 App 回傳不一樣 ——
+        # `desktop_api` 在那一層補上的東西(2026-09-18 的血脈就是一個)
+        # 在瀏覽器版完全看不到,而 `test_ui_render` 是透過 harness 驗的,
+        # 於是那些東西連測試都驗不到。
+        #
+        # 症狀是最難查的那一種:兩邊都「正常」,只是不一樣。
         want = [t.get("target") for t in
                 ((data.get("blast") or {}).get("top") or []) if t.get("target")]
         # 排行榜以外再預算兩個，因為搜尋框的出口條件正是「排行榜上沒有
@@ -96,8 +104,24 @@ def build(out: Path, fake: bool, session: str = "") -> None:
                 break
             if extra not in want:
                 want.append(extra)
+        # 再加上「有血脈的那幾個」。
+        #
+        # 排行榜挑的是最貴的檔(誰依賴它最多),而有血脈的是被某個
+        # workflow step 產出的 —— 兩份名單重不重疊完全是巧合。
+        # 實測 2026-09-18:排行榜十個裡一個都沒有血脈,於是那一段在
+        # 瀏覽器版永遠只看得到「沒有一條指到這個檔」,展示不出有邊的樣子。
+        try:
+            import lineage as LN
+            for e in LN.load():
+                t = e.get("to_id")
+                if t and t not in want:
+                    want.append(t)
+                if len(want) >= 18:
+                    break
+        except Exception:                     # 血脈算不出來不該擋住畫面
+            pass
         for tgt in want:
-            blast_rows["rows"][tgt] = BL.detail(tgt)
+            blast_rows["rows"][tgt] = D.blast_detail(tgt)
     except Exception as e:  # harness 是開發工具，算不出來不該擋住整個畫面
         blast_rows["rows"] = {}
         print(f"  blast_detail 算不出來：{e}", file=sys.stderr)

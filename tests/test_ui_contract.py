@@ -50,6 +50,16 @@ HEADER_KIDS_NEEDING_PASSTHROUGH = (".bar{", ".subs{", ".adviceBox{",
 HEADER_KIDS_INTERACTIVE = ()
 
 
+def _strip_py_comments(src: str) -> str:
+    """把 docstring 與 `#` 註解拿掉，只留程式碼。
+
+    掃原始碼找字串的檢查，掃到自己的註解就會得到相反的結論 ——
+    這個專案 2026-09-18 一天之內踩了三次。
+    """
+    src = re.sub(r'"""[\s\S]*?"""', "", src)
+    src = re.sub(r"'''[\s\S]*?'''", "", src)
+    return re.sub(r"^\s*#.*$", "", src, flags=re.M)
+
 def _header_children() -> set:
     """<header> 底下第一層元素的 class 或 id。
 
@@ -1181,6 +1191,57 @@ class SheetRenderersAreActuallyCalled(unittest.TestCase):
                       "重畫那一條沒有叫 renderBlastHits，"
                       "每次重畫之後搜尋結果整塊消失，"
                       "而輸入框裡的字還在")
+
+class HarnessUsesTheRealBackend(unittest.TestCase):
+    """harness 的 fixture 要走畫面真正會叫的那一層。
+
+    【2026-09-18 抓到的】`ui-harness.py` 先前直接叫 `blast.detail()`,
+    而畫面按下去走的是 `desktop_api.blast_detail()`。兩者差一層,
+    而 `desktop_api` 在那一層補的東西(那天補的血脈就是一個)
+    在瀏覽器版完全看不到。
+
+    更糟的是 `tests/test_ui_render.py` 是透過 harness 驗的,
+    所以那些東西連測試都驗不到 —— 兩邊都「正常」,只是不一樣,
+    那是最難查的一種。
+
+    這一組釘住:harness 裡每一個 invoke 得到的指令,
+    都要從 `desktop_api` 那一層取,不准繞過去直接叫底層模組。
+    """
+
+    HARNESS = (UI.parents[1] / "tools" / "ui-harness.py").read_text(
+        encoding="utf-8")
+
+    #: 去掉 docstring 與 # 註解之後的原始碼。
+    #:
+    #: 【這個毛病這個專案一天之內踩了三次】判準直接掃全文的話，
+    #: 會抓到「解釋這件事」的那段註解本身。`AT-HOOK-R3` 做對了
+    #: （它先把註解換成等長空行），這裡第一版忘了，於是新寫的註解裡
+    #: 提到 `BL.detail()` 就讓測試紅了 —— 紅的原因是註解不是程式碼。
+    CODE = _strip_py_comments(HARNESS)
+
+    def test_blast_detail走desktop_api(self):
+        self.assertIn("D.blast_detail(", self.CODE,
+                      "harness 沒走 desktop_api.blast_detail，"
+                      "fixture 會跟真的 App 回傳不一樣")
+        self.assertNotIn("BL.detail(", self.CODE,
+                         "harness 還在直接叫 blast.detail，那繞過了畫面"
+                         "真正會走的那一層")
+
+    def test_fixture的每一把鑰匙都對得上前端會叫的指令(self):
+        """前端 invoke 的指令，fixture 要有對應的鍵。
+
+        2026-09-14 實測過的症狀：加了 spec_reading 跟 block_reading
+        之後忘了補 fixture，瀏覽器版點「讀文件」什麼都沒有 ——
+        看起來跟渲染函式寫壞完全一樣。
+        """
+        cmds = set(re.findall(r'invoke\("([a-z_]+)"', JS))
+        # 這幾個會改狀態，harness 不 stub 它們（開發工具不寫帳本）。
+        cmds -= {"act", "note_add", "open_session", "fork"}
+        for c in sorted(cmds):
+            with self.subTest(cmd=c):
+                self.assertIn(f'"{c}"', self.HARNESS,
+                              f"前端會叫 {c}，而 harness 的 fixture 沒有它")
+
 
 class NoNetworkFonts(unittest.TestCase):
     """離線是這個 app 的常態。
