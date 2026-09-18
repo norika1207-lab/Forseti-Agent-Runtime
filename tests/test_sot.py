@@ -261,3 +261,103 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class 桌面入口(unittest.TestCase):
+    """§12.2 的畫面投影。守的是入口這一段，不重測登記簿本身。
+
+    要抓的是一整類會靜默說謊的事:
+
+      「沒量」被投影成一個綠燈 —— 沒有被檢查過的燈比沒有燈更糟
+      「不適用」跟「還沒接」被畫成同一種灰 —— 欠的那塊會消失
+      畫面函式被誰刪掉或改名，而 snap 照樣帶著資料
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import desktop_api as D
+        cls.D = D
+        cls.APP = (ROOT / "desktop" / "ui" / "app.js").read_text(
+            encoding="utf-8")
+        cls.CSS = (ROOT / "desktop" / "ui" / "app.css").read_text(
+            encoding="utf-8")
+
+    def test_投影出來的類數跟表一樣(self):
+        p = self.D.sot_panel()
+        self.assertTrue(p["has"])
+        self.assertEqual(len(p["rows"]), 7)
+        self.assertEqual(p["total"], 7)
+
+    def test_沒量的那幾行live是None不是空字典(self):
+        # 空字典在畫面上會被當成「查過了，沒事」。
+        p = self.D.sot_panel()
+        nones = [r for r in p["rows"] if r["live"] is None]
+        self.assertEqual(len(nones), 6)
+        self.assertEqual(p["live_measured"], 1)
+
+    def test_畫面函式存在而且被呼叫(self):
+        self.assertIn("function renderSot(", self.APP)
+        self.assertIn("renderSot(d)", self.APP)
+        self.assertIn("renderSot(lastSnap", self.APP)
+
+    def test_畫面讀的是live不是自己重算(self):
+        # 兩份實作會分歧，而分歧那天沒有人會發現。
+        self.assertIn("r.live.git_authoritative", self.APP)
+        self.assertNotIn("divergent > 0", self.APP)
+
+    def test_沒量的時候畫面講的是沒有即時量測不是正常(self):
+        self.assertIn("這一行沒有即時量測", self.APP)
+        self.assertNotIn("一切正常", self.APP)
+
+    def test_不適用跟沒有來源在畫面上是兩種字(self):
+        self.assertIn('BOUND: "接上了"', self.APP)
+        self.assertIn('NO_SOURCE: "沒有來源"', self.APP)
+        self.assertIn('NOT_APPLICABLE: "不適用"', self.APP)
+        # 而且 CSS 上分得出來：不適用淡，沒有來源不淡。
+        self.assertIn(".sotSt.NOT_APPLICABLE", self.CSS)
+        self.assertIn(".sotSt.NO_SOURCE", self.CSS)
+
+    def test_憑據過期要在畫面上喊(self):
+        self.assertIn("憑據找不到了", self.APP)
+        self.assertIn("sotStale", self.CSS)
+
+    def test_捲動位置會被放回去而且夾住上限(self):
+        # 跟 .plList 同一個根因：每 1 到 3 秒整塊換 innerHTML。
+        # 不夾上限的話，筆數變少時會停在一個空白的位置。
+        i = self.APP.index("function renderSot(")
+        seg = self.APP[i:i + 6000]
+        self.assertIn("keepScroll", seg)
+        self.assertIn("Math.min(keepScroll", seg)
+        self.assertIn("scrollHeight - list.clientHeight", seg)
+
+    def test_捲動事件委派在只建立一次的容器上(self):
+        # .sotList 每次重畫都是新節點，逐次綁會累積孤兒 listener。
+        i = self.APP.index("function renderSot(")
+        seg = self.APP[i:i + 6000]
+        self.assertIn("box.dataset.scrollBound", seg)
+        # 捕獲階段。scroll 不冒泡，第三個參數是 true 不是省略。
+        self.assertIn("}, true);", seg)
+
+    def test_syncPlCut收得了第二個選擇器(self):
+        # 兩格共用同一套捲動修正，不要長出第二份會分歧的實作。
+        self.assertIn('function syncPlCut(list, moreSel = ".plMore")',
+                      self.APP)
+        self.assertIn('syncPlCut(list, ".sotMore")', self.APP)
+
+    def test_CSS跟著八維度同一個展開開關(self):
+        self.assertIn(".dims.open ~ .sot{display:block}", self.CSS)
+
+    def test_每一個用到的class在CSS裡都有(self):
+        import re
+        i = self.APP.index("function renderSot(")
+        seg = self.APP[i:i + 6000]
+        used = set(re.findall(r'class="(sot[A-Za-z]*)', seg))
+        for c in used:
+            self.assertIn("." + c, self.CSS, f"{c} 沒有樣式")
+
+    def test_snap帶得出這一格(self):
+        snap = self.D.strands()
+        self.assertIn("sot", snap)
+        self.assertTrue(snap["sot"].get("has"))
+
+    def test_CLI問得到而且對不上時不回答(self):
+        self.assertTrue(self.D.sot_ask("服務健康狀態該信誰")["ok"])
+        self.assertFalse(self.D.sot_ask("隨便問一句")["ok"])

@@ -197,5 +197,158 @@ class Denominator(unittest.TestCase):
         self.assertIn("不代表", why)
 
 
+class Wiring(unittest.TestCase):
+    def test_snap帶得出這一欄而且是在strands裡面(self):
+        # 用原始碼位置釘住接線，跟 test_handoff.py 那次同一條。
+        # 只驗函式算得出來是不夠的:`pollution_panel()` 自己會過，
+        # 而畫面永遠拿不到 —— 這正是這一輪要補的那個缺口本身。
+        import inspect
+        body = inspect.getsource(D.strands)
+        self.assertIn('snap["pollution"] = _safe(', body)
+        # fallback 不准是空清單。這一條跟 test_讀不到的時候不回空清單
+        # 各守一半:那條守函式，這條守接線處寫死的那個預設值。
+        self.assertIn('"has": False', body.split('snap["pollution"]')[1][:400])
+
+    def test_分母跟只靠人記得的那幾筆接到畫面上(self):
+        """**後端改對而畫面沒接，是靜默的。**
+
+        `pollution_panel()` 現在回得出分母與那幾個 id，而畫面照樣
+        可以只印一個沒有分母的數字 —— 那個狀態跑測試會全綠，
+        因為後端那幾條都過了。所以這一條在畫面這一側釘住。
+
+        跟 `test_snap帶得出這一欄` 是同一條原則的兩端：
+        那條守後端到 snap，這條守 snap 到畫面。
+        """
+        self.assertIn("p.guard_denominator", APP)
+        self.assertIn("p.unguarded_ids", APP)
+        # 有那幾筆的時候才印。`p.unguarded` 是 0 的時候印一句
+        # 「剩下 0 筆只靠人記得」是噪音，不是資訊。
+        self.assertIn("p.unguarded\n      ? ", APP)
+
+    def test_畫面上分母那一句不准只印數字(self):
+        """數字旁邊沒有分母，讀的人只能拿旁邊最近的那個數字去配。
+
+        這一格旁邊最近的是 `p.open`，而 2026-09-18 之前那個數字
+        接的是 `summary()['guarded']`（分母是 total）—— 配起來剛好
+        對得上，所以錯的狀態看起來是對的。
+        """
+        seg = APP.split("p.guarded_note")[1][:400]
+        self.assertIn("分母是", seg)
+        # 舊那一欄不准被接回去。它一句話講完兩堆，接回去就是
+        # `test_那兩行不准重複講同一句` 記的那個症狀。
+        # 用 regex 是因為 `p.guarded_note` 也含 `p.guard` 這個前綴，
+        # 單純的子字串比對分不開這兩個名字。
+        self.assertIsNone(re.search(r"p\.guard_note\b", APP),
+                          "畫面接回了 guard_note，那一句含著第二行整句")
+
+    def test_那兩行不准重複講同一句(self):
+        """**2026-09-18 實測撞到的，不是預防性假設。**
+
+        第一行原本接的是 `guard_note`，而那一句是一句話講完兩堆
+        （「⋯攔著的筆數。其餘那些現在只靠人記得」）。第二行接上去
+        之後，畫面長成：
+
+            ⋯其餘那些現在只靠人記得：19 筆，分母是⋯
+            剩下 2 筆現在只靠人記得：pol-⋯
+
+        兩行都說了同一句，而後面那一行才是有資訊的那一行。
+        所以說明拆成 `guarded_note` 與 `unguarded_note` 各管一行。
+        """
+        pn = D.pollution_panel()
+        一 = pn["guarded_note"]
+        二 = pn["unguarded_note"]
+        self.assertTrue(一.strip())
+        self.assertTrue(二.strip())
+        self.assertNotIn(二, 一, "第一行的說明裡含著第二行整句，會重複")
+        self.assertNotIn(一, 二)
+        # `basis` 是回答「憑什麼這樣分」的，不是畫面文案 ——
+        # 它含著兩堆是對的，所以它不准被接到任何一行上。
+        self.assertNotIn("p.guard_basis", APP)
+
+    def test_那幾個id後面的話要接得成句(self):
+        """caveat 分開一欄，因為 id 要夾在中間。
+
+        併成一句的話排版會變成「⋯只靠人記得。重驗過不等於機制被
+        擋住了：pol-xxx」—— 句號後面接冒號。**排版歸畫面，句子歸後端**，
+        所以後端那兩欄各自都不准自帶標點。
+        """
+        pn = D.pollution_panel()
+        for k in ("guarded_note", "unguarded_note", "unguarded_caveat"):
+            v = pn[k]
+            self.assertTrue(v.strip(), k)
+            for 標點 in ("。", "：", ":"):
+                self.assertNotIn(標點, v, f"{k} 自帶標點，排版要歸畫面")
+        self.assertIn("p.unguarded_caveat", APP)
+
+    def test_畫面函式有定義而且被呼叫(self):
+        self.assertIn("function renderPollution(d) {", APP)
+        # 定義一次、呼叫兩次(輪詢那條與展開那條)。少接一邊的症狀是
+        # 「展開的時候是空的，兩秒後才出現」或反過來，都不會報錯。
+        self.assertEqual(len(re.findall(r"renderPollution\(", APP)), 3)
+
+    def test_跟八維度共用同一個展開開關(self):
+        self.assertIn(".dims.open ~ .pollution{display:block}", CSS)
+
+    def test_畫面上不准把null印成0(self):
+        # 這一條釘的是那一行判斷本身。改成 `r.radius || 0` 之類的寫法，
+        # 畫面會靜默地把「算不出來」變成「沒有擴散」。
+        self.assertIn("r.radius == null", APP)
+        self.assertIn("擴散半徑算不出來", APP)
+
+    def test_捲動位置在重畫之後要放回去(self):
+        """**這一格捲得動，而它每 1 到 3 秒整塊換 innerHTML。**
+
+        實測過:捲到底 450px，6.5 秒後 scrollTop 回到 0，而且節點已經
+        不是同一個。症狀是第 3、4 筆永遠看不到，程式沒有任何錯誤 ——
+        跟搜尋框吃掉使用者的字是同一個根因。
+        """
+        self.assertIn("keepScroll", APP, "重畫前沒有記下捲動位置")
+        self.assertIn("list.scrollTop = Math.min(keepScroll", APP,
+                      "放回去的時候沒有夾住上限，筆數變少會停在空白處")
+
+    def test_捲得動這件事要看得見而且是量出來的(self):
+        """內容塞得下的時候印一句「往下捲」是假的，所以那兩個判斷要量。
+
+        **這一條第一版是假的守備**:它只檢查 `scrollHeight - clientHeight`
+        有沒有出現在檔案裡，而那個算式在還原捲動位置那一行也有，
+        所以把判斷寫死成 `true` 照樣會過。反向驗證第 4 次抓到。
+        現在釘的是那兩個判斷本身。
+        """
+        # 2026-09-16 21:x 這一行本來釘死整個參數列。§12.2 那一格接進來
+        # 之後，這支函式多收一個選擇器參數（兩格共用同一套捲動修正，
+        # 不長第二份會分歧的實作），所以這裡只釘函式在不在 ——
+        # 真正的守備是下面那三條判斷，它們沒有變。
+        self.assertIn("function syncPlCut(list", APP)
+        # 漸層要跟著捲動位置變。只看內容有沒有超出的版本，捲到底
+        # 還是會把最後一筆的出處淡掉 —— 一個永遠亮著的「還有更多」
+        # 跟沒有提示一樣沒用，而且它會蓋掉真的內容。截圖抓到的。
+        self.assertIn("list.scrollHeight - list.clientHeight - list.scrollTop",
+                      APP, "漸層沒有算捲動位置，到底了還會繼續切")
+        self.assertIn('list.classList.toggle("cut", rest > 1)', APP)
+        self.assertIn("plMore", APP)
+        self.assertIn(".plMore", CSS)
+        self.assertIn(".plList.cut", CSS, "被切一半要讀得出是「下面還有」")
+
+    def test_捲動事件委派在只建立一次的容器上(self):
+        """`.plList` 每次重畫都是新節點，逐次綁會累積成孤兒 listener。
+
+        跟 `.blQ` 那次同一條。scroll 不冒泡，所以要走捕獲階段 ——
+        少了那個 true，漸層就不會跟著捲動變，而且不會有錯誤訊息。
+        """
+        self.assertNotIn('.plList").addEventListener', APP)
+        self.assertIn('box.addEventListener("scroll"', APP)
+        self.assertIn("}, true);", APP, "scroll 不冒泡，沒有捕獲階段收不到")
+        self.assertIn("box.dataset.scrollBound", APP, "沒有防重複綁定")
+
+    def test_用到的class都有樣式(self):
+        # 2026-09-14 的 --accent-dark 事件同一類:JS 用了、CSS 沒有，
+        # 不報錯，只是那一塊變成沒有樣式的裸文字。
+        used = set(re.findall(r'class="(pl[A-Za-z]+)"', APP))
+        used |= set(re.findall(r'class="(pl[A-Za-z]+) ', APP))
+        self.assertTrue(used)
+        for c in used:
+            self.assertIn(f".{c}", CSS, f"{c} 沒有樣式")
+
+
 if __name__ == "__main__":
     unittest.main()

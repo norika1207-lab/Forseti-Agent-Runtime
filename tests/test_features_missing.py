@@ -108,5 +108,38 @@ class 每一筆都說得出被什麼擋住(unittest.TestCase):
                                 f"只用到 {kinds}，分類等於裝飾")
 
 
+class 畫面真的畫得出來(unittest.TestCase):
+
+    def setUp(self):
+        self.js = APP_JS.read_text(encoding="utf-8")
+        self.css = APP_CSS.read_text(encoding="utf-8")
+
+    def test_前端有讀那一份(self):
+        """比對的是「渲染迴圈吃得到那份資料」，不是字串出現過。
+
+        先前寫成 `assertIn("r.missing", js)`，而 `r.missing_by_barrier`
+        那一行也含有這個子字串 —— 於是把真正讀資料那一行整個換掉
+        它也不會紅（2026-09-17 反向驗證當場抓到）。
+        跟 §28.9 記的是同一個形狀:檢查找到的是別的東西。
+        """
+        import re
+        m = re.search(r"const\s+miss\s*=\s*r\.missing\b", self.js)
+        self.assertIsNotNone(
+            m, "渲染那一段沒有從 r.missing 取資料，那一份在畫面上不存在")
+        self.assertIn("miss.forEach", self.js, "取了但沒有畫出來")
+        self.assertIn("r.missing_by_barrier", self.js, "四種擋法的計數沒讀")
+
+    def test_擋住的理由畫得出來(self):
+        self.assertIn("fiBlock", self.js)
+        self.assertIn(".fiBlock{", self.css)
+
+    def test_四種擋法四個顏色(self):
+        """混成同一色的話，「一行都沒有」跟「等你決定」看起來一樣。"""
+        for k in D.BARRIER_LABEL:
+            with self.subTest(barrier=k):
+                self.assertIn(f".fi.b-{k} .fiTag{{", self.css,
+                              f"{k} 沒有自己的顏色")
+
+
 if __name__ == "__main__":
     unittest.main()
