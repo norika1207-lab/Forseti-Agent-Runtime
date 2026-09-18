@@ -2242,8 +2242,40 @@ def blast_detail(target: str) -> dict:
     沒有人會發現（`jsbridge.py` 檔頭那句話）。
     """
     import blast as BL
-    return _safe(lambda: BL.detail(str(target or "")),
-                 {"has": False, "target": target, "why": "算不出來"})
+    out = _safe(lambda: BL.detail(str(target or "")),
+                {"has": False, "target": target, "why": "算不出來"})
+    # 血脈:這個檔是哪一個步驟產出的。§16.1 Lineage Explorer
+    #
+    # 依賴圖回答「誰依賴它」,血脈回答「它從哪來」。兩個方向的問題,
+    # 而 owner 點開一個檔的時候兩個都會想知道 —— 所以接在同一格裡,
+    # 不另外開一頁(她 2026-09-14:「我不懂你分頁做一堆」)。
+    #
+    # 沒有邊不等於這個檔沒來源,只代表沒有人記下來。所以這裡分三種
+    # 狀態,不把後兩種畫成同一個樣子。
+    out["lineage"] = _safe(lambda: _lineage_of(str(target or "")),
+                           {"has": False, "why": "算不出來"})
+    return out
+
+
+def _lineage_of(target: str) -> dict:
+    """一個產出的上游。空的有兩種意思,要分得出來。
+
+      帳本裡一條邊都沒有      沒有人記過,跟這個檔無關
+      有邊但沒有一條指到它    記過了,而這個檔不在裡面
+    """
+    import lineage as LN
+    edges = LN.load()
+    if not edges:
+        return {"has": False, "total": 0,
+                "why": "帳本裡一條邊都沒有。跑 `forseti lineage sync` 長出來"}
+    up = [e for e in edges if e.get("to_id") == target]
+    if not up:
+        return {"has": False, "total": len(edges),
+                "why": f"帳本裡有 {len(edges)} 條邊，沒有一條指到這個檔"}
+    return {"has": True, "total": len(edges),
+            "rows": [{"type": e["type"], "from": e["from_id"],
+                      "from_kind": e.get("from_kind", ""),
+                      "basis": e.get("basis", "")} for e in up]}
 
 
 def act(kind: str, target: str = "", worker: str = "") -> dict:

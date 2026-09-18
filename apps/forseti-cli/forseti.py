@@ -434,6 +434,48 @@ def _artifact_drift() -> None:
     print()
 
 
+def cmd_lineage(args: list[str]) -> int:
+    """§6.3 的 lineage 邊。`sync` 把已經記下來的關係寫成邊。
+
+    ## 為什麼要有一個指令去「長」邊
+
+    十條邊型別裡六條的兩端此刻都指得到,可是磁碟上先前一條都沒有。
+    那不是六條都沒做 —— `sync_produces()` 的說明逐條列了差別:
+    `SUPERSEDES` 是真的還沒發生(十條 ADR 都只寫了未來的推翻條件),
+    `TRIGGERED_BY` 與 `CONSUMES` 要在事件發生時記、事後回推不了,
+    而 `PRODUCES` 是唯一「關係已經被記下來了,只是沒寫成邊」的。
+
+    這一支就是把那一種寫成邊。可以重跑,同一條邊只記一次。
+    """
+    LN = _sibling("lineage")
+    sub = (args[0] if args else "").strip()
+    if sub in ("", "status"):
+        for ln in LN.lines():
+            print(ln)
+        return 0
+    if sub != "sync":
+        print(f"不認得的子指令：{sub}　有的是：sync、status", file=sys.stderr)
+        return 2
+    r = LN.sync_produces()
+    if not r.get("ok"):
+        print(f"長不出來：{r.get('why')}", file=sys.stderr)
+        return 2
+    print()
+    print(f"  PRODUCES 邊　新增 {r['added']} 條，"
+          f"已經有的 {r['already']} 條，跳過 {r['skipped']} 條")
+    if r["skipped"]:
+        print("  跳過的是 git 沒有追蹤的路徑 —— "
+              "一條指不到東西的邊，在追來源的時候跟沒有一樣沒用")
+    for row in (r.get("rows") or [])[:12]:
+        print(f"    {row.get('step', '')[:24]}"
+              f"  ->  {str(row.get('artifact', ''))[:44]}"
+              f"　{row.get('state', '')}")
+    print()
+    for ln in LN.lines():
+        print(ln)
+    return 0
+
+
 def _lineage() -> None:
     """§6.3 的 lineage 邊，此刻有幾條、十條型別裡幾條的兩端指得到。
 
@@ -824,10 +866,29 @@ def cmd_index(args: list[str]) -> int:
 
 
 def cmd_recall(args: list[str]) -> int:
+    """查詢。**不走 `recall.main()`,那條路會把問句當子指令解析。**
+
+    2026-09-18 實測:先前這裡是 `main(["recall", *args])`,而 `main()`
+    第一件事是看 `args[0] == "index"`。於是 `forseti recall index` 走到
+    `build_index()`、`forseti recall index --rebuild` 走到
+    `build_index(rebuild=True)`,兩次都 exit 0。使用者打的意思是查
+    「index」這個詞,拿到的是一次寫入 —— 而 `index` 正是這個系統
+    自己的詞彙,問它的機率不低。
+
+    `forseti index` 那一支仍然是索引的入口,沒有被這個改動碰到。
+    查詢旗標的剝離用 `recall.split_query_flags`,不在這裡複製一份。
+    """
     if not args:
         print("要問什麼？　forseti recall \"為何會有點名板\"", file=sys.stderr)
         return 2
-    return _sibling("recall").main(["recall", *args])
+    rc = _sibling("recall")
+    q, inc, valued = rc.split_query_flags(args)
+    if valued:
+        return rc.reject_valued_switches(valued)
+    if not q:
+        print("要問什麼？　forseti recall \"為何會有點名板\"", file=sys.stderr)
+        return 2
+    return rc.cmd_recall(q, include_current=inc)
 
 
 def cmd_tasks(args: list[str]) -> int:
@@ -1979,22 +2040,29 @@ def transcript_limit(args: list[str],
     測試 `test_第一個參數是路徑不掃它` 當場抓到。改成整支共用 `rest`。
     """
     rest = args[1:]
-    for a in rest:
-        if not str(a).startswith("--"):
-            continue
-        name = str(a).split("=", 1)[0]
-        if name not in known:
-            return 0, (f"不認得這個旗標：{name}\n"
-                       f"有的是：{'、'.join(known)}\n"
-                       "打錯字不會報錯，`--limit` 會變成沒寫，"
-                       "於是整份都算進去。所以這裡退回。")
-    if "--limit" not in rest:
-        return 0, ""
-    i = rest.index("--limit")
-    if i + 1 >= len(rest):
+    _ca = _sibling("cliargs")
+    # 判準只有一份,在 `cliargs`。這一支先前自己再寫了一次「什麼算
+    # 旗標」與「怎麼讀值」,而兩份的代價 2026-09-18 18:5x 量到了:
+    # 那一份自己寫的讀法是 `"--limit" not in rest` 加 `rest.index()`,
+    # 於是 `claims <檔> --limit=2` 通過名字守門（那一段取等號之前
+    # 比對）之後靜默回 0 —— **0 的意思是整份都算進去**，而畫面上
+    # 跟成功一模一樣。使用者以為他只看了最後兩則。
+    #
+    # 這跟 `recall index --limit=3` 走到 `build_index(limit=None)` 是
+    # 同一族的同一個洞,`--limit` 吃值,所以等號那一種要**收**,
+    # 改用 `cliargs.arg`。
+    unknown = _ca.unknown_flags(rest, known)
+    if unknown:
+        return 0, (f"不認得這個旗標：{'、'.join(unknown)}\n"
+                   f"有的是：{'、'.join(known)}\n"
+                   "打錯字不會報錯，`--limit` 會變成沒寫，"
+                   "於是整份都算進去。所以這裡退回。")
+    if _ca.flag_without_value(rest, "--limit"):
         return 0, ("`--limit` 後面沒有數字。要全部就整個拿掉，"
                    "不然它會靜默算整份。")
-    raw = rest[i + 1]
+    raw = _ca.arg(rest, "--limit")
+    if raw is None:
+        return 0, ""
     try:
         n = int(raw)
     except ValueError:
@@ -2283,6 +2351,8 @@ def main(argv: list[str]) -> int:
         return cmd_index(argv[2:])
     if cmd == "recall":
         return cmd_recall(argv[2:])
+    if cmd == "lineage":
+        return cmd_lineage(argv[2:])
     if cmd == "tasks":
         return cmd_tasks(argv[2:])
     if cmd == "dispatch":

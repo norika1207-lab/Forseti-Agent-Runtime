@@ -654,6 +654,31 @@ let blastOpen = null;
 let blastHtml = "";
 
 /** 點一個節點，問後端誰依賴它。§16.1 */
+/* 血脈。§16.1 Lineage Explorer 的「這個產出從哪來」。
+
+   上面那一整塊回答的是「誰依賴它」,這一段回答反方向:
+   它是哪一個步驟產出的。owner 點開一個檔的時候兩個都會想知道,
+   所以接在同一格裡,不另外開一頁。
+
+   **沒有邊不等於這個檔沒有來源。** 兩種空要分得出來:
+   帳本一條邊都沒有(沒有人記過),跟有邊但沒有一條指到它。
+   畫成同一個樣子的話,前者會被讀成「這個檔沒有來源」,
+   而實情是這個系統沒有記過任何檔的來源。 */
+function lineageHtml(lg) {
+  if (!lg) return "";
+  if (!lg.has) {
+    return `<p class="blNote lnNone">血脈：${esc(lg.why || "算不出來")}</p>`;
+  }
+  const rows = (lg.rows || []).map((r) =>
+    `<li><b>${esc(r.type)}</b>` +
+    `<span class="lnFrom">${esc(r.from)}</span>` +
+    `<span class="lnBasis">${esc(r.basis)}</span></li>`).join("");
+  return `<p class="blNote">血脈　這個檔是 ${(lg.rows || []).length} 個步驟的產出` +
+    `（帳本共 ${lg.total} 條邊）：</p>` +
+    `<ul class="lnList">${rows}</ul>`;
+}
+
+
 async function showBlastDetail(target) {
   const box = document.querySelector(".blast");
   if (!box) return;
@@ -718,7 +743,8 @@ async function showBlastDetail(target) {
     // 不留一個空清單讓人讀成「沒有任務依賴它」。
     `<p class="blNote">任務依賴：${esc(d.tasks_why)}</p>` +
     `<p class="blNote">session 依賴：${esc(d.sessions_why)}</p>` +
-    `<p class="blNote">${esc(d.lower_bound_why)}。</p>`;
+    `<p class="blNote">${esc(d.lower_bound_why)}。</p>` +
+    lineageHtml(d.lineage);
   panel.innerHTML = blastHtml;
 }
 

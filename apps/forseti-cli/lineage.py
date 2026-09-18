@@ -545,10 +545,23 @@ def add(*, type: str, from_id: str, to_id: str,
            "basis": basis.strip(), "at": at or time.time()}
     row["id"] = _eid(row)
     p = path or log_path()
+    # 同一條邊只記一次。
+    #
+    # `_eid` 是(型別, 起點, 終點)的雜湊,所以同一條邊每次算出來都一樣。
+    # 沒有這一段的話,任何一支會重跑的接線(例如從 Task Ledger 回填)
+    # 每跑一次就把整份邊再寫一遍,`count` 會膨脹成執行次數的函數 ——
+    # 而那個數字正是拿來回答「這裡有幾條血脈」的。
+    #
+    # 這不違反 append-only:append-only 管的是「不回頭改寫已經記下的」,
+    # 不是「同一個事實要記很多次」。重複那一筆的 `at` 也不更新,
+    # 因為第一次記下來的時間才是它被知道的時間。
+    for old_row in load(p):
+        if old_row.get("id") == row["id"]:
+            return {"ok": True, "edge": old_row, "duplicate": True}
     p.parent.mkdir(parents=True, exist_ok=True)
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
-    return {"ok": True, "edge": row}
+    return {"ok": True, "edge": row, "duplicate": False}
 
 
 def load(path: Path | None = None) -> list[dict]:
@@ -590,6 +603,111 @@ def walk(node_id: str, *, direction: str = "down", depth: int = 3,
     return {"ok": True, "start": str(node_id), "direction": direction,
             "reached": sorted(seen - {str(node_id)}), "edges": hops,
             "edges_total": len(edges)}
+
+
+def sync_produces(repo: Path | None = None,
+                  path: Path | None = None,
+                  steps: list[dict] | None = None) -> dict:
+    """從 Task Ledger 長出 PRODUCES 邊。§6.3 `PRODUCES workflow_step -> artifact`
+
+    ## 為什麼是這一條先接
+
+    十條邊裡六條的兩端此刻都指得到,而這一條是唯一「關係本身已經
+    被記下來了,只是沒有寫成邊」的:`steps.expected_outputs` 存的就是
+    那一步要產出哪幾個檔,而 artifact 的 id 照 `_kind_artifact()`
+    的定義就是 repo 相對路徑。兩邊對得起來,不需要猜。
+
+    其餘五條的狀況不一樣,寫出來免得被讀成「還沒做」:
+
+      SUPERSEDES         真的還沒發生。十條 ADR 每一條都只寫了
+                         「推翻條件」(未來的條件),沒有任何一條標明
+                         取代了哪一條。0 筆是誠實的。
+      RECONSTRUCTED_FROM checkpoint 重建自 transcript 的那幾行,
+                         而 `raw_event` 指的是 event_ledger 的事件。
+                         兩者不是同一個東西,硬連會製造一條假的血脈。
+      TRIGGERED_BY       哪個工具呼叫是哪個決策觸發的,這個關聯現在
+                         沒有任何地方記著。要接必須先在事件發生時記,
+                         不能事後回推。
+      CONSUMES           同上:步驟讀了哪些檔沒有被記下來。
+      PROPAGATES_TO      事故的下游算得出來(blast),但「算得出來」
+                         跟「當時真的傳播到那裡」是兩件事。
+
+    ## 冪等
+
+    可以重跑。`add()` 認 id(型別+兩端的雜湊),同一條邊只記一次。
+
+    回傳 `{"ok", "added", "already", "skipped", "rows"}`。
+    `skipped` 是有 expected_outputs 但那個路徑不在 git 追蹤裡的,
+    連出去會變成一條指不到東西的邊。
+    """
+    repo = repo or REPO
+    # `steps` 是給測試注入用的。不給就去查真的 Task Ledger。
+    #
+    # 沒有這個參數的話,這支只能在「這台機器剛好有 workflow 資料」
+    # 的時候測得到,而那種測試在別人的機器上會變成假綠燈。
+    if steps is None:
+        try:
+            wf = _sibling("workflow")
+            got = wf.workflows()
+        except Exception as e:                        # noqa: BLE001
+            return {"ok": False,
+                    "why": f"workflow 查不動：{type(e).__name__}: {e}"}
+        if not got.get("available"):
+            return {"ok": False,
+                    "why": got.get("note") or "workflow 說它現在查不到"}
+        steps = []
+        for w in got.get("workflows") or []:
+            r = wf.resume(w.get("workflow_id", ""))
+            for bucket in ("ready", "blocked", "done"):
+                steps.extend(r.get(bucket) or [])
+
+    tracked = set()
+    try:
+        res = subprocess.run(["git", "-C", str(repo), "ls-files", "-z"],
+                             capture_output=True, timeout=10)
+        if res.returncode == 0:
+            tracked = {f.decode("utf-8", "replace")
+                       for f in res.stdout.split(b"\0") if f}
+    except (OSError, subprocess.SubprocessError):
+        tracked = set()
+
+    added = already = skipped = 0
+    rows: list[dict] = []
+    for st in steps:
+        sid = st.get("step_id")
+        outs = st.get("expected_outputs") or []
+        if isinstance(outs, str):
+            try:
+                outs = json.loads(outs)
+            except ValueError:
+                outs = [outs]
+        if not sid or not outs:
+            continue
+        for art in outs:
+            a = str(art).strip()
+            if not a:
+                continue
+            # 指不到的產出不連。一條指不到東西的邊,在追來源的時候
+            # 跟沒有那條邊一樣沒用,但它會讓 count 看起來比較好看。
+            if tracked and a not in tracked:
+                skipped += 1
+                rows.append({"step": sid, "artifact": a,
+                             "state": "指不到,git 沒有追蹤這個路徑"})
+                continue
+            got_edge = add(type="PRODUCES", from_id=sid, to_id=a,
+                           basis="Task Ledger 的 steps.expected_outputs",
+                           path=path)
+            if not got_edge.get("ok"):
+                rows.append({"step": sid, "artifact": a,
+                             "state": got_edge.get("why", "")})
+                continue
+            if got_edge.get("duplicate"):
+                already += 1
+            else:
+                added += 1
+                rows.append({"step": sid, "artifact": a, "state": "新增"})
+    return {"ok": True, "added": added, "already": already,
+            "skipped": skipped, "rows": rows}
 
 
 def summary(repo: Path | None = None) -> dict:

@@ -28,6 +28,7 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -75,12 +76,22 @@ class 規格對齊(unittest.TestCase):
                               f"`{text}` 裡找不到對應")
 
     def test_edge_types只有一個來源(self):
-        """`lineage` 不自己抄一份邊名字。抄一份就會有兩份會分歧的規格。"""
+        """`lineage` 不自己抄一份邊名字。抄一份就會有兩份會分歧的規格。
+
+        【2026-09-18 判準精確化】原本是數 `"NAME"` 出現幾次,上限兩次
+        (EDGE_ENDPOINTS 的鍵加 SPEC_TEXT 的鍵)。`sync_produces()` 接上
+        之後多了一個 `type="PRODUCES"`,那是「用這條邊」不是「再抄一份
+        清單」,而舊判準分不出來。
+
+        改成先把 `type="X"` 這種呼叫形式拿掉再數。真的長出第三份清單
+        (例如 `MY_EDGES = ("PRODUCES", ...)`)照樣會被抓到 ——
+        這一點是反向驗證過的,不是推論。
+        """
         src = (REPO / "apps" / "forseti-cli" / "lineage.py").read_text(
             encoding="utf-8")
+        # 呼叫時指定型別不算「抄一份清單」。
+        src = re.sub(r'type\s*=\s*"[A-Z_]+"', "type=<用>", src)
         for name in EL.LINEAGE_EDGES:
-            # 邊名字可以出現在 EDGE_ENDPOINTS / SPEC_TEXT 的鍵，
-            # 但不可以出現在第三份清單裡。兩份是表，不是抄。
             self.assertLessEqual(src.count(f'"{name}"'), 2,
                                  f"{name} 在 lineage.py 出現超過兩次，"
                                  "很可能長出了第三份清單")
@@ -318,6 +329,197 @@ class 記錄下來的理由要跟量到的一致(unittest.TestCase):
                    for k in (e.get("blocked_by") or [])}
         self.assertNotIn("decision", blocked,
                          "decision 現在指得到，它不在擋住的那一群裡")
+
+
+class 同一條邊只記一次(unittest.TestCase):
+    """`add()` 的冪等。
+
+    沒有這一條的話,任何一支會重跑的接線每跑一次就把整份邊再寫一遍,
+    而 `count` 正是拿來回答「這裡有幾條血脈」的那個數字 ——
+    它會變成執行次數的函數,而不是事實的函數。
+    """
+
+    def setUp(self):
+        self.p = Path(tempfile.mkdtemp()) / "lineage.jsonl"
+
+    def test_同一條邊寫兩次磁碟上只有一筆(self):
+        kw = dict(type="PRODUCES", from_id="S1", to_id="a.py",
+                  basis="測試", path=self.p)
+        a = LN.add(**kw)
+        b = LN.add(**kw)
+        self.assertTrue(a["ok"])
+        self.assertFalse(a.get("duplicate"), "第一次不該算重複")
+        self.assertTrue(b.get("duplicate"), "第二次要說它是重複的")
+        self.assertEqual(len(LN.load(self.p)), 1)
+
+    def test_重複那一筆的時間不被覆寫(self):
+        """第一次記下來的時間才是它被知道的時間。"""
+        LN.add(type="PRODUCES", from_id="S1", to_id="a.py",
+               basis="測試", at=1000.0, path=self.p)
+        b = LN.add(type="PRODUCES", from_id="S1", to_id="a.py",
+                   basis="測試", at=2000.0, path=self.p)
+        self.assertEqual(b["edge"]["at"], 1000.0)
+
+    def test_不同的邊照樣各記一筆(self):
+        LN.add(type="PRODUCES", from_id="S1", to_id="a.py",
+               basis="測試", path=self.p)
+        LN.add(type="PRODUCES", from_id="S1", to_id="b.py",
+               basis="測試", path=self.p)
+        self.assertEqual(len(LN.load(self.p)), 2)
+
+
+class 從TaskLedger長出PRODUCES邊(unittest.TestCase):
+    """§6.3 `PRODUCES workflow_step -> artifact` 的接線。
+
+    `steps` 用注入的,不查真的 Task Ledger —— 靠真資料的話,
+    這一組在沒有 workflow 的機器上會變成假綠燈。
+    另外有一條單獨驗真的那一條路走得通。
+    """
+
+    def setUp(self):
+        self.p = Path(tempfile.mkdtemp()) / "lineage.jsonl"
+
+    def test_有expected_outputs的步驟會長出邊(self):
+        r = LN.sync_produces(path=self.p, steps=[
+            {"step_id": "T-1/s1", "expected_outputs": ["README.md"]}])
+        self.assertTrue(r["ok"])
+        self.assertEqual(r["added"], 1)
+        e = LN.load(self.p)[0]
+        self.assertEqual(e["type"], "PRODUCES")
+        self.assertEqual(e["from_kind"], "workflow_step")
+        self.assertEqual(e["to_kind"], "artifact")
+        self.assertEqual(e["from_id"], "T-1/s1")
+        self.assertEqual(e["to_id"], "README.md")
+
+    def test_每一條邊都講得出根據(self):
+        LN.sync_produces(path=self.p, steps=[
+            {"step_id": "T-1/s1", "expected_outputs": ["README.md"]}])
+        for e in LN.load(self.p):
+            self.assertTrue(e.get("basis", "").strip(),
+                            "一條講不出根據的邊,在追來源的時候正好沒有用")
+
+    def test_沒有expected_outputs的步驟不長邊(self):
+        r = LN.sync_produces(path=self.p, steps=[
+            {"step_id": "T-1/s1"},
+            {"step_id": "T-1/s2", "expected_outputs": []}])
+        self.assertEqual(r["added"], 0)
+        self.assertEqual(LN.load(self.p), [])
+
+    def test_指不到的產出不連(self):
+        """git 沒有追蹤的路徑連出去,會變成一條指不到東西的邊。
+
+        那種邊在追來源的時候跟沒有一樣沒用,但它會讓 count 好看。
+        """
+        r = LN.sync_produces(path=self.p, steps=[
+            {"step_id": "T-1/s1",
+             "expected_outputs": ["README.md", "這個檔不存在-xyz.md"]}])
+        self.assertEqual(r["added"], 1)
+        self.assertEqual(r["skipped"], 1)
+        self.assertEqual([e["to_id"] for e in LN.load(self.p)], ["README.md"])
+
+    def test_expected_outputs是JSON字串也讀得懂(self):
+        """Task Ledger 存的是 JSON 字串,不是 list。"""
+        r = LN.sync_produces(path=self.p, steps=[
+            {"step_id": "T-1/s1", "expected_outputs": '["README.md"]'}])
+        self.assertEqual(r["added"], 1)
+
+    def test_重跑不會長出第二份(self):
+        steps = [{"step_id": "T-1/s1", "expected_outputs": ["README.md"]}]
+        LN.sync_produces(path=self.p, steps=steps)
+        r2 = LN.sync_produces(path=self.p, steps=steps)
+        self.assertEqual(r2["added"], 0)
+        self.assertEqual(r2["already"], 1)
+        self.assertEqual(len(LN.load(self.p)), 1)
+
+    def test_真的那一條路走得通(self):
+        """不注入,去查真的 Task Ledger。
+
+        這一條跟上面那幾條問的不是同一件事:上面驗的是轉換邏輯,
+        這一條驗的是「接得到真的資料來源」。沒有 workflow 資料的
+        機器會 skip —— 一個在別人機器上永遠紅的測試,
+        下場是被習慣性忽略,那比沒有測試更糟。
+        """
+        r = LN.sync_produces(path=self.p)
+        if not r.get("ok"):
+            raise unittest.SkipTest(f"這台機器查不到 workflow：{r.get('why')}")
+        if r["added"] + r["already"] + r["skipped"] == 0:
+            raise unittest.SkipTest("這台機器的 Task Ledger 沒有帶產出的步驟")
+        self.assertGreater(r["added"], 0, "查得到資料卻一條邊都沒長出來")
+        for e in LN.load(self.p):
+            self.assertEqual(e["type"], "PRODUCES")
+            self.assertTrue(e["basis"].strip())
+
+
+class 接到畫面上(unittest.TestCase):
+    """§16.1 Lineage Explorer。血脈接在波及範圍明細裡。
+
+    2026-09-18 之前 `lineage.py` 630 行在、`summary()` 跑得動,
+    而 `app.js` 引用 0 處、帳本 0 筆 —— 寫出來了,沒有人寫資料進去,
+    畫面也沒有入口。那等於沒做,只差在退回去比較快。
+
+    這一組守的是那件事不要再發生:後端給得出來、前端讀得到、
+    而且「沒有邊」的兩種意思在畫面上分得出來。
+    """
+
+    JS = (REPO / "desktop" / "ui" / "app.js").read_text(encoding="utf-8")
+    API = (REPO / "apps" / "forseti-cli" / "desktop_api.py").read_text(
+        encoding="utf-8")
+
+    def test_後端的波及明細帶著血脈(self):
+        self.assertIn('out["lineage"]', self.API,
+                      "blast_detail 沒有把血脈放進回傳，前端無從讀起")
+
+    def test_前端真的讀那一欄(self):
+        self.assertIn("d.lineage", self.JS,
+                      "後端算了沒有人用，等於沒做")
+        self.assertIn("function lineageHtml", self.JS)
+
+    def test_兩種空在畫面上分得出來(self):
+        """帳本一條邊都沒有，跟有邊但沒有一條指到這個檔，
+        是兩件事。畫成同一個樣子的話，前者會被讀成
+        「這個檔沒有來源」，而實情是這個系統沒有記過任何檔的來源。
+        """
+        import desktop_api  # noqa: F401
+        import lineage as L
+        tmp = Path(tempfile.mkdtemp()) / "l.jsonl"
+        # 一,帳本空的
+        empty = [e for e in L.load(tmp)]
+        self.assertEqual(empty, [])
+        # 二,有邊但指不到
+        L.add(type="PRODUCES", from_id="S1", to_id="別的檔.py",
+              basis="測試", path=tmp)
+        edges = L.load(tmp)
+        self.assertEqual(len(edges), 1)
+        self.assertNotEqual(edges[0]["to_id"], "README.md")
+        # 畫面那一支要對兩種都講得出不同的話
+        self.assertIn("帳本裡一條邊都沒有", self.API)
+        self.assertIn("沒有一條指到這個檔", self.API)
+
+    def test_那幾個class在CSS裡真的有定義(self):
+        """2026-09-14 踩過：JS 用一個 CSS 裡不存在的類別，
+        結果不是報錯，是那段文字變成沒有顏色 —— 看起來正常。
+        """
+        css = (REPO / "desktop" / "ui" / "app.css").read_text(encoding="utf-8")
+        for cls in ("lnList", "lnFrom", "lnBasis"):
+            # 邊界要認。子字串比對的話 `.lnListX` 會讓 `.lnList`
+            # 這一條通過 —— 2026-09-18 反向驗證當場抓到,
+            # 把選擇器改名之後這條照樣是綠的。
+            # 要找的是「有一條規則直接給這個 class 樣式」,
+            # 所以緊接著必須是 `{` 或 `,`(群組選擇器)。
+            #
+            # 【兩次反向驗證才對】第一版用子字串,`.lnListX` 讓它通過;
+            # 第二版加了字元邊界,`.lnList li{` 這種後代選擇器
+            # 照樣讓它通過 —— 那一行引用了這個 class,
+            # 但沒有給它自己任何樣式。
+            self.assertRegex(css, rf"\.{cls}\s*[,{{]",
+                             f"JS 用了 .{cls} 而 CSS 沒有一條規則定義它")
+
+    def test_CLI有入口(self):
+        src = (REPO / "apps" / "forseti-cli" / "forseti.py").read_text(
+            encoding="utf-8")
+        self.assertIn("def cmd_lineage", src)
+        self.assertIn('if cmd == "lineage":', src,
+                      "指令寫了沒有掛進分派，打了也不會跑")
 
 
 if __name__ == "__main__":

@@ -1537,3 +1537,14 @@ button{font:inherit;cursor:pointer;color:inherit}
   overflow-wrap:anywhere}
 .prbNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
   overflow-wrap:anywhere}
+
+/* 血脈。§16.1 Lineage Explorer,接在波及範圍明細底下。 */
+.lnList{list-style:none;margin:4px 0 0;padding:0;
+  display:flex;flex-direction:column;gap:3px}
+.lnList li{display:flex;gap:7px;align-items:baseline;
+  font-size:11px;line-height:1.45}
+.lnList b{flex:0 0 auto;color:var(--ink-2);font-weight:510}
+.lnFrom{flex:1 1 auto;min-width:0;color:var(--ink);
+  overflow-wrap:anywhere}
+.lnBasis{flex:0 0 auto;color:var(--ink-4)}
+.blNote.lnNone{color:var(--ink-4)}
