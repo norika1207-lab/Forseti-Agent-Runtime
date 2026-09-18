@@ -13,6 +13,122 @@ owner 2026-09-16：「有沒有寫下變成文件，然後安排開發順序？�
 
 ## 2026-09-18 自動接續做掉的
 
+| 項目（15:4x-16:2x 這一輪） | 證據 |
+|---|---|
+| 上一輪寫著「`event` 的 kind 仍然沒有守門」，結掉了 | `MEMBER_SLOTS` + `membership()`，第三種判準（成員資格），跟前兩種不重疊。`event bogus <真 step> why` 四格數量對、沒有一格是旗標，`no_extra_args` 與 `operands` 兩道都放行 |
+| 動手之前先量，而量出來的東西推翻了派它下來的那句話 | 真帳本（`tempfile` 的 sqlite）實測：kind 打錯**從來沒有污染過帳本**，`worker_event` 第一行就擋，事件數 2→2。上一輪那句「照樣一路走到 `worker_event` 才 ValueError」高估了自己的嚴重性 |
+| 真正的缺口是另一件，而且是順序造成的 | `event bogus <假 step> why` 回的是「找不到步驟」exit **1** —— 兩格都打錯時先撞到第二格，把「用法錯」講成「那個東西不存在」。改後回 kind 那一句，exit 2 |
+| 這一道不是新增攔截，是搬位置 | 成員資格搬到 `_resolve_step` 之前。`test_kind與步驟都打錯時講的是kind那一句` 攔 `_resolve_step` 看有沒有被呼叫到，`seen == []` 才綠 |
+| 排在 `operands` 後面不是隨便排的 | 旗標不在任何名單裡，兩道都攔得到 `event --yes s why`。先講長相再講成員資格，訊息才指得到根本原因。注入 5（排到前面）紅 3 條 |
+| 名單存的是「去哪裡拿」，不是拿到的東西 | `("event", 0, "kind", "ledger", "WORKER_EVENTS")`，由 `_sibling()` 取。抄一份的話兩邊不一致的症狀是「CLI 說不合法、帳本說合法」，沒有人會發現 |
+| 守它的是一對測試不是一條 | 「加得進去」配「拿掉就不該再被接受」。只守前者的話，一份永遠回 True 的假名單也會綠 |
+| **連帶推翻了上一輪的一個例子，而結論本身是對的** | `event DONE ...` 那一列的 `DONE` 不在真名單裡。實測 `worker_event('DONE',...)` 事件數 1→1 什麼都沒寫，`worker_event('WORKER_ACCEPTED',...)` 寫進去了 actor 就是 `--yes`。**結論成立，例子不成立** |
+| 那一筆的機制比它本身重要 | 上一輪已經修掉「材料太多」的一半（`_resolve_step`），沒有問「還有哪一格也是我自己餵進去的」。警告就寫在同一支 docstring 裡，離那個例子不到二十行。**寫得出警告不等於掃得到範圍** |
+| 登進 §40 | `pol-8c6427166d`，RESOLVED，radius 5。`total` 29 → **30**，guarded 29。五處出處沒被改寫，三處加了註記指向它 |
+| 自己寫的測試第一版又一次守不住 | `test_kind與步驟都打錯...` 第一版比字串，撞到**這道判準自己訊息裡的那五個字**。跟上一輪同一個教訓的第二次：定位不能看畫面印什麼 |
+| 九道注入，十條測試每一條都有人紅 | 注入 4 唯一紅「一格都沒帶」、注入 6（合法的也退回）紅 5 條證明沒有多擋、注入 8（常數名打錯）紅 9 條 |
+| 全套跑了**三次**，三次的紅成因都不同，**沒有一次是這一輪的程式碼** | 2213+1=2214，2204+10=2214 對上。紅的是歸屬守門，指控 `test_ui_render.py`，但寫進去那一筆帶 App 的 session id 與 `n:22`、時間戳 16:03:46 落在測試區間、`advicetrack` 唯一呼叫端在 `desktop_api.strands()`、`Forseti` PID 68744 在跑。那條測試單獨跑 23 條全綠 |
+| 第二次（16:14-16:26）4 紅，**多出來的三條是我自己造成的** | 期間我一邊跑全套一邊寫這兩份文件，指控落在 `test_features_missing.py`（`AUTO_CONTINUE_LOG.md`）與 `test_forseti_dir_writes.py[features]`（`ROADMAP.md`）頭上，兩條都跟那兩個檔無關。看到守門紅的第一個動作該是問「這段時間我自己寫了什麼」 |
+| 第三次（16:27-16:39）全程不寫檔案，3 紅全部指得回別人 | `advice_ledger.jsonl`（App，n=24/25/26）加上 16:35:42 的 `ROADMAP.md` —— **第三個寫入者**，不是 App 也不是我，`supervisor --status` 的今天喚醒次數是 0，是誰這一輪答不出來也沒有猜 |
+| `MemberSlots` 那 10 條三次全套都沒紅過 | 三次紅的名單裡沒有出現過 `test_cli_flag_dispatch.py` 任何一條；單檔加註前後各跑一次都 159 綠 |
+| **全套全綠這一輪拿不到，理由不在程式碼** | `advice_ledger.jsonl` 不在守門的允許路徑裡而 App 每輪寫一筆。owner 明令不准自動接續開關 App，**所以沒有為了讓數字好看去關它** |
+| **這一次解釋不了 5am 那一次** | 那次紅的是同一條測試配 `event_ledger.jsonl`，而當時 App 沒開。不要拿這一輪的發現去填那個缺口 |
+| 正本沒被碰到（除了刻意登的那一筆） | `sufficiency` / `event_ledger` / `NEXT.md` 三個 sha256 測前測後一致。`pollution.jsonl` 變了，是這一輪刻意登記 |
+| 沒有動畫面、沒有 build、沒有開關 App | `app.js` mtime 仍是 09-18 13:43:33。一次模型呼叫都沒有發生 |
+
+新增 `MemberSlots` 10 個，單檔 149 → 159。
+**還沒做的是 `ALIASES` 要不要套到 CLI（要 owner）、`MEMBER_SLOTS` 只有一支
+其他名單沒掃過、`handoff` 那兩個真旗標**，細節在
+`AUTO_CONTINUE_LOG.md` 這一輪的「還缺什麼」。
+
+| 項目（15:1x-15:3x 這一輪） | 證據 |
+|---|---|
+| 上一輪寫著「那七支還沒人管」的旗標位置問題，結掉了 | 十五種寫法改後全部 exit 2、一個寫入點都沒碰到；六種乾淨呼叫照舊走到寫入點 |
+| 推翻上一輪的歸類：這件事不是「顯示問題」 | 第二格（worker）沒有人去查，`drain <真 task> --yes` 走到 `Ledger.drain` 收到 `(task, '--yes')`，`event DONE <真 step> why --yes` 走到 `worker_event` 帶 `worker='--yes'`。帳本 append-only，那一筆收不回來 |
+| 第一格與第二格分開量 | 第一格是 id，查不到停在「找不到…」exit 1，沒寫進去；第二格一路走到寫入點。上一輪只量了第一格 |
+| 量的第一版自己造了材料，第二版才算數 | 假帳本原本對任何字串都回得出步驟，於是三種第一格寫法「看起來」走到寫入點。改成只有對得上才回得出東西之後全部落在沒走到。跟上一輪 `watch` 是同一個陷阱的反面 |
+| 三種形狀分清楚了，沒有硬塞成一種 | 剛好一個（`verify`/`continuity`/`replay`）、剛好兩個（`drain`）、有自由文字尾巴沒有上限（`dispatch`/`auto`）、第三格不擋旗標（`event` 的理由） |
+| 判準仍然只有一份 | `one_operand` 換成 `operands` + `Shape`，`gate submit` 也改走新的那一支。注入 8（每個呼叫端各自寫死同一句）紅 `test_每個呼叫端讀的是同一份` |
+| 用法那一行不是抄的 | 從原始碼正則抓那六行回來比對，抓到的不是 6 行就紅。注入 9（表裡名字改掉）唯一紅 |
+| 自己寫的測試第一版守不住，同一輪被自己的注入推翻 | `test_帶太少仍然歸那一支自己那句話` 第一版比字串，注入 7 照樣綠（判準印的用法跟那一支自己印的一模一樣）。改成攔 `cmd_*` 看有沒有被呼叫到才紅 |
+| 十一道注入，十一條測試每一條都有人紅 | 注入 4 唯一紅「第二格」、注入 5 唯一紅「理由那一格不准擋」、注入 9 唯一紅「用法同一句」、注入 10 唯一紅「沒有多擋」 |
+| 全套 **2204 passed、0 failed**（412.28 秒） | 2193 + 11 = 2204，差 **11** 正好等於新增數 |
+| 正本沒被碰到 | 四個檔測前測後 sha256 一致。污染登記簿 29 未變。沒開過 sqlite |
+
+新增 `PositionalOperands` 11 個，單檔 138 → 149。沒有動畫面、
+沒有 build、沒有開關 App，一次模型呼叫都沒有發生。
+**還沒做的是 `event` 的 kind 成員資格守門、`handoff` 那兩個真旗標、
+以及整個 CLI 的 exit code 慣例沒有人守**，細節在
+`AUTO_CONTINUE_LOG.md` 這一輪的「還缺什麼」。
+
+| 項目（14:5x-15:0x 這一輪） | 證據 |
+|---|---|
+| 上一輪寫著「十幾支子指令完全沒有量過」的那件，量了 | 攔十一個寫入點數次數，十四種寫法。分界是有沒有走到寫入點，不是有沒有印東西 |
+| 量出來是兩種形狀不是一種 | 一種是不吃參數的四支靜默吞掉，一種是旗標被當成位置參數（跟稍早修掉的 `gate submit --yes` 同形狀） |
+| 那十幾支裡**哪兩支會改變狀態**答出來了 | `reindex --dry-run` 走到 `EventLedger.reindex`（索引照樣重建，畫面回「重建完成」）、`watch --bogus` 走到 `Ledger.collect_inbox` |
+| `watch` 第一輪量錯，第二輪才量到 | 第一輪回「沒走到」是因為正本 0 個進行中步驟，那是沒有材料不是證據。換上假步驟才看到 `collect_inbox` |
+| 四支接上共用判準，一處不是四處 | `NO_ARG_COMMANDS` + `main()` 一個 membership 守門接 `no_extra_args`。注入 4（四處各自寫死同一句，畫面完全相同）唯一紅 `test_四個呼叫端讀的是同一份` |
+| 判準沒有新增一份 | `no_extra_args` 是 09-18 13:3x 寫的，這一輪只多四個呼叫端 |
+| 九道注入，十一條測試每一條都有人紅 | 注入 7（名單多收 `verify`）是補的：前六道從沒讓 `test_沒有多擋` 紅過，一條沒人紅過的測試就是裝飾 |
+| 全套 **2193 passed、0 failed**（428.93 秒） | 2182 + 11 = 2193，差 **11** 正好等於新增數，自己說明這一段沒有第二個寫入者 |
+| 正本沒被碰到 | 四個檔測前測後 sha256 一致。污染登記簿 29 未變，這一輪沒有結論被推翻 |
+| 量的腳本全程攔在寫入點 | 一次都沒有真的寫。`reindex` 的乾淨呼叫測試也是攔住再 `SystemExit`，索引沒有被重建過 |
+
+新增 `LedgerNoArgSubcommand` 11 個，單檔 127 → 138。沒有動畫面、
+沒有 build、沒有開關 App，一次模型呼叫都沒有發生。
+**還沒做的是第二種形狀**（旗標被當成 id 的那七支），
+細節與它為什麼不能照抄，在 `AUTO_CONTINUE_LOG.md` 這一輪的「還缺什麼」。
+
+| 項目（14:3x-14:4x 這一輪） | 證據 |
+|---|---|
+| 連續四輪被順延的「題名退回訊息不框起來」結掉了 | `probe run "goal_persistence "` 改前印「沒有這一題：goal_persistence」，下一行列出來的看起來一模一樣；改後是「沒有這一題：「goal_persistence 」」 |
+| 一份判準四個呼叫端，不是四份 | 新增 `shown(value)`，題名／子指令／旗標／人名四處都接它。注入 9（四處各自寫死同一個框，畫面完全相同）唯一紅 `test_四個呼叫端讀的是同一份` |
+| 這一輪改的不是判準 | 退回的條件一個字都沒動，四種錯法改前改後都是 exit 2、都不走到寫入點。normalize 刻意沒做，那會改變誰被退回 |
+| 自己寫的測試第一版守不住它宣稱的東西，同一輪被自己的注入推翻 | `test_退回那一行不准跟合法題名長得一模一樣` 第一版直接比字串，注入「完全不框」照樣綠 —— 判準本身犯了這一輪要修的那個錯。改成剝前綴再 `.strip()` 才紅 |
+| 十道注入，九條測試每一條都有人紅 | 注入 8 唯一紅「沒有多擋」、注入 9 唯一紅「同一份」、注入 10 唯一紅「沒有少擋」。注入 10 是補的：前九道跑完「沒有少擋」從沒紅過，一條沒人紅過的測試就是裝飾 |
+| 全套 **2182 passed、0 failed**（389.41 秒） | 2173 + 9 = 2182，差 **9** 正好等於新增數，自己說明這一段沒有第二個寫入者 |
+| 全套起跑之前量過沒有別人在跑 | `ps` 第一次回 1（自己的殘留）再量是 0，然後才起跑 |
+| 正本沒被碰到 | 四個檔測前測後 sha256 完全一致。污染登記簿 29，`pollution.jsonl` 未變，這一輪沒有結論被推翻 |
+
+新增 `ProbeEchoValue` 9 個，單檔 118 → 127。還原後 `probe.py`
+sha256 對得回 `10942f776d2f70b5`。沒有動畫面、沒有 build、
+沒有開關 App，一次模型呼叫都沒有發生。
+
+| 項目（14:2x-14:3x 這一輪） | 證據 |
+|---|---|
+| 上一輪寫著「沒量它的後果」的那件，量了 | 攔 `sufficiency.submit` 數次數，六種寫法改之前四種走到寫入點。端到端量帳本：乾淨、`b c`、`--yes` 三種都從 1 行變 2 行，多的那一筆是 `RESULT` |
+| 後果比上一輪寫的多一種形狀 | 上一輪只講「靜默吞掉」。`gate submit --yes E-123` 與 `gate submit --yes` 是**旗標被當成考卷編號**，它會去查一份叫 `--yes` 的考卷，訊息說「編號打錯」，把人指向錯的方向 |
+| 這一輪改的不是 exit code | 六種寫法改之前全部是 2。改的是走不走到寫入點，以及講的是哪一件事 |
+| 比 `gate takeover` 那一件重一級 | 那邊寫的是一份考卷，這邊寫的是一筆 `RESULT`，而 `RESULT` 決定 `state()` 的 `write` 權限。`Log.append` 只有 `"a"` 模式，收不回來 |
+| 三份判準相鄰不重疊 | `gate_subcommand` 問有沒有這一支、`no_extra_args` 問收不收任何參數（四個呼叫端）、`one_operand` 問數量與長相對不對（一個呼叫端） |
+| 空的刻意不歸新判準管 | `cmd_gate_submit` 自己那句「要交哪一份考卷？」比通用措辭具體。注入 6（空的也吃掉）只紅 `test_空的不歸這一支管` 一條 |
+| 九條每一條都有人紅 | 九道注入，不帶 `-x`。注入 3（擋死整層）是**唯一**讓 `test_乾淨呼叫照樣走到那一支` 紅的，沒有它另外八條會綠得很漂亮 |
+| 全套 **2173 passed、0 failed**（447.58 秒） | 2164 + 9 = 2173，差 **9** 正好等於新增數，自己說明這一段沒有第二個寫入者 |
+| 全套起跑之後一個檔都沒動 | 14:23:49 `ps` 空 → 14:24:01 起跑 → 14:31:30 結束 → 之後才寫紀錄 |
+| 正本沒被碰到 | 四個檔測前測後 sha256 完全一致。污染登記簿量到 29，`pollution.jsonl` 未變，這一輪沒有結論被推翻 |
+
+新增 `GateSubmitOperand` 9 個，單檔 109 → 118。還原後 `forseti.py`
+sha256 對得回 `5ee970dd249ab435`。沒有動畫面、沒有 build、
+沒有開關 App，一次模型呼叫都沒有發生。
+
+| 項目（14:0x-14:1x 這一輪） | 證據 |
+|---|---|
+| `gate` 打錯子指令，畫面講的是整個 CLI 不是 gate | 改之前兩種寫法都印整份 `__doc__`（五十幾行）、exit 2。走的是 dispatch 末尾那一行，它守的是「整個 CLI 沒有這個子指令」 |
+| 這一輪改的不是 exit code，是訊息指向 | 改前改後都是 2。所以沒有一條測試在測 0 變 2，測的是「講的是哪一層」 |
+| 兩道守門相鄰不重疊，而且認得出人 | `gate bogus` 落在 `gate_subcommand`，`gate status --yes` 落在 `no_extra_args`。比 exit code 認不出來（都是 2），拿各自那句話認 |
+| 那個常數不會變成「定義了沒人讀」 | 判準是改掉常數內容行為要跟著變，不是 grep 它出現幾次。注入 3（寫死字面 tuple）當場紅 |
+| 上一輪那 4 條紅還完了 | 全套 **2164 passed、0 failed**（343.53 秒）。上一輪判斷「那 4 條是我造成的」，這一次的全綠是證據不是推論 |
+| 差值自己說明這一段沒有第二個寫入者 | 2151 + 4 = 2155 → 2164，差 **9** 正好等於新增數。上一輪差 14 而只加 9，那 5 條差額當時就用來證明有兩個寫入者 |
+| 全套起跑之後一個檔都沒動 | 14:07:41 ps 空 → 14:07:45 起跑 → 14:13:31 結束 → 之後才寫紀錄。上一輪違反過這一條並自己製造 4 條紅 |
+| `pollution.jsonl` 那 2 筆不是我登的 | 上一輪收工 29，這一輪開工量到 31。這一輪沒有結論被推翻，沒有登任何東西 |
+
+新增 `GateSubcommand` 9 個，單檔 100 → 109。八道反向驗證，
+**不帶 `-x`**（上一輪帶了導致歸屬錯一次），九條每一條都有人紅。
+注入 2（把 gate 整層擋死）是關鍵那一道：沒有
+`test_三支合法的照樣走到那一支`，擋死整層會讓「打錯要退回」
+那幾條綠得很漂亮。還原後 sha256 對得回 `9ad973e131cbad0d`。
+正本四個檔測前測後都沒變，一次模型呼叫都沒有發生。
+
 | 項目（13:3x-13:5x 這一輪） | 證據 |
 |---|---|
 | 連續五輪寫著「`plan --yes` 照樣 exit=0」，那句話是假的 | `grep -c 'cmd == "plan"'` 回 0，`plan` 不是子指令，實跑 exit=2。而且 `plan` 不帶旗標也是 2，那個 `--yes` 對行為沒有影響 |
@@ -4130,3 +4246,188 @@ profile 指出的大宗是 `_meta_rows` 2.4 秒、四次 subprocess 1.4 秒、
 下一個在這個檔寫註解的人會再踩一次，而症狀（七條不相干的測試同時紅）
 看起來完全不像是註解造成的。
 
+
+### 桌面版:WebView 渲染 HTML 但不執行 JS（2026-09-18，未解）
+
+**最窄的一句事實:** 這個 WebView 渲染得出 HTML，但不執行任何 JavaScript。
+
+**決定性證據:** 讓它載入一個自帶 script 的最小 data URL
+`data:text/html,<html><body>probe</body><script>document.title='DATAURL_OK'</script></html>`。
+畫面上出現了 `probe` 那個字（截圖看到，被紅綠燈按鈕蓋掉一半），
+而 title 仍然是 `"Forseti"`。**HTML 渲染了，同一頁的 script 沒跑。**
+
+環境:macOS 26.0 (25A8353)、Apple Silicon、tauri 2.11.5、wry 0.55.1、
+tao 0.35.3、objc2 0.6.4、Xcode 26.3。
+
+**已經排除的（附證據，下一輪不要重查）**
+
+| 排除的 | 證據 |
+|---|---|
+| 視窗沒開 | `visible=true`、pos (80,120)、size 680x1720（= 邏輯 340x860）、`minimized=false` |
+| 螢幕問題 | 只有一個 Monitor 4608x2592 scale=2，邏輯 2304x1296，視窗完全在內 |
+| 頁面沒載入 | `on_page_load` 的 Started 與 Finished 都有觸發 |
+| JS 本身壞掉 | 同一份 `app.js` 在 `ui-harness` 裡 console 零錯誤、畫得出 17 輪 |
+| CSP | `csp: null`，沒有任何限制 |
+| 打包 | `frontendDist` 指向 `desktop/ui/`，build 時 `app.js` 比 build 早一分鐘 |
+| 缺 `url` 欄位 | 補了 `"url": "index.html"`，`path` 仍然是空的，行為不變 |
+| 簽名 | 原本是 linker-signed、`Info.plist=not bound`、identifier 錯。重簽成 `com.norika.forseti` 並綁定 Info.plist（14 entries），行為不變 |
+| Info.plist legacy 旗標 | 拿掉 `LSRequiresCarbon`、`LSMinimumSystemVersion` 改 13.0，行為不變 |
+| 執行緒 | 五圈迴圈全部正常跑完，沒有卡住 |
+| eval 時機 | 在 `on_page_load` 的 Finished 那一刻 eval 也一樣沒效 |
+| wry #1848 | 那個 issue 是「JS 有跑而畫面不更新」，這裡**正好相反** |
+
+**驗法上的三個教訓**
+
+一、`eval()` 回 `Ok` 只代表送出去了，不代表 JS 執行。
+判準要用結果（title 有沒有變），不能用回傳值。
+
+二、`strings` 查 Tauri 二進位抓不到前端字串（壓縮嵌入），
+連「跟隨」「啟動中」這些一定存在的都是 0。
+**拿那個下「build 沒打包」的結論是錯的，已撤回。**
+
+三、`document.title` 是可靠的通道:它走 AppKit 不走 compositor，
+不依賴 IPC，不依賴 `__TAURI__`。這一輪所有結論都建立在它上面。
+
+**下一輪從這裡接**
+
+剩下的可能都在 WKWebView 的建立參數那一層:
+`wry` 有沒有在某個條件下沒開 `javaScriptEnabled`，
+或者 macOS 26 改了 `WKPreferences` 的預設。
+
+具體做法:在 `main.rs` 用 `WebviewWindowBuilder` 手動建視窗
+（現在是從 config 建的），那條路徑走的是不同的程式碼。
+兩條路徑行為不同的話，範圍就縮到 config 那一條上。
+
+**這一輪順手修掉、與空白無關但是真的問題**
+
+`setInterval(tick, 2000)` 兩秒一輪而 `strands` 17.6 秒，
+每一輪都在上一輪沒回來時又起一個 Python 子行程。
+`ps` 實測:App 跑 5 分 50 秒而子行程只有 8 秒大。
+已加 `inFlight` 旗標，`tests/test_poll_overlap.py` 五條。
+
+**2026-09-18 續:三條獨立路徑都證實 JS 不執行**
+
+| 注入方式 | 底層機制 | 結果 |
+|---|---|---|
+| `w.eval(...)` | `evaluateJavaScript` | title 沒變 |
+| data URL 的 inline `<script>` | 頁面自己的腳本 | title 沒變，而同頁的 `<body>probe</body>` **有顯示出來** |
+| `.initialization_script(...)` | `WKUserScript`（載入前注入） | title 沒變 |
+
+三條機制互不相同，全部不執行，而 HTML 渲染正常。
+**所以是 WKWebView 這一層把 JavaScript 關了。**
+
+又排除掉的:
+* `javascript_disabled` 在 `tauri-utils` config 預設是 `false`（config.rs:2348），
+  而我們也沒有呼叫 `disable_javascript()`。不是被明確關掉的。
+* config 的 `windows` 清空、改走 `WebviewWindowBuilder` 手動建視窗，行為完全一樣。
+  所以跟 config 那條路徑無關。
+* `cargo update` 之後版本不變（已是最新相容版），不是舊版 bug。
+
+wry 0.55.1 停用 JS 的唯一路徑是 `wkwebview/mod.rs:349`:
+```rust
+if attributes.javascript_disabled {
+    config.defaultWebpagePreferences().setAllowsContentJavaScript(false);
+}
+```
+那一段沒有被走到，而行為卻跟走到了一樣。
+
+**下一步:繞過 wry，用 objc 直接對 WKWebView 設
+`setAllowsContentJavaScript(true)`。** 成功的話，
+就證明 macOS 26 把它的預設從 true 改成了 false，
+而 wry 只處理「要關」沒處理「要開」。
+
+**2026-09-18 再續:兩個 JS 開關都是 true，而 JS 仍然不執行**
+
+繞過 wry 直接用 objc2 讀 WKWebView 的設定（`with_webview` + `objc2-web-kit`）:
+
+```
+[webview] allowsContentJavaScript: true -> true
+[webview] prefs.javaScriptEnabled = true
+```
+
+新的（`WKWebpagePreferences.allowsContentJavaScript`）與舊的
+（`WKPreferences.javaScriptEnabled`，已棄用）**兩個都是 true**。
+所以 WKWebView 自己認為 JavaScript 是開的。
+
+**我的假設被自己的量測推翻了。** 先前寫「macOS 26 可能把預設改成 false，
+而 wry 只處理要關沒處理要開」—— 那不成立，預設就是 true。
+
+**現在的結論只剩這一句，而且它很窄:**
+WKWebView 回報 JS 已啟用、HTML 渲染正常，而三條獨立的 JS 注入路徑
+（evaluateJavaScript、頁面 inline script、WKUserScript）全部不執行。
+
+**下一輪可以試的，按成本排:**
+
+1. **寫一個十行的最小 Tauri app**（`cargo create-tauri-app`），
+   在同一台機器上跑。它也不執行 JS 的話,問題跟 Forseti 的程式碼
+   完全無關,是這台機器加這個 Tauri 版本的組合 ——
+   那可以直接開 issue 給上游,附這裡量到的數字。
+   **這一步的價值最高:它把「我們的專案」整個排除掉或整個確認。**
+2. 用 Safari 的開發者選單連上這個 WebView（debug build 有 devtools），
+   看 console 的第一則訊息。要人手動操作視窗。
+3. 換一個 WebView 後端（Tauri 不支援）或降 macOS（不可行）。
+
+**這一輪沒有做到 owner 要的那件事:桌面版還是打不開。**
+查到的每一步都是在縮小範圍,不是在修好它。
+
+## 結論:跟 Forseti 的程式碼無關（2026-09-18，可回報上游）
+
+**對照組:** `/tmp/tauri_min` 是一個十行的全新 Tauri app，
+跟 Forseti 沒有任何共用程式碼。`index.html`:
+
+```html
+<body><h1 id="h">HTML_OK</h1>
+<script>document.title='SCRIPT_RAN';
+document.getElementById('h').textContent='JS_OK';</script></body>
+```
+
+跑五秒，title 一直是 `"tmin"`，`SCRIPT_RAN` 沒有設上。
+
+**所以:這台機器上任何 Tauri app 的 WebView 都不執行 JavaScript。**
+
+### 完整的環境與量測
+
+| 項目 | 值 |
+|---|---|
+| macOS | 26.0 (25A8353)、Apple Silicon |
+| Xcode | 26.3 (17C529) |
+| tauri | 2.11.5 |
+| wry | 0.55.1 |
+| tao | 0.35.3 |
+| objc2 / objc2-web-kit | 0.6.4 / 0.3.2 |
+| `allowsContentJavaScript` | **true** |
+| `WKPreferences.javaScriptEnabled` | **true** |
+| HTML 渲染 | **正常**（data URL 的 `probe` 有顯示在畫面上） |
+| `evaluateJavaScript` | 不執行 |
+| 頁面 inline `<script>` | 不執行 |
+| `WKUserScript`（initialization_script） | 不執行 |
+
+### 全部排除掉的（每一項都有量測，不是推論）
+
+視窗、螢幕、頁面載入（on_page_load 有 Started/Finished）、
+CSP（null）、打包、`url` 欄位、簽名（重簽過）、
+Info.plist 的 legacy 旗標（`LSRequiresCarbon` 拿掉過）、
+執行緒、eval 時機、config vs 手動建視窗兩條路徑、
+版本（已是最新相容版）、兩個 JS 開關（都是 true）、
+**以及 Forseti 自己的全部程式碼（最小 app 對照）**。
+
+### 跟 wry #1848 的關係
+
+那個 issue 是「JS 有跑而畫面不更新」，這裡**正好相反**:
+畫面更新得了而 JS 不跑。不是同一件事，不要混在一起報。
+
+### 下一步
+
+1. 帶著上面那張表去 wry / tauri 開 issue。
+   有最小重現、有兩個開關的實際值、有三條路徑的對照，
+   那是一份夠用的回報。
+2. 在那之前桌面版打不開。瀏覽器版（`tools/ui-harness.py`）
+   是同一份 CSS 與 JS，完全正常，**畫面要看就看那個**。
+
+### 這一輪的方法教訓
+
+`eval()` 回 `Ok` 只代表送出去了。`strings` 查 Tauri 二進位抓不到前端字串。
+`document.title` 走 AppKit 不走 compositor、不依賴 IPC，是這一輪唯一可靠的通道。
+**每一個「我以為是根因」的假設都被自己的下一次量測推翻了三次**
+（unminimize、鏡像螢幕、macOS 26 改了 JS 預設），
+能收斂是因為每一次都去量而不是去猜。

@@ -7,24 +7,7 @@
     "frontendDist": "../ui"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Forseti",
-        "width": 340,
-        "height": 860,
-        "minWidth": 280,
-        "minHeight": 400,
-        "maxWidth": 520,
-        "x": 40,
-        "y": 60,
-        "alwaysOnTop": true,
-        "titleBarStyle": "Overlay",
-        "hiddenTitle": true,
-        "decorations": true,
-        "resizable": true,
-        "label": "main"
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null,
       "capabilities": [

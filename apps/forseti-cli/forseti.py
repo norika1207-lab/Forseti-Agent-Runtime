@@ -1501,6 +1501,297 @@ def no_extra_args(args: list[str], cmd: str) -> str:
             "而你下錯的那個字不會有任何人提起。")
 
 
+NO_ARG_COMMANDS: tuple[str, ...] = ("tasks", "events", "watch", "reindex")
+"""帳本那一邊不吃任何參數的四支。**名單是量出來的，不是讀出來的。**
+
+2026-09-18 15:0x 用攔截數寫入點的方式量過十四種寫法，四支收到多餘
+參數的後果分成兩種，而分界不是「有沒有印東西」，是**有沒有走到寫入點**：
+
+| 寫法 | exit | 走到寫入點 | 後果 |
+|---|---|---|---|
+| `tasks --bogus` | 0 | 沒有 | 旗標吞掉，印出一份正常的未完成清單 |
+| `tasks x` | 0 | 沒有 | 同上 |
+| `events --limit 5` | 0 | 沒有 | 同上，`--limit` 等於沒寫 |
+| `watch --bogus` | 0 | **`Ledger.collect_inbox`** | 照樣巡檢，收信箱、判活著沒 |
+| `reindex --dry-run` | 0 | **`EventLedger.reindex`** | 索引照樣整個砍掉重建 |
+
+後兩支是這一組的理由。`reindex --dry-run` 那一行**看起來像在問**，
+實際上跟乾淨呼叫走的是同一條路 —— 使用者打那個旗標的意思是
+「先別動」，而它動了，畫面上還回一句「重建完成」。
+`watch --bogus` 同一個形狀：它會 `collect_inbox` 與 `recover`，
+那是會改狀態的巡檢，不是唯讀的看一眼。
+
+`watch` 那一支第一輪量的時候**走不到寫入點**，因為當下 0 個進行中
+的步驟。那個 0 不是證據，是沒有材料。第二輪把 `active_steps()` 換成
+一個假的進行中步驟再量，才看到 `collect_inbox`。
+**「這一次沒走到」跟「走不到」不是同一件事**，中間差的是有沒有材料。
+
+前兩支是唯讀的，所以它們是顯示問題不是狀態問題。**照樣擋** ——
+理由跟 `no_extra_args` 原本那四支一樣：不擋的話那個打錯的字
+不會有任何人提起。
+
+名單裡沒有 `dispatch` / `auto` / `drain` / `verify` / `continuity` /
+`event` / `handoff` / `replay` / `context` / `index` / `recall`，
+因為那幾支**真的吃參數**，歸的是另一道判準（`operands` 那一種），
+還沒接。同一輪量到的、還沒有人管的兩種形狀寫在
+`AUTO_CONTINUE_LOG.md` 這一輪的「還缺什麼」。
+"""
+
+
+@dataclass(frozen=True)
+class Shape:
+    """一支子指令的位置參數長什麼樣。一份判準,多個呼叫端。
+
+    `slots` 是固定位置,照順序,每一格 `(名字, 要不要擋旗標)`。
+
+    **「要不要擋旗標」不是每一格都是 True。** `event` 的第三格是理由,
+    自由文字,一個以 `-` 開頭的理由是合法的 —— 擋它就是拿長相定罪,
+    而這裡沒有 filesystem 那種確定性的問法（`bible.md` Q-01 反過來用）。
+    id 那幾格不一樣:它們要拿去查,查得到查不到是確定性的,
+    所以旗標放在那裡一定是錯的。
+
+    `required` 是前幾格必填,**只影響用法那一行框成 `<x>` 還是 `[x]`,
+    不決定要不要退回**。帶太少歸各支自己那句話,它講得比通用措辭具體
+    （`verify` 少參數印的是它自己那行用法),兩邊不重疊:
+    這一支問「長相與數量對不對」,那一句問「到底要哪一個」。
+
+    `tail` 是後面那一段自由文字的名字,空字串代表不收多的。
+    有 tail 的那兩支（`dispatch` / `auto` 的理由）沒有上限,
+    所以「多拿到的」對它們不成立 —— 這是三種形狀裡的第三種,
+    2026-09-18 那一輪寫下「這三種要分清楚才動手」指的就是它。
+    """
+
+    slots: tuple[tuple[str, bool], ...]
+    required: int
+    tail: str = ""
+
+    def usage(self, cmd: str) -> str:
+        parts = [(f"<{n}>" if i < self.required else f"[{n}]")
+                 for i, (n, _) in enumerate(self.slots)]
+        if self.tail:
+            parts.append(f"[{self.tail}]")
+        return f"用法：forseti.py {cmd} " + " ".join(parts)
+
+
+def operands(args: list[str], cmd: str, shape: Shape) -> str:
+    """固定位置參數的那幾支。回「哪裡不對」,沒問題回空字串。
+
+    `no_extra_args` 管不到這一種:這幾支**真的吃參數**,
+    所以「有參數」本身是對的,錯的是長相與數量。
+
+    2026-09-18 15:2x 攔寫入點量過,旗標放在位置參數的位置有**兩種**
+    後果,而先前只量到第一種:
+
+    | 寫法 | exit | 走到寫入點 | 收到什麼 |
+    |---|---|---|---|
+    | `verify --yes` | 1 | 沒有 | ── |
+    | `continuity --yes` | 1 | 沒有 | ── |
+    | `dispatch --yes w` | 1 | 沒有 | ── |
+    | `auto --yes w` | 1 | 沒有 | ── |
+    | `drain --yes w` | 1 | 沒有 | ── |
+    | `event --yes s why` | 1 | 沒有 | ── |
+    | `replay --limit` | 1 | 沒有 | ── |
+    | `drain <真 task> --yes` | ── | **`Ledger.drain`** | `(task, '--yes')` |
+    | `dispatch <真 step> --yes r` | ── | **`Ledger.dispatch`** | `(step, '--yes', 'r')` |
+    | `auto <真 task> --yes r` | ── | **`Ledger.auto_dispatch`** | `(task, '--yes', 'r')` |
+    | `event DONE <真 step> why --yes` | ── | **`Ledger.worker_event`** | `worker='--yes'` |
+
+    **第一格與第二格不是同一件事。** 第一格是 id,查不到就停在
+    「找不到…」,exit 1,沒有東西被寫進去 —— 那是訊息指錯地方
+    加上 exit code 錯一級（用法錯應該是 2)。第二格是 worker,
+    **沒有人去查它**,所以它一路走到寫入點,帳本裡那一筆的 worker
+    就是那個旗標,而帳本是 append-only,收不回來。
+
+    量的時候第一版的假帳本讓 `_resolve_step` 對任何字串都回得出步驟,
+    於是 `verify --yes` 看起來走到了 `verify_step`。**那是自己造出來的
+    材料,不是證據** —— 真的帳本查不到叫 `--yes` 的步驟。改成只有對得上
+    才回得出東西之後,第一格那七種全部落在「沒有走到寫入點」。
+    這跟前一輪 `watch` 那件事是同一個陷阱的反面:一邊是材料不夠把
+    「走不到」讀成證據,一邊是材料太多把「走得到」讀成證據。
+
+    **上面那張表的 `event` 那一列,例子本身是假材料（2026-09-18 15:5x 實測）。**
+    `DONE` 不在 `ledger.WORKER_EVENTS` 裡,而假帳本的 `worker_event` 是
+    計數用的 stub,不檢查 kind,所以任何字串都「走得到寫入點」。真帳本
+    第一行就 raise,事件數不變。換成真 kind 之後結論才拿得到證據:
+    `worker_event('WORKER_ACCEPTED', step, 'why', worker='--yes')` 實測
+    寫進去了,`events.actor` 就是 `--yes` —— **結論成立,例子不成立**。
+    修掉假帳本 `_resolve_step` 那一半的同一輪,漏掉了成員資格這一半。
+
+    尾巴那幾個也量過,吞掉之後照樣寫:`drain <真 task> w extra --yes`
+    走到 `drain` 收到 `(task, 'w')`,`verify <真 step> extra` 走到
+    `verify_step`。所以「多拿到的」在這幾支不是顯示問題。
+    """
+    if not args:
+        return ""
+    usage = shape.usage(cmd)
+    for i, (name, guard) in enumerate(shape.slots):
+        if i >= len(args) or not guard:
+            continue
+        got = str(args[i])
+        if got.startswith("-"):
+            return (f"這個位置要的是 {name}，不是旗標，"
+                    f"而拿到的是：{got}\n"
+                    f"{usage}\n"
+                    f"不擋的話 {got} 會被當成 {name} 用下去，"
+                    f"而你真正錯的是旗標放在位置參數的位置，"
+                    f"不是 {name} 打錯了。")
+    if not shape.tail and len(args) > len(shape.slots):
+        extra = "、".join(str(a) for a in args[len(shape.slots):])
+        names = [n for n, _ in shape.slots]
+        if len(names) == 1:
+            what = f"這一支只吃一個 {names[0]}，多拿到的是：{extra}"
+        else:
+            what = (f"這一支只吃 {'、'.join(names)} 這 {len(names)} 個，"
+                    f"多拿到的是：{extra}")
+        return (f"{what}\n"
+                f"{usage}\n"
+                "不擋的話多的那幾個會被靜默吞掉，"
+                "而這一支會照樣執行下去，"
+                "那一次不知道你其實下錯了指令。")
+    return ""
+
+
+OPERAND_SHAPES: dict[str, Shape] = {
+    "verify": Shape(slots=(("step", True),), required=1),
+    "continuity": Shape(slots=(("task", True),), required=1),
+    "replay": Shape(slots=(("session_id", True),), required=0),
+    "drain": Shape(slots=(("task", True), ("worker", True)), required=2),
+    "dispatch": Shape(slots=(("step", True), ("worker", True)),
+                      required=2, tail="理由"),
+    "auto": Shape(slots=(("task", True), ("worker", True)),
+                  required=2, tail="理由"),
+    "event": Shape(slots=(("kind", True), ("step", True),
+                          ("理由", False), ("worker", True)),
+                   required=3),
+    "gate submit": Shape(slots=(("exam_id", True),), required=1),
+}
+"""真的吃位置參數的那八支。**每一格的形狀是量出來的,不是讀出來的。**
+
+名字與必填數對齊各支自己印的那行用法（`cmd_verify` 那幾支),
+所以退回的時候畫面上那一行跟他打錯之前看到的是同一句。
+
+`event` 的第三格 `理由` 是唯一一格 `guard=False`,因為它是自由文字。
+第四格 `worker` 照擋:`event DONE <真 step> why --yes` 量過,
+`--yes` 會以 `worker=` 走到 `Ledger.worker_event`。
+（`DONE` 這個 kind 是假材料,真名單裡沒有它,見 `operands` docstring
+結尾那一段。換成真 kind 之後結論照樣成立,寫進去的 actor 就是 `--yes`。）
+
+`dispatch` 與 `auto` 有 `tail`,所以它們**沒有數量上限** ——
+理由是自由文字,`dispatch s w 因為 A 所以 B` 是合法的。
+這一點是它們跟 `drain` 的差別:`drain` 不收理由,第三個以後就是多的。
+
+`gate submit` 在這張表裡,可是 `cmd` 永遠不會等於 `gate submit`
+（那是兩段）,所以它由 `main()` 裡 gate 那一段自己查表呼叫。
+兩個呼叫端讀的是同一份表,不是兩份。
+"""
+
+
+MEMBER_SLOTS: dict[str, tuple[int, str, str, str]] = {
+    "event": (0, "kind", "ledger", "WORKER_EVENTS"),
+}
+"""哪一支的哪一格,值必須是某張名單裡的成員。
+
+**這是第三種判準,跟前兩種不重疊。** `no_extra_args` 問「該不該有參數」,
+`operands` 問「位置與長相對不對」,這一支問「這個值在不在名單裡」。
+一個合法長相的字串可以完全不是合法的值:`event bogus <真 step> why`
+四格數量對、沒有一格是旗標,三道裡前兩道都放行。
+
+**名單存的是去哪裡拿,不是拿到的東西。** 第三、四格是模組名與常數名,
+由 `membership()` 去 `_sibling()` 取。抄一份到這裡的話,
+`ledger.WORKER_EVENTS` 哪天多一種,這裡不會跟著動,而兩邊不一致的
+症狀是「CLI 說不合法,帳本說合法」—— 那種不一致沒有人會發現,
+因為畫面上看起來就只是一句拒絕。
+"""
+
+
+def membership(args: list[str], cmd: str, spec: tuple[int, str, str, str]) -> str:
+    """成員資格。回「哪裡不對」,沒問題回空字串。
+
+    2026-09-18 15:5x 用臨時帳本量過現況（`Ledger(db=<暫存>)`,沒碰正本）。
+    量出來的東西推翻了原本寫在「還缺什麼」裡的那句話,所以先記下來:
+
+    | 寫法 | exit | 帳本事件數 | 畫面那句話 |
+    |---|---|---|---|
+    | `event WORKER_PROGRESS <真 step> why` | 0 | 1 → 2 | 已記　WORKER_PROGRESS |
+    | `event bogus <真 step> why` | 2 | 2 → 2 | 不是 F04 §3 定義的 worker 事件 |
+    | `event bogus <假 step> why` | **1** | 2 → 2 | **找不到步驟：假 step** |
+
+    **第二列不是缺口。** `Ledger.worker_event` 第一行就擋,而且擋在任何
+    寫入之前,所以 kind 打錯從來沒有污染過帳本 —— 原本那句「照樣一路走到
+    `worker_event` 才 ValueError」聽起來像有東西被寫進去,量出來沒有。
+
+    **缺口是第三列。** `cmd_event` 先 `_resolve_step` 再呼叫
+    `worker_event`,所以兩格都打錯的時候,先撞到的是步驟那一關,
+    畫面回「找不到步驟」exit 1。那句話是真的（那個步驟確實不存在）,
+    可是它把人指向第二格,而第一格才是根本不合法的那一格。
+    exit code 也錯一級:1 是資料錯,而 kind 打錯是用法錯,該是 2。
+
+    所以這一支做的不是「新增一道攔截」,是**把成員資格搬到解析 id 之前**,
+    讓「這個 kind 根本不存在」永遠比「那個 id 查不到」先講。
+
+    **不做大小寫轉換,也不套 `ledger.ALIASES`。** 收件匣那一端兩件都做
+    （`ledger.py:836` 的 `ALIASES.get(first[0].upper(), ...)`）,所以
+    `WORKER_DONE` 與 `worker_completion` 走收件匣收得下,走 CLI 收不下。
+    那個不一致是真的,實測確認過,可是收不收是協定適用範圍的決定
+    （`ALIASES` 自己的註解寫著它是「收件匣的別名」,而且「只收實測真的
+    發生過的誤用」）。**擴大一張有出處要求的名單不是我該自己決定的**,
+    寫進「還缺什麼」等 owner。
+    """
+    slot, name, mod_name, const = spec
+    if slot >= len(args):
+        # 帶太少歸那一支自己那句話,跟 `operands` 同一個政策:
+        # 這一支問「這個值合不合法」,那一句問「到底要哪幾個」。
+        return ""
+    allowed = tuple(getattr(_sibling(mod_name), const))
+    got = str(args[slot])
+    if got in allowed:
+        return ""
+    return (f"{got} 不是合法的 {name}。\n"
+            f"合法的 {name}：{'　'.join(allowed)}\n"
+            f"不擋的話,這一格的錯要等到 {mod_name} 那一層才會被提起,"
+            f"而在那之前會先去查第二格 —— 第二格也打錯的時候,"
+            f"畫面回的是「找不到步驟」,把「這個 {name} 不存在」"
+            f"講成「那個東西不存在」,exit 也會是 1（資料錯）"
+            f"而不是 2（用法錯）。")
+
+
+GATE_SUBCOMMANDS: tuple[str, ...] = ("takeover", "submit", "status")
+
+
+def gate_subcommand(args: list[str]) -> str:
+    """`gate` 底下有哪幾支。回「哪裡不對」，沒問題回空字串。
+
+    2026-09-18 實測，`gate` 與 `gate bogus` 兩種寫法的 exit code
+    都已經是 2，所以這一支**不是新增一道守門**，改的是訊息指向:
+
+    | 寫法 | 改之前印什麼 | 改之後 |
+    |---|---|---|
+    | `gate` | 整個 CLI 的 `__doc__` | gate 底下有哪幾支 |
+    | `gate bogus` | 同上 | 同上，而且點名 bogus |
+
+    走的是 dispatch 末尾那一行 `print(__doc__); return 2` ——
+    那一行守的是「整個 CLI 沒有這個子指令」，而使用者打錯的是
+    **gate 的子指令**。兩者都退回 2，可是講的不是同一件事:
+    畫面要他去看整個 CLI 有哪些指令，而他要找的是 gate 有哪幾支。
+
+    所以這裡不碰 exit code，只讓訊息指回他真正打錯的那一層。
+    `no_extra_args` 那一支管的是另一件事（合法子指令帶多餘參數），
+    兩支相鄰不重疊:這一支問「有沒有這一支」，那一支問
+    「這一支收不收這些東西」。
+    """
+    if not args:
+        what = "gate 要帶子指令，沒有預設的那一支。"
+    elif args[0] in GATE_SUBCOMMANDS:
+        return ""
+    else:
+        what = f"gate 底下沒有這一支：{args[0]}"
+    return (f"{what}\n"
+            f"有的是：{'、'.join(GATE_SUBCOMMANDS)}\n"
+            f"用法：forseti.py gate <{'|'.join(GATE_SUBCOMMANDS)}>\n"
+            "不擋的話這裡印的是整個 CLI 的用法，"
+            "而你打錯的是 gate 的子指令，兩者講的不是同一件事。")
+
+
 TRANSCRIPT_FLAGS: tuple[str, ...] = ("--limit",)
 
 
@@ -1792,6 +2083,34 @@ def main(argv: list[str]) -> int:
     rep = build_report(root)
     cmd = argv[1] if len(argv) > 1 else "doctor"
 
+    # 一份判準四個呼叫端，不是四份。名單在 NO_ARG_COMMANDS，
+    # 那裡寫著它是怎麼量出來的，以及為什麼 reindex 與 watch 比另外兩支重。
+    if cmd in NO_ARG_COMMANDS:
+        bad = no_extra_args(argv[2:], cmd)
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
+
+    # 真的吃位置參數的那七支。形狀在 OPERAND_SHAPES，那裡寫著每一格
+    # 是怎麼量出來的，以及為什麼第二格比第一格重（第二格會走到寫入點）。
+    shape = OPERAND_SHAPES.get(cmd)
+    if shape is not None:
+        bad = operands(argv[2:], cmd, shape)
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
+
+    # 第三種判準：某一格的值必須在某張名單裡。排在 `operands` **後面**，
+    # 因為旗標不在任何名單裡，兩道都會攔到 `event --yes s why` ——
+    # 而那一次真正錯的是旗標放錯位置，不是「--yes 不是合法的 kind」。
+    # 先講長相再講成員資格，訊息才指得到根本原因。
+    member = MEMBER_SLOTS.get(cmd)
+    if member is not None:
+        bad = membership(argv[2:], cmd, member)
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
+
     if cmd == "doctor":
         bad = no_extra_args(argv[2:], "doctor")
         if bad:
@@ -1804,6 +2123,11 @@ def main(argv: list[str]) -> int:
             print(bad, file=sys.stderr)
             return 2
         return cmd_status(rep)
+    if cmd == "gate":
+        bad = gate_subcommand(argv[2:])
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
     if cmd == "gate" and len(argv) > 2 and argv[2] == "takeover":
         bad = no_extra_args(argv[3:], "gate takeover")
         if bad:
@@ -1811,6 +2135,11 @@ def main(argv: list[str]) -> int:
             return 2
         return cmd_gate_takeover(rep)
     if cmd == "gate" and len(argv) > 2 and argv[2] == "submit":
+        bad = operands(argv[3:], "gate submit",
+                       OPERAND_SHAPES["gate submit"])
+        if bad:
+            print(bad, file=sys.stderr)
+            return 2
         return cmd_gate_submit(rep, argv[3:])
     if cmd == "gate" and len(argv) > 2 and argv[2] == "status":
         bad = no_extra_args(argv[3:], "gate status")

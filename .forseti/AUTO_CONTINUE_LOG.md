@@ -15906,3 +15906,1166 @@ dispatch 是照這個表分派的，而實際上四個分支各自傳字面的�
   `limit=10`、SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應
   CANONICAL、`PRODUCES` 的 expected 對 actual、污染登記簿的
   「被哪一筆取代」要不要用 `SUPERSEDES` 接
+
+## 2026-09-18 14:0x-14:1x　自動接續：`gate` 打錯子指令，畫面講的是整個 CLI
+
+### 挑這一項的理由
+
+照兩步規則走。第一步讀 `AUTO_CONTINUE_LOG.md` 上一輪的「還缺什麼」，
+逐項問「要 owner 開口嗎」：
+
+| 那一條 | 要 owner 嗎 | 這一輪怎麼處理 |
+|---|---|---|
+| 4 條紅沒回頭跑全套確認 | 不用 | **做了。條件（沒有別人在跑）這一刻成立** |
+| 全套期間不要動檔案的順序 | 不用 | 照做了，見下面「這一輪的順序」 |
+| 兩輪同時跑全套要不要加鎖 | 要 | 跳過 |
+| `gate` 與 `gate bogus` 印整份 `__doc__` | 不用 | **挑了** |
+| `probe` 題名退回訊息不框起來 | 不用 | 沒挑（連續三輪順延，它是顯示層裡更小的一件） |
+| 六份 `_arg` 抽共用模組 | 是設計決定 | 跳過 |
+
+第一條與第四條可以同一輪做完，因為第四條的改動小，
+做完再跑全套就同時回答兩件事。
+
+### 這一輪做的不是新增守門，是讓訊息指回他打錯的那一層
+
+**先講清楚它不是什麼**：`gate` 與 `gate bogus` 改之前就已經 exit=2。
+
+    $ python3 apps/forseti-cli/forseti.py gate ; echo $?
+    Forseti CLI.
+    ...（整份模組 docstring，五十幾行）
+    2
+
+走的是 dispatch 末尾那一行 `print(__doc__); return 2`。那一行守的是
+「**整個 CLI** 沒有這個子指令」，而使用者打錯的是「**gate 的**子指令」。
+兩者都退回 2，可是講的不是同一件事：畫面要他去看整個 CLI 有哪些指令，
+而他要找的是 gate 有哪幾支。
+
+所以這一輪沒有一條測試在測 exit code 從 0 變 2 ——
+測那個會綠得莫名其妙。測的是「講的是哪一層」。
+
+| 寫法 | 改之前 | 改之後 |
+|---|---|---|
+| `gate` | 整份 `__doc__`，exit 2 | 「gate 要帶子指令」+ 三支的名字，exit 2 |
+| `gate bogus` | 同上 | 「gate 底下沒有這一支：bogus」+ 三支，exit 2 |
+| `gate status` | exit 0 | exit 0（沒變） |
+| `gate submit e-1` | 走 submit | 走 submit（沒變，新守門只看 `args[0]`） |
+
+### 兩道守門相鄰不重疊，實測認過人
+
+`gate_subcommand()` 問「有沒有這一支」，`no_extra_args()` 問
+「這一支收不收這些東西」。`gate status --yes` 的子指令是對的、
+錯的是多餘旗標，所以它要落在後面那一道。
+
+比對 exit code 認不出來（兩道都是 2），所以測試拿各自那句
+別人沒有的話認人：「gate 底下沒有這一支」對「沒有這些旗標」。
+實跑確認 `gate status --yes` 印的是後者。
+
+### 那個常數不准變成「定義了沒人讀」
+
+上一輪自己造出過這個形狀：`NO_ARG_COMMANDS` 定義了，全 repo
+沒有任何讀者，刪掉測試照樣綠。那正是 `.forseti/pollution.jsonl`
+第一筆記的機制。
+
+這一輪的 `GATE_SUBCOMMANDS` 有讀者，而且守它的測試**不是 grep 它
+出現幾次** —— grep 到的可能只是另一份複製品。判準是
+**改掉常數的內容，行為要跟著變**：改成只剩 `("takeover",)`，
+`gate_subcommand(["status"])` 必須開始退回；加一個 `"xyzzy"`，
+`gate_subcommand(["xyzzy"])` 必須放行。反向注入 3
+（把判準改成寫死的字面 tuple）當場紅。
+
+### 反向驗證，八道注入，九條每一條都有人紅
+
+不帶 `-x`，拿完整歸屬（上一輪帶了 `-x` 導致歸屬錯一次）。
+注入前一律先 `ast.parse`，注入壞掉不算守門抓到。
+
+| 注入 | 紅的測試 |
+|---|---|
+| 1 守門整個拿掉 | dispatch走共用判準、印的不是整個CLI、打錯會點名、沒帶子指令退回、相鄰不重疊 |
+| 2 gate 整層擋死 | 三支合法的照樣走到那一支、合法的三支回空字串、相鄰不重疊、那個常數有人讀 |
+| 3 判準另寫一份不讀常數 | 那個常數有人讀 |
+| 4 訊息掉回講整個 CLI | 印的不是整個CLI的用法 |
+| 5 不點名打錯的那個字 | 打錯會點名、相鄰不重疊 |
+| 6 用法那一行拿掉 | 訊息講得出下一步怎麼打 |
+| 7 dispatch 自己再列一份名單 | dispatch走共用判準而且自己不列第二份名單 |
+| 8 措辭跟另一道統一 | 相鄰不重疊 |
+
+**注入 2 是關鍵的那一道**：它證明「把 gate 整層擋死」會被抓到。
+沒有 `test_三支合法的照樣走到那一支`，擋死整層會讓
+「打錯要退回」那幾條綠得很漂亮。這跟上一輪 `gate takeover`
+那兩條要一起在，是同一個道理。
+
+八道跑完還原，sha256 對得回 `9ad973e131cbad0d`。
+
+### 全套：2164 綠，0 紅，上一輪那 4 條紅還完了
+
+上一輪的「還缺什麼」第一條要的就是這個。條件是
+「跑全套之前先 `ps aux | grep "[p]ytest tests/"`，沒有別人在跑的時候跑」。
+
+    14:07:41  ps -> 空的
+    14:07:45  start
+    14:13:31  end     2164 passed in 343.53s
+    14:13:43  ps -> 空的
+
+**0 failed。** 上一輪那 4 條紅（`test_declared_only` 兩條、
+`test_zz_forseti_write_attribution` 兩條）現在全部綠。
+上一輪判斷「那 4 條是我自己造成的」，這一次的全綠是那個判斷的證據，
+不再是推論。
+
+數字對照也對得上：上一輪 2151 + 4 = 2155，這一輪 2164，差 **9**，
+正好是我新增的 9 條。**上一輪的差值是 14 而只加了 9**，那 5 條的
+差額當時就被用來證明「這個 repo 有兩個寫入者」。這一輪差值等於新增數，
+代表這段期間沒有第二個寫入者加測試 —— 跟 343 秒對 575 秒那個
+時間差是同一件事的兩個側面。
+
+### 這一輪的順序：全套起跑之後一個檔都沒動
+
+上一輪自己違反過這一條（13:47:03 寫登記簿、13:49:28 改被測檔，
+而全套 13:45 就起跑了），於是自己製造 4 條紅又花時間查它們是誰的。
+
+這一輪的順序是：改程式碼 → 寫測試 → 單檔驗 → 八道反向注入 →
+還原驗 sha256 → **ps 確認乾淨** → 跑全套 → 全套結束後才寫這份紀錄。
+14:07:45 到 14:13:31 之間沒有動過任何檔案。
+
+### 正本沒有被碰到
+
+測前測後同一組數字：`.forseti/sufficiency.jsonl` 3 筆
+（mtime 09-16 13:30:58）、`.forseti/attempts.jsonl` 1 筆（09-17 22:25）、
+`.forseti/pollution.jsonl` 31 筆、`.forseti/metrics.jsonl` 仍然不存在。
+
+`pollution.jsonl` 上一輪收工是 29 筆，這一輪開工量到 31 筆 ——
+**那 2 筆不是這一輪登的**，是另一個寫入者在兩輪之間登的。
+這一輪沒有往 §40 登任何東西（沒有結論被推翻）。
+
+一次模型呼叫都沒有發生。沒有動畫面，沒有 build，
+沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 測試數
+
+新增 `tests/test_cli_flag_dispatch.py::GateSubcommand` **9 個方法**。
+單檔 100 → **109**，差值對得上。
+
+### 還缺什麼
+
+- **`gate submit` 沒有守門**。它吃 `exam_id`，所以不能套
+  `no_extra_args`，但 `gate submit a b c` 此刻會靜默把多的吞掉
+  （`cmd_gate_submit(rep, argv[3:])` 原樣收）。**這一輪沒有量它的後果**
+  —— 不知道多帶的那幾個會不會走到寫入點。不用 owner 開口
+- **`probe` 的題名退回訊息不把收到的值框起來**（連續三輪順延）。
+  不用 owner 開口
+- **兩輪同時跑全套**要不要加鎖，仍然是 owner 的決定。
+  這一輪運氣好沒有撞到，不代表機制變了
+- **`_arg` / `_flag_without_value` / `_unknown_flags` 仍然是六份。**
+  `gate_subcommand` 沒有長成第七份（它不掃旗標語意）。抽共用模組
+  仍然是設計決定
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED`
+  要她重新登入、`code_commit` 要合規得把工作區 commit 乾淨、
+  `limit=10`、SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應
+  CANONICAL、`PRODUCES` 的 expected 對 actual、污染登記簿的
+  「被哪一筆取代」要不要用 `SUPERSEDES` 接
+
+## 2026-09-18 14:2x-14:3x　自動接續：`gate submit` 那個「沒量後果」的，量了
+
+### 挑這一項的理由
+
+上一輪「還缺什麼」第一條寫著：`gate submit` 沒有守門，多帶的會
+靜默吞掉，而且「**這一輪沒有量它的後果** —— 不知道多帶的那幾個
+會不會走到寫入點」。那是自己寫下的、標明不用 owner 開口的缺口，
+排在清單第一位。
+
+ROADMAP 的 P0 到 P4 此刻沒有可以直接往下做的產品功能
+（2026-09-17 逐項查證那一節），剩下的都在「卡在你身上」那張表。
+所以挑的是自己寫下的缺口，不是再新增一層守門。
+
+### 量出來的後果比上一輪寫的多一種
+
+攔 `sufficiency.submit` 數呼叫次數，不是讀原始碼推論。六種寫法，
+改之前：
+
+| 寫法 | exit | 走到 submit | 拿到的 exam_id |
+|---|---|---|---|
+| `gate submit` | 2 | 0 | ── |
+| `gate submit E-123` | 2 | 1 | `E-123` |
+| `gate submit E-123 b c` | 2 | 1 | `E-123`，b c 吞掉 |
+| `gate submit E-123 --yes` | 2 | 1 | `E-123`，旗標吞掉 |
+| `gate submit --yes E-123` | 2 | 1 | **`--yes`** |
+| `gate submit --yes` | 2 | 1 | **`--yes`** |
+
+上一輪寫的是「靜默吞掉」，那只講到前三種。後兩種是另一個形狀：
+**旗標被當成考卷編號**。它不是沒有反應，它會去查一份叫 `--yes`
+的考卷，查不到就說「找不到這份考卷：--yes」—— 那句話把使用者
+指向「編號打錯了」，而他真正做錯的是把旗標放在位置參數前面。
+**錯的答案長得跟對的一樣**，跟 `SilentFallthrough` 那一組守的
+是同一件事。
+
+六種的 exit code 改之前**全部是 2**，所以這一輪改的不是 exit code。
+
+### 「會不會走到寫入點」的答案是會，而且真的寫進去
+
+端到端量，不攔 `submit`：臨時 root 放一份真考卷，三種寫法
+（乾淨、`b c`、`--yes`）帳本都從 1 行變 2 行，多的那一筆是
+`RESULT`。所以吞掉在這一支不是顯示問題。
+
+`sufficiency.jsonl` 是 append-only（`Log.append` 只有 `"a"` 模式），
+所以下錯指令留下的那一筆**收不回來**，而 `state()` 的 `attempts`
+會把它算進去。這比 `gate takeover` 那一件重一級：那邊寫的是一份
+考卷，這邊寫的是一筆判決結果，而判決結果決定 `write` 權限。
+
+### 改了什麼
+
+`forseti.py` 新增 `one_operand(args, cmd, operand)`，dispatch 的
+`gate submit` 那一支接上去。`no_extra_args` 管不到這一種：
+`gate submit` 要一個 `exam_id`，所以「有參數」本身是對的，錯的是
+**數量與長相**。三份判準現在相鄰不重疊：
+
+- `gate_subcommand`　問「有沒有這一支」
+- `no_extra_args`　　問「這一支收不收任何參數」（四個呼叫端）
+- `one_operand`　　　問「數量與長相對不對」（一個呼叫端）
+
+**空的刻意不歸 `one_operand` 管。** `cmd_gate_submit` 自己那句
+「要交哪一份考卷？」講得比通用措辭具體，判準吃掉空的話那句話
+就再也印不出來。`test_空的不歸這一支管` 守的是這一件。
+
+改後重量：乾淨呼叫照樣走到 submit（帳本 1→2），四種錯法
+exit 2、走到 0 次、帳本 1→1。
+
+### 反向驗證，九道注入，九條測試每一條都有人紅
+
+**不帶 `-x`**（那是兩輪前的教訓，帶了會讓歸屬錯一次）。
+
+| 注入 | 紅幾條 |
+|---|---|
+| 1 判準永遠回空 | 6 |
+| 2 dispatch 守門移掉 | 5 |
+| 3 判準永遠回錯（擋死整層） | 8 |
+| 4 只擋旗標不擋多的 | 5 |
+| 5 只擋多的不擋旗標在前 | 2 |
+| 6 空的也吃掉 | 1 |
+| 7 用法那行寫死 | 1 |
+| 8 dispatch 自己判一次 | 5 |
+| 9 多的那種不列出收到的值 | 2 |
+
+注入 3 是關鍵那一道：它是**唯一**讓 `test_乾淨呼叫照樣走到那一支`
+紅的注入。沒有那一條，把 submit 整層擋死會讓另外八條綠得很漂亮。
+注入 6 與 7 各只紅一條，那兩條測試因此不是裝飾。
+
+還原後 `forseti.py` 的 sha256 對得回 `5ee970dd249ab435`。
+
+### 測試數
+
+新增 `tests/test_cli_flag_dispatch.py::GateSubmitOperand` **9 個方法**。
+單檔 109 → **118**，差值對得上。
+
+### 全套：2173 綠，0 紅
+
+14:24:01 起跑，14:31:30 結束（447.58 秒）。**2173 passed、0 failed。**
+
+差值自己說明這一段沒有第二個寫入者：上一輪收工 2164，這一輪
+2164 + 9 = 2173，差 **9** 正好等於新增數。
+
+### 這一輪的順序：全套起跑之後一個檔都沒動
+
+14:23:49 `ps` 量到 0 支別人的 pytest（第一次量回 1，那是我自己
+剛結束的單檔測試的殘留，再量是空的）→ 14:24:01 起跑 →
+14:31:30 結束 → 之後才寫這份紀錄。兩輪前違反過這一條並自己
+製造 4 條紅。
+
+### 正本沒有被碰到
+
+四個檔測前測後 sha256 完全一致：
+
+| 檔 | 測前 | 測後 |
+|---|---|---|
+| `.forseti/pollution.jsonl` | `85bd818f521e0b02` | 同 |
+| `.forseti/sufficiency.jsonl` | `b04d5e011ca3fbb5` | 同 |
+| `.forseti/event_ledger.jsonl` | `ae41f30dfe2be630` | 同 |
+| `.forseti/NEXT.md` | `7cbfaa10e3cbeeb0` | 同 |
+
+污染登記簿這一輪量到 `summary()['total']` = **29**，而
+`pollution.jsonl` 測前測後未變，所以這一輪沒有登任何東西 ——
+這一輪沒有結論被推翻。**上一輪紀錄寫的「開工量到 31」這個數字
+不是這一輪量的，這裡不替它解釋差異**，只記下我量到的是 29
+與量的是哪一個指標。
+
+一次模型呼叫都沒有發生。
+
+### `NEXT.md` 這一輪重新產生了，而且是走自動那條路
+
+上一輪刻意沒有重產，理由是那一刻有一支別人的 pytest 在跑，而全套
+裡有一條在數 `NEXT.md` 的寫入次數。**這一輪那個理由不成立**：
+14:31:30 全套已經結束，`ps` 量到 0 支 pytest，所以 14:33:58 跑了
+`desktop_api.strands()`（rows=20），它尾段的 `_write_handoff(snap)`
+自己把 `NEXT.md` 寫掉。
+
+**不是手寫那個檔。** 它的來源是 `strands()`，手寫等於製造第二個
+事實來源。`NEXT.md` 的 sha256 因此從 `7cbfaa10e3cbeeb0` 變成
+`f1ed6d58783c307c` —— 上面那張表的「測後一致」量的是全套結束
+那一刻，這一次寫入在那之後，**不是測試造成的**。
+
+### 沒有動畫面，沒有 build，沒有開關 App
+
+改的是 `forseti.py` 與測試檔，`desktop/ui/app.js` 一行都沒碰，
+所以不需要 build 也不需要 deploy。沒有 `open`、沒有 `pkill`、
+沒有設 `FORSETI_OPEN`。
+
+### 還缺什麼
+
+- **`gate submit` 的 `exam_id` 長相沒有守門。** 這一輪守的是數量
+  與位置，沒有守「`E-` 開頭」這種形狀 —— 而且**刻意沒守**：
+  exam_id 的格式規格沒有定義，自己編一個 pattern 就是 §8.3 的
+  填空。要守得先有人定義格式。不用 owner 開口的部分已經做完
+- **`context` / `index` / `recall` / `tasks` 等十幾支子指令
+  完全沒有量過參數守門。** 這一輪只碰 `gate submit`。那十幾支
+  裡有哪幾支會改變狀態，沒有量。不用 owner 開口
+- **`probe` 的題名退回訊息不把收到的值框起來**（連續四輪順延）。
+  不用 owner 開口
+- **`_arg` / `_flag_without_value` / `_unknown_flags` 仍然是六份。**
+  `one_operand` 沒有長成第七份（它不掃旗標語意，只看第一個參數
+  的長相與總數）。抽共用模組仍然是設計決定
+- **兩輪同時跑全套**要不要加鎖，仍然是 owner 的決定
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED`
+  要她重新登入、`code_commit` 要合規得把工作區 commit 乾淨、
+  `limit=10`、SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應
+  CANONICAL、`PRODUCES` 的 expected 對 actual、污染登記簿的
+  「被哪一筆取代」要不要用 `SUPERSEDES` 接
+
+---
+
+## 2026-09-18 14:3x-14:4x　連續四輪被順延的「題名退回訊息不框起來」結了，四個呼叫端一起
+
+### 挑了什麼，為什麼挑它
+
+`supervisor.py --status` 回 `會不會喚醒: true`，沒有閘擋住。
+ROADMAP 的 P0 兩項都卡在 owner（`dry_run=False` 那一按、
+`sufficiency_enforce` 等 F04/F05），所以挑的是上一輪自己寫下的
+「還缺什麼」裡**不用 owner 開口**的那一條 ——
+`probe` 的題名退回訊息不把收到的值框起來。**連續四輪被順延**，
+每一輪的理由都是「它是顯示層裡更小的一件」。
+
+### 改之前實測的現況
+
+`probe run "goal_persistence "`（尾隨一個空白）印出來的兩行：
+
+    沒有這一題：goal_persistence 
+    有的是：goal_persistence、claim_evidence_honesty、⋯
+
+**同一個字串，上面說沒有，下面說有。** 真正的差別（一個空白）
+在畫面上不存在。前導空白同一回事。大小寫打錯那一種看得見
+（`GOAL_PERSISTENCE`），空白這一種看不見 —— 所以這一種難查。
+
+### 改了什麼
+
+`probe.py` 新增 `shown(value)`，回傳 `「value」`。四個退回訊息的
+呼叫端接上去，**一份判準不是四份**：
+
+| 呼叫端 | 改之後印出來的 |
+|---|---|
+| `probe run "goal_persistence "` | `沒有這一題：「goal_persistence 」` |
+| `probe " lisst"` | `不認得這個指令：「 lisst」` |
+| `probe --only x` | `這一支沒有旗標：「--only」` |
+| `probe baseline --by` | `這不是人名：「--by」` |
+
+**這是顯示，不是判準。** 退回的條件一個字都沒動，改的只是
+被退回的人看不看得出為什麼。要不要 normalize（把空白吃掉當成
+同一題）**刻意沒做** —— 那會改變誰被退回，是設計決定。
+
+下一行「有的是」那份清單刻意不框：十個框連著讀不動，而且
+有一邊框起來、對照才成立。
+
+### 自己寫的測試第一版守不住它宣稱的東西，同一輪被自己的注入推翻
+
+`test_退回那一行不准跟合法題名長得一模一樣` 第一版寫成
+直接比字串。注入「shown 完全不框」的時候它**照樣綠** ——
+`"goal_persistence "` 在字串上確實不等於 `"goal_persistence"`，
+而畫面上的差別正好就是那個「比得出來、看不出來」的空白。
+**判準本身犯了這一輪要修的那個錯。** 改成剝掉前綴再 `.strip()`
+之後，注入 1 從綠變紅。這一件寫進測試的 docstring，
+因為下一個讀的人會想把那個 `.strip()` 當成隨手加的。
+
+### 反向驗證，十道注入，九條測試每一條都有人紅
+
+不帶 `-x`。
+
+| 注入 | 紅幾條 | 唯一紅到的 |
+|---|---|---|
+| 1 `shown` 不框直接回原值 | 6 | |
+| 2 題名那一處寫死不框 | 3 | |
+| 3 子指令那一處寫死不框 | 2 | |
+| 4 旗標那一處寫死不框 | 2 | |
+| 5 人名那一處寫死不框 | 2 | |
+| 6 `shown` 把空白吃掉再框 | 3 | |
+| 7 守門 normalize 吃掉空白 | 3 | |
+| 8 守門擋死，合法題名也退回 | 1 | `test_框起來沒有多擋` |
+| 9 四處各自寫死同一個框 | 1 | `test_四個呼叫端讀的是同一份` |
+| 10 題名守門整段移掉 | 5 | `test_框起來沒有少擋` |
+
+**注入 10 是補進來的。** 前九道跑完 `test_框起來沒有少擋`
+從頭到尾沒有紅過 —— 注入 7（normalize）擋不住 `bogus_case`，
+所以它照樣退回。一條沒有人紅過的測試就是裝飾，補一道
+「守門整段移掉」才證明它守得住東西。
+
+注入 9 是關鍵那一道：四處各自寫死一模一樣的框，畫面完全相同，
+只有 `test_四個呼叫端讀的是同一份` 紅（它改掉 `shown` 的內容
+再看四處有沒有跟著變）。沒有那一條，`shown()` 會變成
+「定義了沒人讀」而四個呼叫端各自漂開。
+
+還原後 `probe.py` 的 sha256 對得回 `10942f776d2f70b5`。
+
+### 測試數
+
+新增 `tests/test_cli_flag_dispatch.py::ProbeEchoValue` **9 個方法**。
+單檔 118 → **127**，差值對得上。
+
+### 全套：2182 綠，0 紅
+
+14:42:26 起跑，14:48:57 結束（389.41 秒）。**2182 passed、0 failed。**
+上一輪收工 2173，2173 + 9 = 2182，差 **9** 正好等於新增數 ——
+這一段沒有第二個寫入者。
+
+### 這一輪的順序：全套起跑之前量過沒有別人在跑
+
+14:41:xx `ps aux | grep [p]ytest` 第一次量回 1（我自己剛結束的
+單檔測試殘留），再量是 **0**。然後才起跑。兩輪前違反過這一條
+並自己製造 4 條紅。
+
+### 正本沒有被碰到
+
+| 檔 | 測前 | 測後 |
+|---|---|---|
+| `.forseti/pollution.jsonl` | `85bd818f521e0b02` | 同 |
+| `.forseti/sufficiency.jsonl` | `b04d5e011ca3fbb5` | 同 |
+| `.forseti/event_ledger.jsonl` | `ae41f30dfe2be630` | 同 |
+| `.forseti/NEXT.md` | `f1ed6d58783c307c` | 同 |
+
+污染登記簿 `summary()['total']` = **29**，`pollution.jsonl` 未變 ——
+這一輪沒有結論被推翻。（上一輪量到的也是 29。）
+
+一次模型呼叫都沒有發生。
+
+### 沒有動畫面，沒有 build，沒有開關 App
+
+改的是 `probe.py` 與測試檔，`desktop/ui/app.js` 一行都沒碰。
+沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+
+### 還缺什麼
+
+- **`probe run` 的題名要不要 normalize** —— 框起來之後畫面不再
+  自相矛盾，但 `"goal_persistence "` 仍然被退回。吃不吃空白是
+  設計決定（會改變誰被退回），留給 owner
+- **`context` / `index` / `recall` / `tasks` 等十幾支子指令
+  完全沒有量過參數守門。** 那十幾支裡有哪幾支會改變狀態，
+  仍然沒有量。不用 owner 開口，這是下一輪最大的一塊
+- **`gate submit` 的 `exam_id` 長相沒有守門**，而且**刻意不守**：
+  格式規格沒有定義，自己編一個 pattern 就是 §8.3 的填空
+- **「旗標用錯子指令」仍然沒人管**（`plan --yes` 照樣 exit=0）
+- **其他 CLI 的退回訊息有沒有同一個形狀，沒有量。**
+  這一輪只碰 `probe` 那四處。`claims` 的「找不到：--limit」
+  也沒有框，但那一句講的是檔名不是題名，是不是同一件事沒有量
+- **`_arg` / `_flag_without_value` / `_unknown_flags` 仍然是六份。**
+  `shown` 沒有長成第七份（它不判任何東西，只負責顯示）。
+  抽共用模組仍然是設計決定
+- **兩輪同時跑全套**要不要加鎖，仍然是 owner 的決定
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED`
+  要她重新登入、`code_commit` 要合規得把工作區 commit 乾淨、
+  `limit=10`、SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應
+  CANONICAL、`PRODUCES` 的 expected 對 actual、污染登記簿的
+  「被哪一筆取代」要不要用 `SUPERSEDES` 接
+
+### `NEXT.md` 這一輪重新產生了，走的是自動那條路
+
+14:50:26 `ps` 量到 0 支別人的 pytest，然後跑 `desktop_api.strands()`，
+它尾段的 `_write_handoff(snap)` 自己把 `NEXT.md` 寫掉。
+**不是手寫那個檔** —— 手寫等於製造第二個事實來源。
+sha256 從 `f1ed6d58783c307c` 變成 `9dd22f8c52216ba9`，
+這一次寫入在全套結束之後，**不是測試造成的**。
+
+### 順帶更正上一輪紀錄裡一個呼叫寫法
+
+上一輪紀錄寫的是 `desktop_api.strands(rows=20)`。**那個參數不存在**：
+`inspect.signature(desktop_api.strands)` 實際是
+`(session: str = '', projects: Path | None = None)`，照抄上一輪那行
+會當場 `TypeError`。這一輪第一次照抄就撞到了。
+
+**沒有登進 §40 污染登記簿**，理由寫下來讓下一輪可以推翻我：
+登記簿收的是「被推翻的結論」，而這一句是紀錄文件裡的一個呼叫
+寫法錯誤，不是一個被當成事實帶下去的判斷。下一輪若判定它屬於
+§40 範圍，登它，並且把這一段當成當初為什麼沒登的理由。
+
+## 2026-09-18 14:5x-15:0x　那十幾支子指令量了，四支不吃參數的接上共用判準，其中兩支會改狀態
+
+### 挑了什麼，為什麼挑它
+
+`supervisor.py --status` 回 `會不會喚醒: true`，沒有閘擋住。
+照兩步規則走，第一步（上一輪「還缺什麼」）第二條就停住了，
+那一條自己寫著**不用 owner 開口，這是下一輪最大的一塊**：
+
+> `context` / `index` / `recall` / `tasks` 等十幾支子指令完全沒有量過
+> 參數守門。那十幾支裡有哪幾支會改變狀態，仍然沒有量。
+
+**要的是量，不是先修。** 所以這一輪先量十四種寫法，量完才決定改哪幾支。
+
+### 量的方式：攔寫入點，不真的寫
+
+把 `Ledger.dispatch / auto_dispatch / drain / worker_event / verify_step /
+accept / transition / recover / collect_inbox` 與
+`EventLedger.reindex / append` 全部換成計數 stub，走到就記一筆再
+raise 中止。**分界不是「有沒有印東西」，是有沒有走到寫入點。**
+
+| 寫法 | exit | 走到寫入點 | 後果 |
+|---|---|---|---|
+| `tasks --bogus` | 0 | 沒有 | 旗標吞掉，印出一份正常的未完成清單 |
+| `tasks x` | 0 | 沒有 | 同上 |
+| `events --limit 5` | 0 | 沒有 | 同上，`--limit` 等於沒寫 |
+| `watch --bogus` | 0 | **`Ledger.collect_inbox`** | 照樣巡檢，收信箱、判活著沒 |
+| `reindex --dry-run` | 0 | **`EventLedger.reindex`** | 索引照樣整個砍掉重建 |
+| `replay sess extra` | 1 | 沒有 | `extra` 靜默吞掉 |
+| `continuity --yes` | 1 | 沒有 | **旗標被當成 task id** |
+| `verify --yes` | 1 | 沒有 | **旗標被當成 step id** |
+| `dispatch --yes w` | 1 | 沒有 | 同上 |
+| `auto --yes w` | 1 | 沒有 | 同上 |
+| `event --yes s why` | 1 | 沒有 | `--yes` 當 kind、`s` 當 step，訊息指向 step |
+| `drain <真 task> w extra --yes` | ── | `Ledger.drain` 收到 `(task, w)` | `extra --yes` 靜默吞掉 |
+| `continuity <真 task> extra --yes` | 0 | 唯讀 | 同上 |
+
+量完是**兩種形狀**，不是一種：
+
+1. **不吃任何參數的四支**（`tasks` / `events` / `watch` / `reindex`），
+   多餘參數靜默吞掉。其中 `watch` 與 `reindex` **會改變狀態**。
+2. **真的吃參數的那幾支**，旗標放在位置參數前面會被當成 id，
+   訊息把人指向「id 打錯」，而他真正做錯的是位置。
+   跟 09-18 稍早修掉的 `gate submit --yes` 是同一個形狀。
+
+**這一輪只做第一種。** 第二種要新的判準（固定幾個位置參數），
+留給下一輪，理由寫在下面「還缺什麼」。
+
+### `watch` 那一支第一輪量錯了，第二輪才量到
+
+第一輪 `watch --bogus` 回「沒有走到寫入點」。**那個 0 不是證據，
+是沒有材料** —— 當下正本 0 個進行中的步驟，`collect_inbox` 在迴圈裡，
+根本沒有東西可以巡。第二輪把 `active_steps()` 換成一個假的進行中
+步驟再量，`collect_inbox` 就出現了。
+
+**「這一次沒走到」跟「走不到」不是同一件事**，中間差的是有沒有材料。
+這一條寫進測試的 docstring，因為下一個讀的人會想把那個假步驟
+當成「為了方便造的」而拿掉，拿掉之後那一條會因為錯的理由綠。
+
+### 改了什麼
+
+新增 `NO_ARG_COMMANDS = ("tasks", "events", "watch", "reindex")`，
+`main()` 裡**一處**membership 守門接 `no_extra_args`：
+
+    if cmd in NO_ARG_COMMANDS:
+        bad = no_extra_args(argv[2:], cmd)
+
+**判準沒有新增一份** —— `no_extra_args` 是 09-18 13:3x 寫的，
+這一輪只是多四個呼叫端。原本那四支（`doctor` / `status` /
+`gate takeover` / `gate status`）維持各自的分支，因為 `gate` 那兩支的
+名字是兩段（`"gate takeover"`），塞不進同一個 membership。
+
+改之後：
+
+| 寫法 | exit | 印出來的 |
+|---|---|---|
+| `tasks --bogus` | 2 | `這一支沒有這些旗標：--bogus` |
+| `tasks x` | 2 | `這一支不吃參數，拿到的是：x` |
+| `events --limit 5` | 2 | `這一支沒有這些旗標：--limit` |
+| `reindex --dry-run` | 2 | 同上，**而且不再走到 `reindex`** |
+| `watch --bogus` | 2 | 同上，**而且不再走到 `collect_inbox`** |
+
+乾淨呼叫四支照舊，`reindex` 仍然走到寫入點。
+
+### 為什麼 `reindex --dry-run` 是這一組最重的
+
+那個旗標的意思是**先別動**。改之前它跟乾淨呼叫走同一條路，
+索引整個砍掉重建，畫面上還回一句「重建完成」。
+使用者打那個字是為了確認，拿到的是已經做完。
+
+`watch` 是第二重：`collect_inbox` 會把收件匣的檔案移到 `.done/`，
+`recover` 會升級 retry 階。那是會改狀態的巡檢，不是唯讀的看一眼。
+
+前兩支（`tasks` / `events`）是唯讀的，所以是顯示問題不是狀態問題。
+**照樣擋**，理由跟原本那四支一樣：不擋的話那個打錯的字不會有任何人提起。
+
+### 反向驗證，九道注入，十一條測試每一條都有人紅
+
+不帶 `-x`。
+
+| 注入 | 紅幾條 | 唯一紅到的 |
+|---|---|---|
+| 1 守門整段移掉 | 6 | |
+| 2 守門擋死，乾淨呼叫也退回 | 3 | |
+| 3 只擋旗標，位置參數放過 | 3 | |
+| 4 四處各自寫死同一句 | 1 | `test_四個呼叫端讀的是同一份` |
+| 5 名單少掉 `reindex` | 6 | |
+| 6 名單少掉 `watch` | 6 | |
+| 7 名單多收了 `verify` | 2 | |
+| 8 用法那一行寫死 `tasks` | 1 | `test_訊息講得出是哪一支` |
+| 9 守門搬到 dispatch 後面 | 6 | |
+
+注入 4 是關鍵那一道：四處各自寫死一模一樣的訊息，畫面完全相同，
+只有 `test_四個呼叫端讀的是同一份` 紅（它換掉 `no_extra_args` 的
+回傳值，再看四處有沒有跟著變）。沒有那一條，`NO_ARG_COMMANDS`
+會變成「定義了沒人讀」而四個呼叫端各自漂開。
+
+注入 7（名單多收 `verify`）守的是**沒有多擋**：`verify <step>` 是
+合法用法，進了名單就被擋在門外。前六道注入從來沒讓
+`test_沒有多擋真的吃參數的那幾支` 紅過，補這一道才證明它守得住東西。
+
+### 測試數
+
+新增 `tests/test_cli_flag_dispatch.py::LedgerNoArgSubcommand` **11 個方法**。
+單檔 127 → **138**，差值對得上。
+
+### 全套：2193 綠，0 紅
+
+14:59:59 起跑，15:07:09 結束（428.93 秒）。**2193 passed、0 failed。**
+上一輪收工 2182，2182 + 11 = 2193，差 **11** 正好等於新增數 ——
+這一段沒有第二個寫入者。
+
+### 這一輪的順序：全套起跑之前量過沒有別人在跑
+
+`ps aux | grep [p]ytest` 第一次回 1（自己剛結束的單檔測試殘留），
+等三秒再量是 **0**，然後才起跑。
+
+### 正本沒有被碰到
+
+| 檔 | 測前 | 測後 |
+|---|---|---|
+| `.forseti/pollution.jsonl` | `85bd818f521e0b02` | 同 |
+| `.forseti/sufficiency.jsonl` | `b04d5e011ca3fbb5` | 同 |
+| `.forseti/event_ledger.jsonl` | `ae41f30dfe2be630` | 同 |
+| `.forseti/NEXT.md` | `9dd22f8c52216ba9` | 同 |
+
+污染登記簿 `summary()['total']` = **29**，未變 ——
+這一輪沒有結論被推翻。
+
+量的那兩支腳本全程攔在寫入點，**一次都沒有真的寫**。
+`reindex` 的乾淨呼叫測試也是攔住再 `SystemExit`，
+正本的索引一次都沒有被重建。一次模型呼叫都沒有發生。
+
+### 沒有動畫面，沒有 build，沒有開關 App
+
+改的是 `forseti.py` 與測試檔。`desktop/ui/app.js` 一行都沒碰
+（mtime 仍是 09-18 13:43）。沒有 `open`、沒有 `pkill`、
+沒有設 `FORSETI_OPEN`。
+
+### 還缺什麼
+
+- **旗標被當成位置參數，那七支還沒人管**（`verify` / `continuity` /
+  `dispatch` / `auto` / `drain` / `event` / `replay`）。量過了，
+  形狀跟已經修掉的 `gate submit --yes` 一模一樣：訊息說「找不到
+  任務：--yes」，把人指向 id 打錯，而他錯的是位置。**exit code
+  也錯一級**（1 = 資料錯，應該是 2 = 用法錯）。不用 owner 開口，
+  這是下一輪最大的一塊
+- **`one_operand` 吃不下 `drain`**：那一支要的是**剛好兩個**位置參數，
+  現有判準只管「剛好一個」。要嘛長一支 `exact_operands`，要嘛
+  `one_operand` 加參數。**這是設計決定**（判準要不要多一份），
+  不是照抄就好
+- **`dispatch` / `auto` 的第三個以後是「理由」，不是多餘參數**，
+  所以它們歸不了 `no_extra_args`，也歸不了固定數量那一種。
+  它們錯的只有第一個位置。**這三種要分清楚才動手**
+- **`context` / `index` / `recall` 轉發給別的模組，完全沒量。**
+  這一輪只量到 `forseti.py` 自己 dispatch 的那幾支。
+  `context_meter.main` 與 `recall.main` 自己收不收亂參數，沒有量
+- **`event` 的 kind 沒有守門**：`event --yes s why` 走到的是
+  「找不到步驟：s」，也就是 `--yes` 被當成合法 kind 一路帶到
+  `worker_event` 才會 ValueError。合法 kind 有名單
+  （`ledger.WORKER_EVENTS`），守得住，這一輪沒做
+- **`handoff` 完全沒量**。它有 `--shell` / `--no-shell` 兩個真旗標，
+  跟前面幾支不同形狀，要單獨量
+- 上一輪那幾條沒有變：`probe run` 要不要 normalize（owner）、
+  `gate submit` 的 `exam_id` 長相刻意不守（規格沒定義，編一個
+  就是 §8.3 的填空）、其他 CLI 的退回訊息有沒有同一個形狀、
+  `_arg` / `_flag_without_value` / `_unknown_flags` 仍然六份、
+  兩輪同時跑全套要不要加鎖（owner）
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED`
+  要她重新登入、`code_commit` 要合規得把工作區 commit 乾淨、
+  `limit=10`、SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應
+  CANONICAL、`PRODUCES` 的 expected 對 actual、污染登記簿的
+  「被哪一筆取代」要不要用 `SUPERSEDES` 接
+
+## 2026-09-18 15:1x-15:3x　那七支「旗標被當成位置參數」結了，而且量到第二格比第一格重
+
+### 挑了什麼，為什麼挑它
+
+`supervisor.py --status` 回 `會不會喚醒: true`，沒有閘擋住。
+上一輪「還缺什麼」第一條自己寫著**不用 owner 開口，這是下一輪最大的一塊**：
+
+> 旗標被當成位置參數，那七支還沒人管（`verify` / `continuity` /
+> `dispatch` / `auto` / `drain` / `event` / `replay`）。exit code 也錯一級。
+
+同一條底下還寫著三件必須先分清楚才動手的事：`one_operand` 吃不下
+`drain`（要剛好兩個）、`dispatch` / `auto` 的第三個以後是理由不是多餘
+參數、這三種形狀混成一種就會擋到合法用法。所以這一輪先量，量完
+才決定判準長什麼樣。
+
+### 量出來的東西推翻了上一輪那張表的範圍
+
+上一輪只量了**旗標放在第一格**。這一輪把第二格也量了，結果不是同一件事：
+
+| 寫法 | exit | 走到寫入點 | 收到什麼 |
+|---|---|---|---|
+| `verify --yes` | 1 | 沒有 | ── |
+| `continuity --yes` | 1 | 沒有 | ── |
+| `replay --limit` | 1 | 沒有 | ── |
+| `drain --yes w` | 1 | 沒有 | ── |
+| `dispatch --yes w` | 1 | 沒有 | ── |
+| `auto --yes w` | 1 | 沒有 | ── |
+| `event --yes s why` | 1 | 沒有 | ── |
+| `drain <真 task> --yes` | ── | **`Ledger.drain`** | `(task, '--yes')` |
+| `dispatch <真 step> --yes r` | ── | **`Ledger.dispatch`** | `(step, '--yes', 'r')` |
+| `auto <真 task> --yes r` | ── | **`Ledger.auto_dispatch`** | `(task, '--yes', 'r')` |
+| `event DONE <真 step> why --yes` | ── | **`worker_event`** | `worker='--yes'` |
+| `drain <真 task> w extra --yes` | ── | **`Ledger.drain`** | `(task, 'w')`，尾巴吞掉 |
+| `verify <真 step> extra` | ── | **`verify_step`** | 尾巴吞掉 |
+| `continuity <真 task> extra --yes` | ── | `continuity`（唯讀） | 尾巴吞掉 |
+
+**第一格與第二格不是同一件事。** 第一格是 id，查不到就停在
+「找不到…」，exit 1，沒有東西被寫進去 —— 那是訊息指錯地方加上
+exit code 錯一級。**第二格是 worker，沒有人去查它**，所以它一路走到
+寫入點，帳本裡那一筆的 worker 就是那個旗標。帳本是 append-only，
+那一筆收不回來。上一輪把這七支歸成「顯示問題」，那個歸類只對第一格。
+
+### 量的第一版自己造了材料，第二版才算數
+
+第一版的假帳本讓 `_resolve_step` 對任何字串都回得出步驟，於是
+`verify --yes` / `dispatch --yes w` / `event --yes s why` 三種
+**看起來都走到了寫入點**。那不是證據，是自己造出來的材料 ——
+真的帳本查不到叫 `--yes` 的步驟。改成只有對得上才回得出東西之後，
+第一格那七種全部落在「沒有走到寫入點」。
+
+這跟上一輪 `watch` 那件事是同一個陷阱的**反面**：一邊是材料不夠，
+把「這次沒走到」讀成「走不到」；一邊是材料太多，把「走得到」讀成
+證據。兩邊都是拿假材料量出來的數字，方向相反而已。
+
+### 改了什麼：一份判準，八個呼叫端
+
+`one_operand`（只管「剛好一個」）**換成** `operands` + `Shape`，
+不是在它旁邊多加一份。`gate submit` 也改走新的那一支，
+所以判準仍然只有一份。
+
+```
+@dataclass(frozen=True)
+class Shape:
+    slots: tuple[tuple[str, bool], ...]   # (名字, 要不要擋旗標)
+    required: int                          # 只決定用法那行框 <x> 還是 [x]
+    tail: str = ""                         # 自由文字尾巴,"" = 不收多的
+```
+
+三種形狀各自對得上，不是硬塞成一種：
+
+| 支 | slots | tail | 為什麼 |
+|---|---|---|---|
+| `verify` / `continuity` / `replay` | 一格 | 無 | 剛好一個 |
+| `drain` | `task` `worker` | 無 | 剛好兩個 |
+| `dispatch` / `auto` | `step`/`task` `worker` | `理由` | 第三個以後是自由文字，**沒有上限** |
+| `event` | `kind` `step` `理由` `worker` | 無 | 第三格 `guard=False`，第四格照擋 |
+| `gate submit` | `exam_id` | 無 | 原本 `one_operand` 那一支 |
+
+`event` 的第三格是唯一一格不擋旗標的。理由是自由文字，
+一個以 `-` 開頭的理由是合法的，擋它就是拿長相定罪，而這裡
+沒有 filesystem 那種確定性的問法可用（`bible.md` Q-01 反過來用）。
+id 那幾格不一樣：它們要拿去查，所以旗標放在那裡一定是錯的。
+
+改之後那十五種寫法**全部 exit 2、一個寫入點都沒碰到**，
+而六種乾淨呼叫（含帶多字理由的 `dispatch` 與 `-開頭的理由`）
+照樣走到寫入點。
+
+### 用法那一行不是我自己抄的
+
+表裡的名字與必填數，是照各支自己 `print` 的那行用法對齊的，
+所以退回時畫面上那一行跟他打錯之前看到的是同一句。
+`test_用法那一行跟那一支自己印的是同一句` 從原始碼正則抓那六行
+回來比對，抓到的行數不是 6 就紅 —— 抄一份的話兩邊一起錯看不出來。
+
+### 反向驗證，十一道注入，十一條測試每一條都有人紅
+
+不帶 `-x`。
+
+| 注入 | 紅幾條 | 唯一紅到的 |
+|---|---|---|
+| 1 守門整段移掉 | 4 | |
+| 2 守門擋死，乾淨呼叫也退回 | 14 | |
+| 3 只擋旗標，多的放過 | 6 | |
+| 4 只擋第一格 | 1 | `test_第二格旗標四支都退回而且一個寫入點都沒碰到` |
+| 5 每一格都擋，理由也擋 | 1 | `test_理由那一格不准擋旗標` |
+| 6 有理由尾巴的也照數量擋 | 2 | |
+| 7 空的也吃掉 | 2 | |
+| 8 每個呼叫端各自寫死同一句 | 2 | |
+| 9 表裡的名字跟那一支自己印的不一樣 | 1 | `test_用法那一行跟那一支自己印的是同一句` |
+| 10 表裡多收了不吃參數的 `tasks` | 1 | `test_沒有多擋不吃參數的那幾支` |
+| 11 有一格的名字是空的 | 2 | |
+
+注入 4 與 5 是這一組的兩端：一端證明第二格真的有人守，
+另一端證明**沒有多擋** —— 合法的 `-開頭的理由` 不准被擋在門外。
+
+### 自己寫的測試第一版守不住它宣稱的東西，同一輪被自己的注入推翻
+
+`test_帶太少仍然歸那一支自己那句話` 第一版比的是字串（畫面上有沒有
+印出那一支的用法）。注入 7（判準把空的也吃掉）跑完**它照樣綠** ——
+因為表裡的名字就是照那一行對齊的，判準印出來的用法跟那一支自己印的
+一模一樣。改成攔 `cmd_verify` 那幾支、看有沒有真的被呼叫到，才紅。
+**定位的方式不能是看畫面印什麼**，兩句長得一樣的時候畫面分不出來。
+
+### 測試數
+
+新增 `tests/test_cli_flag_dispatch.py::PositionalOperands` **11 個方法**。
+原本呼叫 `one_operand` 的四處改成呼叫新判準，沒有新增也沒有刪除。
+單檔 138 → **149**。
+
+### 全套：2204 綠，0 紅
+
+15:22:42 起跑，412.28 秒。**2204 passed、0 failed。**
+上一輪收工 2193，2193 + 11 = 2204，差 **11** 正好等於新增數 ——
+這一段沒有第二個寫入者。起跑前 `ps aux | grep [p]ytest` 是 0。
+
+### 正本沒有被碰到
+
+| 檔 | 測前 | 測後 |
+|---|---|---|
+| `.forseti/pollution.jsonl` | `85bd818f521e0b02` | 同 |
+| `.forseti/sufficiency.jsonl` | `b04d5e011ca3fbb5` | 同 |
+| `.forseti/event_ledger.jsonl` | `ae41f30dfe2be630` | 同 |
+| `.forseti/NEXT.md` | `e35998572c64d1fe` | 同 |
+
+污染登記簿 `summary()['total']` = **29**，未變 ——
+這一輪沒有結論被推翻。量的兩支腳本全程攔在寫入點，一次都沒有真的寫，
+也沒有開過 sqlite。一次模型呼叫都沒有發生。
+
+### 沒有動畫面，沒有 build，沒有開關 App
+
+改的是 `forseti.py` 與測試檔。`desktop/ui/app.js` 一行都沒碰
+（mtime 仍是 09-18 13:43:33）。沒有 `open`、沒有 `pkill`、
+沒有設 `FORSETI_OPEN`。
+
+### 還缺什麼
+
+- **`event` 的 kind 仍然沒有守門。** 這一輪守的是「第一格不准是旗標」，
+  不是「第一格必須是合法 kind」。`event bogus <真 step> why` 照樣
+  一路走到 `worker_event` 才 ValueError。合法名單在
+  `ledger.WORKER_EVENTS`，守得住，這一輪沒做 —— 它是另一種判準
+  （成員資格），不是位置與長相
+- **`handoff` 完全沒量。** 它有 `--shell` / `--no-shell` 兩個**真旗標**，
+  而且是先剝旗標再看位置參數，跟這七支不同形狀。它也有兩種用法
+  （`--new` 與三個位置參數），`Shape` 現在表達不了「兩種用法擇一」
+- **`context` / `index` / `recall` 轉發給別的模組，還是沒量。**
+  `context_meter.main` 與 `recall.main` 自己收不收亂參數，沒有量
+- **`_arg` / `_flag_without_value` / `_unknown_flags` 仍然六份**
+  （`antianchor` / `attempts` / `evidence` / `metrics` / `probemodel` 各一）。
+  這一輪統的是 `forseti.py` 自己那一層，那六份沒有動
+- **exit code 的慣例沒有寫下來。** 這一輪把七支從 1 改成 2，依據是
+  「2 = 用法錯、1 = 資料錯」這句話只出現在 `transcript_path` 的
+  docstring 裡。沒有一條測試守整個 CLI 的 exit code 慣例，
+  所以下一支新指令照樣可能回錯的那一級
+- 上一輪那幾條沒有變：`probe run` 要不要 normalize（owner）、
+  `gate submit` 的 `exam_id` 長相刻意不守（規格沒定義，編一個
+  就是 §8.3 的填空）、兩輪同時跑全套要不要加鎖（owner）
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED`
+  要她重新登入、`code_commit` 要合規得把工作區 commit 乾淨、
+  `limit=10`、SIGTERM／SIGKILL、`hypothesis/fact` 要不要對應
+  CANONICAL、`PRODUCES` 的 expected 對 actual、污染登記簿的
+  「被哪一筆取代」要不要用 `SUPERSEDES` 接
+
+### `NEXT.md` 這一輪沒有被重寫，理由是被系統自己擋下來
+
+排程要求收尾時更新 `.forseti/NEXT.md`。試了，被擋下來，原話：
+
+> [handoff] 拒絕寫入 …/.forseti/NEXT.md：不是一份交接狀態，
+> 少了 artifact_lines、awaiting_finish、blocker_lines、contract_lines、
+> coordinate_lines、decisions、goal、invalidated_lines、last_good、n、
+> next_actions、recheck_lines、stuck、unknowns、verified（共 15/16 個）。
+> **唯一的產生者是 desktop_api._write_handoff()**
+
+那道守門是 09-18 00:0x 那一輪加的（「交接檔不再被測試用合成資料覆蓋」）。
+`snapshot()` 回的不是交接狀態，`_write_handoff()` 才是把它組成交接狀態
+的那一支，而它**要的 snap 比 `snapshot()` 回的多** ——
+`rows` / `checkpoints` / `goal_gate` / `session` 是 `strands()` 後來補上去的。
+拿 `snapshot()` 直接餵 `_write_handoff()` 會寫得出檔案，可是
+「最後一個已知良好的點」那一節會永遠印「沒有」，
+那正是 `strands()` 尾段那段註解記著的舊 bug（兩個來源說法不一致，
+不會報錯，只會讓接手的人以為無處可退）。
+
+**所以這一輪刻意不寫它**，寫一份會靜默變殘的交接檔比不寫更糟。
+NEXT.md 的內容這一輪本來也沒有變：沒有動任何阻塞、任何任務、
+任何 §39.1 欄位，工作區那五個檔跟上一輪同一份。
+它由 App 自己的輪詢重寫，而開關 App 是 owner 的事，不是我的。
+
+## 2026-09-18 15:4x-16:2x　`event` 的 kind 有人守了，而量的過程推翻了派它下來的那句話
+
+### 挑這一項的依據
+
+照 `ROADMAP.md` 那條兩步規則走，第一步（上一輪「還缺什麼」第一條）就停住：
+
+> **`event` 的 kind 仍然沒有守門。** 這一輪守的是「第一格不准是旗標」，
+> 不是「第一格必須是合法 kind」。`event bogus <真 step> why` 照樣
+> 一路走到 `worker_event` 才 ValueError。
+
+問「要 owner 開口嗎」，不用 —— 合法名單 `ledger.WORKER_EVENTS` 已經存在，
+判準是現成的成員資格，不是我編一個新算法（v5.0 §8.3）。所以做它。
+
+### 動手之前先量，而量出來的東西推翻了那句話的前提
+
+用 `L.Ledger(db=<tempfile>)` 開一本**真帳本**（不是假的 —— 這一題要問的正是
+真帳本擋不擋得住，假的答不了），建一個真任務，數 `events` 表的列數：
+
+| 寫法 | exit | 事件數 | 畫面 |
+|---|---|---|---|
+| `event WORKER_PROGRESS <真 step> why` | 0 | 1 → 2 | 已記　WORKER_PROGRESS |
+| `event WORKER_DONE <真 step> why` | 2 | 2 → 2 | 不是 F04 §3 定義的 worker 事件 |
+| `event worker_completion <真 step> why` | 2 | 2 → 2 | 同上 |
+| `event bogus <真 step> why` | 2 | 2 → 2 | 同上 |
+| `event bogus <假 step> why` | **1** | 2 → 2 | **找不到步驟：假 step** |
+
+**第二到第四列不是缺口。** `Ledger.worker_event` 第一行就擋，
+而且擋在任何寫入之前，所以 kind 打錯從來沒有污染過帳本。
+上一輪那句「照樣一路走到 `worker_event` 才 ValueError」聽起來像有東西
+被寫進去，量出來沒有 —— **派這一輪下來的那句話，它自己的嚴重性是高估的。**
+
+**真正的缺口是第五列。** `cmd_event` 先 `_resolve_step` 再呼叫
+`worker_event`，所以兩格都打錯的時候先撞到步驟那一關，畫面回
+「找不到步驟」exit 1。那句話是真的（那個步驟確實不存在），
+可是它把人指向第二格，而第一格才是根本不合法的那一格。
+exit code 也錯一級：1 是資料錯，kind 打錯是用法錯，該是 2
+（上一輪剛把七支從 1 改成 2，依據同一條慣例）。
+
+所以這一道做的**不是新增攔截**，是把成員資格搬到解析 id 之前，
+讓「這個 kind 根本不存在」永遠比「那個 id 查不到」先講。
+
+### 第三種判準，跟前兩種不重疊
+
+| 判準 | 問什麼 | `event bogus <真 step> why` |
+|---|---|---|
+| `no_extra_args` | 該不該有參數 | 不管它（`event` 真的吃參數） |
+| `operands` | 位置與長相對不對 | **放行**（四格數量對、沒有一格是旗標） |
+| `membership` | 這個值在不在名單裡 | 退回 |
+
+排在 `operands` **後面**，因為旗標不在任何名單裡，兩道都攔得到
+`event --yes s why` —— 而那一次真正錯的是旗標放錯位置，不是
+「`--yes` 不是合法的 kind」。先講長相再講成員資格，訊息才指得到根本原因。
+`test_第一格是旗標時訊息仍然歸長相那一道` 守這個順序。
+
+### 名單存的是「去哪裡拿」，不是拿到的東西
+
+    MEMBER_SLOTS = {"event": (0, "kind", "ledger", "WORKER_EVENTS")}
+
+第三、四格是模組名與常數名，由 `membership()` 去 `_sibling()` 取。
+抄一份到 `forseti.py` 的話，`ledger.WORKER_EVENTS` 哪天多一種這裡不會跟著動，
+而兩邊不一致的症狀是「CLI 說不合法、帳本說合法」——
+**那種不一致沒有人會發現**，畫面上看起來就只是一句拒絕。
+
+守它的是一對測試，不是一條：`test_名單是去ledger拿的不是抄一份在這邊`
+（換掉真名單、新成員要被接受）與 `test_舊成員被拿掉之後就不該再被接受`。
+只守前者的話，一份永遠回 True 的假名單也會綠。
+
+### 這一輪最該記的不是那道守門，是它連帶推翻的東西
+
+上一輪的表格裡有這麼一列（`forseti.py:1597`、
+`tests/test_cli_flag_dispatch.py:2324`、`ROADMAP.md:19` 共 5 處）：
+
+> `event DONE <真 step> why --yes` → 走到 `worker_event`，`worker='--yes'`，
+> 帳本裡那一筆的 worker 就是那個旗標，而帳本是 append-only，收不回來
+
+`DONE` 不在 `ledger.WORKER_EVENTS` 裡。實測直接呼叫兩次：
+
+    worker_event('DONE', step, 'why', worker='--yes')
+      → ValueError，事件數 1 → 1，這一步底下的事件：[]
+    worker_event('WORKER_ACCEPTED', step, 'why', worker='--yes')
+      → 寫進去了，事件數 1 → 2，events 那一列的 actor 就是 '--yes'
+
+**結論成立，例子不成立。** 「第二格沒有人查」對 `drain` / `dispatch` /
+`auto` 三支照樣成立，對 `event` 要換成真 kind 才拿得到證據。
+
+機制值得寫下來：假帳本的 `worker_event` 是計數用的 stub，不檢查 kind，
+所以任何字串都「走得到寫入點」。**上一輪已經發現過材料太多的問題並修掉了
+一半** —— 把 `_resolve_step` 改成只有對得上才回得出步驟 —— 卻沒有問
+「還有哪一格也是我自己餵進去的」。修掉一個已知陷阱的當下，最不容易再去找
+同一個陷阱的第二個出口，因為剛修完的那個念頭會被當成「這件事處理過了」。
+而那段警告（「那是自己造出來的材料，不是證據」）就寫在同一支 docstring 裡，
+離這個例子不到二十行。**寫得出警告不等於掃得到範圍。**
+
+登進 §40：`pol-8c6427166d`，狀態 RESOLVED，radius 5（grep `event DONE` 數得出來）。
+`pollution.summary()` total 29 → **30**，guarded 29。
+五處出處沒有被改寫（那是歷史紀錄），三處程式碼與測試裡的加了註記指向這一筆。
+
+修法：`PositionalOperands.REAL_KIND = L.WORKER_EVENTS[0]`（從真名單拿，不寫死），
+`_FakeMod.WORKER_EVENTS` 改成引用 `L.WORKER_EVENTS` 不再自造一份。
+改完那個檔從 147 綠變 149 綠，原本那兩條（`test_乾淨呼叫六支都照樣走到寫入點`
+與 `test_理由那一格不准擋旗標`）在接上新判準的當下就紅了 ——
+**那兩條紅是這一筆污染被抓到的方式**，不是我先讀出來的。
+
+### 自己寫的測試第一版又一次守不住它宣稱的東西
+
+`test_kind與步驟都打錯時講的是kind那一句` 第一版斷言
+`assertNotIn("找不到步驟", out)`，跑起來紅 —— 因為**這道判準的訊息裡就帶著
+那五個字**（它在解釋不擋的後果）。比字串會撞到自己的解釋文，
+而那跟第二格有沒有被拿去查完全無關。改成攔 `FS._resolve_step` 看有沒有被
+呼叫到才算數。跟上一輪 `test_帶太少仍然歸那一支自己那句話` 是同一個教訓的
+第二次：**定位的方式不能是看畫面印什麼。**
+
+### 反向驗證，九道注入，十條測試每一條都有人紅
+
+不帶 `-x`。每一道注入之後還原並比對 sha256。
+
+| 注入 | 紅幾條 | 唯一紅到的 |
+|---|---|---|
+| 1 整段移掉 | 3 | |
+| 2 名單抄一份寫死在這邊 | 2 | |
+| 3 名單只收一個 | 2 | |
+| 4 帶太少也擋 | 1 | `test_一格都沒帶仍然歸那一支自己那句話` |
+| 5 排到 `operands` 前面 | 3 | |
+| 6 合法的也退回 | 5 | |
+| 7 表裡多收一支 `verify` | 2 | |
+| 8 常數名打錯字 | 9 | |
+| 9 兩張表對同一格稱呼不同 | 4 | |
+
+注入 6 與注入 1 是這一組的兩端：一端證明**沒有多擋**（合法那八種照樣走到
+寫入點），另一端證明真的有人在守。注入 8 紅九條是預期的 ——
+常數名打錯之後 `getattr` 炸掉，而炸的時機正是有人打錯 kind 的那一次。
+
+### 測試數
+
+新增 `tests/test_cli_flag_dispatch.py::MemberSlots` **10 個方法**。
+單檔 149 → **159**。上一輪收工 2204，2204 + 10 = **2214**。
+
+### 全套：2213 綠、1 紅，而那一紅的寫入者是 App 不是測試
+
+15:53:20 起跑，916.76 秒。**2213 passed、1 failed**，
+2213 + 1 = 2214，跟新增數對得上。起跑前 `ps aux | grep [p]ytest` 是 0。
+
+紅的是 `test_zz_forseti_write_attribution.py::test_動到的路徑全部在允許範圍內`，
+指控 `test_ui_render.py::TabsMatchData::test_切過去之後別頁不會同時亮著`
+動了 `.forseti/advice_ledger.jsonl`。**不是那條測試寫的，也不是這一輪寫的**，
+四項證據：
+
+- 寫進去那一筆的內容是 `{"session": "c062039d-601e-426b-964d-2b42b5186b0a",
+  "n": 22, "id": "adv-rehydrate"}` —— 帶著 App 這條 session 的 id 與輪號
+- 時間戳 1789718626.88 換算 **16:03:46**，落在 15:53:20-16:08:39 區間內
+- `advicetrack` 在整個 repo 只有一個呼叫端：`desktop_api.py:3505`，
+  在 `strands()` 裡，也就是 App 輪詢走的那一支。這一輪沒碰那個檔
+- `ps aux` 查到 `Forseti.app/Contents/MacOS/forseti-desktop` PID 68744 在跑
+
+那條測試單獨跑 23 條全綠。這正是它自己訊息裡寫的那句話：
+「這個量法分不出寫入者，全套跑的期間有人動正本的話會被記在當時在跑的
+那一條頭上。」
+
+**跟 ROADMAP 5am 那次不是同一個成因。** 那一次紅的是同一條測試配
+`event_ledger.jsonl`，而當時 `pgrep -x Forseti` 沒有回應（App 沒開）。
+這一次 App 開著而且寫入內容指得回它。**所以這一次解釋不了那一次** ——
+上一輪留下的「`test_ui_render.py` 那一條為什麼寫 `event_ledger.jsonl`」
+仍然沒有答案，不要拿這一輪的發現去填它。
+
+### 正本沒有被碰到（除了刻意登記的那一筆）
+
+| 檔 | 測前 | 測後 |
+|---|---|---|
+| `.forseti/sufficiency.jsonl` | `b04d5e011ca3fbb5` | 同 |
+| `.forseti/event_ledger.jsonl` | `ae41f30dfe2be630` | 同 |
+| `.forseti/NEXT.md` | `e35998572c64d1fe` | 同 |
+| `.forseti/pollution.jsonl` | `85bd818f521e0b02` | **變了，這一輪刻意登了 `pol-8c6427166d`** |
+
+量的腳本全程用 `tempfile.mkdtemp()` 底下的 sqlite，一次都沒有開過正本帳本。
+一次模型呼叫都沒有發生。
+
+### 沒有動畫面，沒有 build，沒有開關 App
+
+改的是 `forseti.py`、`tests/test_cli_flag_dispatch.py` 與
+`.forseti/pollution.jsonl`。`desktop/ui/app.js` 一行都沒碰
+（mtime 仍是 09-18 13:43:33）。沒有 `open`、沒有 `pkill`、沒有設 `FORSETI_OPEN`。
+App 這一輪一直開著，是 owner 開的，這一輪沒有動它。
+
+### 還缺什麼
+
+- **`WORKER_DONE` 與小寫走 CLI 收不下，走收件匣收得下。** 實測確認過：
+  `collect_inbox`（`ledger.py:836`）做 `ALIASES.get(first[0].upper(), ...)`，
+  CLI 兩件都不做。**這一輪刻意沒有把 `ALIASES` 套到 CLI** ——
+  那張表自己的註解寫著它是「收件匣的別名」而且「只收實測真的發生過的誤用」，
+  擴大一張有出處要求的名單是協定適用範圍的決定。**要 owner 開口。**
+- **`event` 的第二格仍然只有「查不查得到」，沒有別的守門。** 這一輪守的是
+  第一格。第二格是 id，`_resolve_step` 查得到就過，這是對的，沒有缺口
+- **`MEMBER_SLOTS` 現在只有一支。** 別的地方有沒有同樣形狀（某一格必須是
+  某張名單的成員）沒有掃過。`ledger.CAN_REPORT`、`pollution.STATUSES`、
+  `GATE_SUBCOMMANDS` 都是名單，但它們有沒有對應的 CLI 位置參數沒有查
+- **`handoff` 完全沒量**（上一輪那條沒有變）。它有 `--shell` / `--no-shell`
+  兩個真旗標，先剝旗標再看位置參數，而且兩種用法擇一，`Shape` 表達不了
+- **`context` / `index` / `recall` 轉發給別的模組，還是沒量**
+- **`_arg` / `_flag_without_value` / `_unknown_flags` 仍然六份**
+- **exit code 的慣例沒有寫下來**（上一輪那條沒有變）
+- 等 owner 的那一串沒有變：`scope_match`、§12.2 五個病症對應、
+  `dry_run=False`、B-15、B-03 與 B-04 訊號打架、`AXES_COVERED` 要她重新登入、
+  `code_commit` 要合規得把工作區 commit 乾淨、`limit=10`、SIGTERM／SIGKILL、
+  `hypothesis/fact` 要不要對應 CANONICAL、`PRODUCES` 的 expected 對 actual、
+  污染登記簿的「被哪一筆取代」要不要用 `SUPERSEDES` 接、
+  `event_ledger.jsonl` 的白名單決定
+
+### 補記：全套又跑了兩次，而那三次的紅每一次成因都不同
+
+上面那一節寫「2213 綠 1 紅」的時候，只跑過一次。加註（三處 docstring
+指向 `pol-8c6427166d`）之後改動了檔案，所以重跑，結果值得整段記下來 ——
+**三次的紅沒有一次是同一個成因，而且沒有一次是我改的程式碼造成的。**
+
+| 跑次 | 區間 | 結果 | 紅的是誰造成的 |
+|---|---|---|---|
+| 一 | 15:53:20-16:08:39（916.76 秒） | 2213 綠 1 紅 | App 輪詢寫 `advice_ledger.jsonl`（n=22，16:03:46） |
+| 二 | 16:14:1x-16:26:29（732.88 秒） | 2210 綠 **4** 紅 | **我自己** —— 期間在寫 `AUTO_CONTINUE_LOG.md` 與 `ROADMAP.md` |
+| 三 | 16:27:09-16:39:17（725.88 秒） | 2211 綠 **3** 紅 | App（n=24/25/26）加上**第三個寫入者**（16:35:42 的 `ROADMAP.md`） |
+
+**第二次那三條多出來的紅是我造成的，寫下來因為它是可預期的失誤。**
+歸屬守門的訊息自己就寫著「全套跑的期間有人動正本的話會被記在當時在跑的
+那一條頭上」，而我一邊跑全套一邊寫這份文件 —— 指控落在
+`test_features_missing.py`（`AUTO_CONTINUE_LOG.md`）與
+`test_forseti_dir_writes.py[features]`（`ROADMAP.md`）頭上，
+兩條都跟那兩個檔毫無關係。**看到守門紅的第一個動作應該是問「這段時間我自己
+寫了什麼」，不是去查被指控的那條測試。**
+
+第三次刻意全程不寫任何檔案，剩下的三條就全部指得回別人：
+
+- `test_forseti_dir_writes.py::test_strands寫的東西全部在白名單內` → `advice_ledger.jsonl`
+- `test_zz_forseti_write_attribution.py::test_動到的路徑全部在允許範圍內` →
+  `advice_ledger.jsonl` ×3 加 `ROADMAP.md`
+- `test_ui_render.py::RenderedOutputMatchesData::test_溫度與證據覆蓋率是資料裡那個` →
+  「資料裡是　證據 86%，畫面上是　安靜 證據 87%」。渲染那一刻與事後讀資料
+  那一刻之間，資料被改了。**這一條是競速的症狀，不是接線壞掉**
+
+### 第三個寫入者，這一輪查得出的與查不出的
+
+`advice_ledger.jsonl` 那三筆帶 `session: c062039d-…`、`n: 24/25/26`，
+指得回 App（`advicetrack` 唯一呼叫端在 `desktop_api.strands()`）。
+
+`ROADMAP.md` 16:35:42 那一次**不是 App，也不是我**。寫進去的是一節
+「桌面版:WebView 渲染 HTML 但不執行 JS（2026-09-18，未解）」，
+現在在 `ROADMAP.md:4246`。這一輪我寫 `ROADMAP.md` 只有一次，在 16:1x，
+寫的是檔頭那張表。
+
+**不是這個排程的另一輪**：當下 `supervisor.py --status` 的
+「今天喚醒次數」是 **0**。
+
+**是誰，這一輪答不出來。** 沒有去猜，也不該猜 —— 能確定的只有
+「有第三個寫入者，而且它會寫 `ROADMAP.md`」。這件事本身比它是誰重要：
+我寫 `ROADMAP.md` 用的是整檔讀進來再寫回去，**讀與寫之間有人寫的話會被
+我覆蓋掉**。這一次沒有（那一節在我之後才寫，現在還在，我的表格也還在），
+是運氣不是設計。`AUTO_CONTINUE_LOG.md` 用 `>>` 追加沒有這個問題。
+
+### 所以這一輪的測試結論，精確地說
+
+**`MemberSlots` 那 10 條與這一輪改的程式碼，三次全套都沒有紅過。**
+三次紅的名單裡沒有出現過 `test_cli_flag_dispatch.py` 任何一條。
+單檔 `tests/test_cli_flag_dispatch.py` 在加註前後各跑一次，兩次都 **159 綠**。
+
+**而「全套全綠」這一輪拿不到，理由不在程式碼。** App 開著就會每輪寫
+`advice_ledger.jsonl`，而那個路徑不在守門的允許名單裡，所以 attribution
+那幾條必然紅。owner 2026-09-16 明令不准自動接續開關 App，
+**所以這一輪沒有去關它，也不打算為了讓數字好看而關它。**
+
+### 補一條「還缺什麼」
+
+- **全套在 App 開著的時候拿不到全綠，而這不是程式碼問題。**
+  `advice_ledger.jsonl` 不在守門的允許路徑裡，App 每輪寫一筆。
+  兩條路：把它加進 `ALLOWED_PREFIXES`（那是改「什麼算紅」的判定，
+  照這條線的慣例要三組反向驗證加全套），或接受「App 開著時全套必紅」
+  並在守門的訊息裡講明。**兩條都是 owner 的決定**，這一輪沒有替她挑。
+  這跟 5am 那一輪留下的「`cache/` 在路徑那條被允許、在誰那條仍要求在冊，
+  兩條不一致」是同一個決定的兩半

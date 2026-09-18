@@ -1120,6 +1120,7 @@ class UnknownOnlyValue(_Box):
 # 量完是錯的。沒有量就不宣稱，反過來也一樣：量到沒有也要寫下來。
 # ---------------------------------------------------------------------------
 
+import ledger as L  # noqa: E402
 import probe as PB  # noqa: E402
 import forseti as FS  # noqa: E402
 
@@ -1242,6 +1243,144 @@ class ProbeBaselineBy(_Box):
         rc, out = _run(PB, ["baseline"])
         self.assertEqual(rc, 2)
         self.assertIn("是誰按的", out)
+
+
+class ProbeEchoValue(_Box):
+    """退回訊息把收到的值框起來，讓前後空白在畫面上看得見。
+
+    2026-09-18 之前 `probe run "goal_persistence "` 印的是這兩行：
+
+        沒有這一題：goal_persistence
+        有的是：goal_persistence、claim_evidence_honesty、⋯
+
+    同一個字串上面說沒有、下面說有，而真正的差別在畫面上不存在。
+    大小寫打錯那一種看得見，空白那一種看不見 —— 所以這一種難查。
+
+    **這一組守的是顯示，不是判準。** 誰被退回一個字都沒動，
+    所以這裡每一條都要同時證明「框起來了」與「沒有多擋或少擋」。
+    連續四輪被順延，理由都是「它是顯示層裡更小的一件」。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self._real_run = PB.run
+        self._real_baseline = PB.record_baseline
+        self.called: list = []
+        self.got: list = []
+
+        def _spy(**kw):
+            self.called.append(kw)
+            return {"results": [], "counts": {"PASS": 0, "REGRESSED": 0,
+                                              "NEW": 0, "NO_VERIFIER": 0},
+                    "measurable": 0, "axes_covered": (), "axes_missing": ()}
+
+        def _bspy(*a, **kw):
+            self.got.append(kw.get("by"))
+            return {"ok": True}
+
+        PB.run = _spy
+        PB.record_baseline = _bspy
+
+    def tearDown(self):
+        PB.run = self._real_run
+        PB.record_baseline = self._real_baseline
+        super().tearDown()
+
+    def test_尾隨空白看得見(self):
+        cid = PB.case_ids()[0]
+        rc, out = _run(PB, ["run", cid + " "])
+        self.assertEqual(rc, 2)
+        self.assertIn(f"「{cid} 」", out)
+        self.assertEqual(self.called, [])
+
+    def test_前導空白看得見(self):
+        cid = PB.case_ids()[0]
+        rc, out = _run(PB, ["run", " " + cid])
+        self.assertEqual(rc, 2)
+        self.assertIn(f"「 {cid}」", out)
+
+    def test_退回那一行不准跟合法題名長得一模一樣(self):
+        """這一條是這一組的靈魂。
+
+        對每一個合法題名各加一個尾隨空白：退回那一行剝掉前綴、
+        再把兩端空白當成看不見的東西去掉之後，不准等於那個題名的
+        裸文字 —— 等於的話畫面就自相矛盾，因為下一行正好把那個
+        裸文字列出來。
+
+        **`.strip()` 是這一條的重點，不是隨手加的。** 第一版寫成
+        直接比字串，於是「完全不框」那一道注入照樣綠 ——
+        `"goal_persistence "` 在字串上確實不等於 `"goal_persistence"`，
+        而畫面上的差別正好是那個比得出來、看不出來的空白。
+        判準用眼睛看得到的東西比，才守得住這一件。
+        """
+        for cid in PB.case_ids():
+            with self.subTest(cid=cid):
+                _rc, out = _run(PB, ["run", cid + " "])
+                line = [x for x in out.splitlines()
+                        if x.startswith("沒有這一題：")][0]
+                self.assertNotEqual(line[len("沒有這一題："):].strip(), cid)
+
+    def test_子指令那一道也框(self):
+        rc, out = _run(PB, [" lisst"])
+        self.assertEqual(rc, 2)
+        self.assertIn("「 lisst」", out)
+        self.assertEqual(self.called, [])
+
+    def test_旗標那一道也框(self):
+        rc, out = _run(PB, ["--only"])
+        self.assertEqual(rc, 2)
+        self.assertIn("「--only」", out)
+        self.assertEqual(self.called, [])
+
+    def test_人名那一道也框(self):
+        """`baseline --by` 在守門就退回，所以 `record_baseline`
+        一次都不准被呼叫到 —— 攔著是為了萬一它走過去會寫正本。"""
+        rc, out = _run(PB, ["baseline", "--by"])
+        self.assertEqual(rc, 2)
+        self.assertIn("「--by」", out)
+        self.assertEqual(self.got, [])
+
+    def test_框起來沒有多擋(self):
+        """判準一個字都沒動：合法的三種寫法照樣走得到底。"""
+        cid = PB.case_ids()[0]
+        rc, out = _run(PB, ["run", cid])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(len(self.called), 1)
+        self.assertEqual(self.called[0]["only"], cid)
+
+        rc, _out = _run(PB, ["baseline", "norika"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.got, ["norika"])
+
+    def test_框起來沒有少擋(self):
+        """四種錯法照樣 exit 2，而且照樣不走到寫入點。"""
+        for argv in (["run", "bogus_case"], ["lisst"],
+                     ["--only", "x"], ["baseline", "--by"]):
+            with self.subTest(argv=argv):
+                rc, _out = _run(PB, argv)
+                self.assertEqual(rc, 2)
+        self.assertEqual(self.called, [])
+        self.assertEqual(self.got, [])
+
+    def test_四個呼叫端讀的是同一份(self):
+        """`shown()` 不准變成「定義了沒人讀」。
+
+        判準不是 grep 它出現幾次 —— 改掉它的內容，四個呼叫端印出來的
+        東西要全部跟著變。有一個沒變就代表那一處自己寫死了框。
+        """
+        real = PB.shown
+        try:
+            PB.shown = lambda v: f"<<{v}>>"
+            cases = [(["run", "bogus_case"], "bogus_case"),
+                     (["lisst"], "lisst"),
+                     (["--only"], "--only"),
+                     (["baseline", "--by"], "--by")]
+            for argv, val in cases:
+                with self.subTest(argv=argv):
+                    _rc, out = _run(PB, argv)
+                    self.assertIn(f"<<{val}>>", out)
+        finally:
+            PB.shown = real
 
 
 class TranscriptLimit(unittest.TestCase):
@@ -1597,3 +1736,1019 @@ class NoArgSubcommand(unittest.TestCase):
             self.assertNotIn("startswith", attrs,
                              f"{hit} 自己又判了一次，判準變兩份")
         self.assertEqual(found, want, "有分支沒被掃到")
+
+
+class GateSubcommand(unittest.TestCase):
+    """`gate` 打錯子指令的時候，畫面要講 gate，不是講整個 CLI。
+
+    這一組守的是 2026-09-18 14:xx 量到的形狀。連續兩輪的
+    `AUTO_CONTINUE_LOG.md` 都把它寫在「還缺什麼」裡，
+    標著「不用 owner 開口」。
+
+    **它不是新增一道守門。** 改之前 `gate` 與 `gate bogus`
+    就已經是 exit=2 —— 走的是 dispatch 末尾那一行
+    `print(__doc__); return 2`。改的是訊息指向：
+
+    | 寫法 | 改之前印什麼 | 改之後 |
+    |---|---|---|
+    | `gate` | 整個 CLI 的 `__doc__`（五十幾行） | gate 底下有哪幾支 |
+    | `gate bogus` | 同上 | 同上，而且點名 `bogus` |
+
+    所以這一組沒有一條在測 exit code 從 0 變 2 ——
+    測那個會綠得莫名其妙，因為它改之前就是 2。
+    測的是「講的是哪一層」。
+
+    跟 `NoArgSubcommand` 那一組相鄰不重疊：
+    這一支問「有沒有這一支」，那一支問「這一支收不收這些東西」。
+    `gate status --yes` 要落在那一組，不是這一組。
+    """
+
+    LEGAL = (("takeover", "cmd_gate_takeover"),
+             ("submit", "cmd_gate_submit"),
+             ("status", "cmd_gate_status"))
+
+    @staticmethod
+    def _dispatch(argv: list[str], spy_on: str):
+        """跟 `NoArgSubcommand._dispatch` 同一個做法，**不碰正本**。
+
+        回 `(exit code, 那一支被呼叫幾次, 印出來的東西)`。
+        """
+        import types
+        calls = []
+        orig_rep = FS.build_report
+        orig_cmd = getattr(FS, spy_on)
+        FS.build_report = lambda root: types.SimpleNamespace(root=ROOT)
+        setattr(FS, spy_on, lambda *a, **k: (calls.append(1), 0)[1])
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                rc = FS.main(["forseti"] + argv)
+        finally:
+            FS.build_report = orig_rep
+            setattr(FS, spy_on, orig_cmd)
+        return rc, len(calls), buf.getvalue()
+
+    def test_三支合法的照樣走到那一支(self):
+        """先釘這一條。只守退回的話，把 `gate` 整層擋死也會全綠。
+
+        `submit` 帶 exam_id 一起釘，因為它是三支裡唯一吃參數的，
+        新守門只看 `args[0]`，多帶的那個不准被它管到。
+        """
+        for sub, spy in self.LEGAL:
+            extra = ["e-1"] if sub == "submit" else []
+            with self.subTest(sub=sub):
+                rc, n, _ = self._dispatch(["gate", sub] + extra, spy)
+                self.assertEqual((rc, n), (0, 1))
+
+    def test_沒帶子指令退回而且列得出有哪幾支(self):
+        rc, n, out = self._dispatch(["gate"], "cmd_gate_status")
+        self.assertEqual((rc, n), (2, 0))
+        for sub, _ in self.LEGAL:
+            self.assertIn(sub, out)
+
+    def test_子指令打錯會點名打錯的那個字(self):
+        """不點名的話，使用者拿到一份清單卻不知道自己打的是哪個。"""
+        rc, n, out = self._dispatch(["gate", "bogus"], "cmd_gate_status")
+        self.assertEqual((rc, n), (2, 0))
+        self.assertIn("bogus", out)
+
+    def test_印的不是整個CLI的用法(self):
+        """這一組真正守的東西。
+
+        改之前那兩種寫法印的是 `forseti.py` 的模組 docstring，
+        它的第一行是「Forseti CLI.」。那一行再出現，
+        代表訊息又掉回去講整個 CLI 了 —— 而 exit code 仍然是 2，
+        所以只看 exit code 的測試抓不到這次退化。
+        """
+        for argv in (["gate"], ["gate", "bogus"]):
+            with self.subTest(argv=argv):
+                _, _, out = self._dispatch(argv, "cmd_gate_status")
+                self.assertNotIn("Forseti CLI.", out)
+                self.assertIn("gate", out)
+
+    def test_跟另一道守門相鄰不重疊(self):
+        """`gate status --yes` 的子指令是對的，錯的是多餘旗標，
+        所以它要落在 `no_extra_args` 那一道，不是這一道。
+
+        兩道的訊息各自有一句別人沒有的話，拿那句話認人 ——
+        比對 exit code 認不出來，兩道都是 2。
+        """
+        _, _, mine = self._dispatch(["gate", "bogus"], "cmd_gate_status")
+        _, _, other = self._dispatch(["gate", "status", "--yes"],
+                                     "cmd_gate_status")
+        self.assertIn("gate 底下沒有這一支", mine)
+        self.assertNotIn("gate 底下沒有這一支", other)
+        self.assertIn("沒有這些旗標", other)
+        self.assertNotIn("沒有這些旗標", mine)
+
+    def test_合法的三支回空字串(self):
+        for sub, _ in self.LEGAL:
+            self.assertEqual(FS.gate_subcommand([sub]), "")
+        self.assertEqual(FS.gate_subcommand(["submit", "e-1"]), "")
+
+    def test_那個常數有人讀(self):
+        """2026-09-18 13:3x 自己造出過這個形狀：`NO_ARG_COMMANDS`
+        定義了，全 repo 沒有任何讀者，於是下一個讀的人會以為
+        dispatch 是照那個表分派的。刪掉之後測試照樣全綠。
+
+        這一條釘的就是別再長出第二個那種東西：
+        `GATE_SUBCOMMANDS` 要真的被 `gate_subcommand` 讀到，
+        不是擺在那裡好看。判準是**改掉它的內容，行為要跟著變**，
+        不是 grep 它出現幾次 —— grep 到的可能只是另一份複製品。
+        """
+        orig = FS.GATE_SUBCOMMANDS
+        try:
+            FS.GATE_SUBCOMMANDS = ("takeover",)
+            self.assertNotEqual(FS.gate_subcommand(["status"]), "",
+                                "改了常數行為沒變，代表判準另有一份")
+            FS.GATE_SUBCOMMANDS = ("takeover", "submit", "status", "xyzzy")
+            self.assertEqual(FS.gate_subcommand(["xyzzy"]), "")
+        finally:
+            FS.GATE_SUBCOMMANDS = orig
+
+    def test_dispatch那一層走共用判準而且自己不列第二份名單(self):
+        """判準一份。這一條釘的是「不准長出第二份」。
+
+        定位的方式是找 main 裡呼叫 `gate_subcommand` 的那個 if，
+        然後確認那一段沒有自己再寫一份子指令字面值。
+        `argv[2] == "takeover"` 那三個分支在它後面、不在它裡面，
+        所以掃的範圍是這個 if 自己的 body。
+        """
+        import ast
+        src = (ROOT / "apps" / "forseti-cli" / "forseti.py").read_text(
+            encoding="utf-8")
+        tree = ast.parse(src)
+        main = next(n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "main")
+        hits = [n for n in ast.walk(main)
+                if isinstance(n, ast.If)
+                and any(isinstance(c, ast.Call)
+                        and isinstance(c.func, ast.Name)
+                        and c.func.id == "gate_subcommand"
+                        for c in ast.walk(n))]
+        self.assertEqual(len(hits), 1, "gate 的守門不是唯一一處")
+        literals = {n.value for n in ast.walk(hits[0])
+                    if isinstance(n, ast.Constant) and isinstance(n.value, str)}
+        for sub, _ in self.LEGAL:
+            self.assertNotIn(sub, literals,
+                             f"守門那一段自己又寫了一次 {sub}，名單變兩份")
+
+    def test_訊息講得出下一步怎麼打(self):
+        """只說「沒有這一支」的話，使用者還得自己拼用法那一行。"""
+        why = FS.gate_subcommand(["bogus"])
+        self.assertIn("forseti.py gate", why)
+
+
+class GateSubmitOperand(unittest.TestCase):
+    """`gate submit` 吃一個 `exam_id`，所以 `no_extra_args` 管不到它。
+
+    這一組跟 `NoExtraArgs` 相鄰不重疊:那一組守的是「這一支不吃任何
+    參數」，這一組守的是「剛好吃一個，多的與放錯位置的都不收」。
+
+    2026-09-18 實測，改之前六種寫法的後果（攔 `sufficiency.submit`
+    量呼叫次數，不是讀原始碼推論）:
+
+    | 寫法 | 走到 submit | 拿到的 exam_id |
+    |---|---|---|
+    | `gate submit` | 0 | ── |
+    | `gate submit E-123` | 1 | `E-123` |
+    | `gate submit E-123 b c` | 1 | `E-123`，b c 吞掉 |
+    | `gate submit E-123 --yes` | 1 | `E-123`，旗標吞掉 |
+    | `gate submit --yes E-123` | 1 | **`--yes`** |
+    | `gate submit --yes` | 1 | **`--yes`** |
+
+    六種的 exit code 改之前全部是 2，所以**這一組不是在測 0 變 2**，
+    測的是「走不走到寫入點」與「講的是哪一件事」。後兩種拿旗標當
+    考卷編號去查，查不到的訊息說「編號打錯了」—— 那是把使用者
+    指向錯的方向。
+
+    吞掉在這一支不是顯示問題:exam_id 有效的時候
+    `sufficiency.submit` 會 `log.append` 一筆 `RESULT`。
+    `test_乾淨的會寫進帳本而多帶的不會` 是端到端量這一件。
+    """
+
+    @staticmethod
+    def _dispatch(argv: list[str], stdin_text: str = '{"q1":"x"}'):
+        """跑 dispatch，攔 `sufficiency.submit` 與 `build_report`。
+
+        回 `(exit code, 走到 submit 幾次, 拿到的 exam_id, 印出來的東西)`。
+        攔 `submit` 而不是讀原始碼，是因為要量的是「會不會走到」。
+        """
+        import types
+        import sufficiency
+        seen = []
+        orig_sub = sufficiency.submit
+        orig_rep = FS.build_report
+        orig_stdin = sys.stdin
+        sufficiency.submit = lambda *a, **k: (
+            seen.append(k.get("exam_id")),
+            {"ok": False, "why": "攔下來了"})[1]
+        FS.build_report = lambda root: types.SimpleNamespace(root=ROOT)
+        sys.stdin = io.StringIO(stdin_text)
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                rc = FS.main(["forseti", "gate", "submit"] + argv)
+        finally:
+            sufficiency.submit = orig_sub
+            FS.build_report = orig_rep
+            sys.stdin = orig_stdin
+        return rc, len(seen), (seen[0] if seen else None), buf.getvalue()
+
+    def test_乾淨呼叫照樣走到那一支(self):
+        """先釘這一條。只守退回的話，把 submit 整層擋死也會全綠。"""
+        rc, n, exam, _ = self._dispatch(["E-123"])
+        self.assertEqual((n, exam), (1, "E-123"))
+
+    def test_多餘位置參數退回而且不走到那一支(self):
+        rc, n, _, out = self._dispatch(["E-123", "b", "c"])
+        self.assertEqual((rc, n), (2, 0))
+        self.assertIn("b", out)
+        self.assertIn("c", out)
+
+    def test_多餘旗標在後面也退回(self):
+        """位置參數與旗標都是多的。只擋非旗標的話這一種會漏。"""
+        rc, n, _, out = self._dispatch(["E-123", "--yes"])
+        self.assertEqual((rc, n), (2, 0))
+        self.assertIn("--yes", out)
+
+    def test_旗標放在前面不准被當成考卷編號(self):
+        """這一組最嚴重的那個形狀:錯的答案長得跟對的一樣。
+
+        改之前 `exam_id` 收到的是字串 `--yes`，它會去查一份叫
+        `--yes` 的考卷，於是畫面說「找不到這份考卷」——
+        使用者被指向「編號打錯」，而他錯的是旗標的位置。
+        """
+        for argv in (["--yes"], ["--yes", "E-123"]):
+            with self.subTest(argv=argv):
+                rc, n, exam, out = self._dispatch(argv)
+                self.assertEqual((rc, n, exam), (2, 0, None))
+                self.assertIn("不是旗標", out)
+
+    def test_空的不歸這一支管(self):
+        """兩邊不重疊:數量與長相歸判準，「到底要交哪一份」歸那一支
+        自己那句話 —— 它講得比通用措辭具體。這一條紅了代表判準
+        把空的也吃掉了，那句具體的訊息就再也印不出來。"""
+        self.assertEqual(
+            FS.operands([], "gate submit",
+                        FS.OPERAND_SHAPES["gate submit"]), "")
+        rc, n, _, out = self._dispatch([])
+        self.assertEqual((rc, n), (2, 0))
+        self.assertIn("要交哪一份考卷", out)
+
+    def test_兩種錯法的措辭不同(self):
+        """長相只拿來挑措辭，兩種都是 exit 2。放錯位置與帶太多是
+        兩件不同的事，講同一句話的話使用者不知道要改哪裡。"""
+        sh = FS.OPERAND_SHAPES["gate submit"]
+        flag = FS.operands(["--yes"], "gate submit", sh)
+        many = FS.operands(["E-1", "x"], "gate submit", sh)
+        self.assertIn("不是旗標", flag)
+        self.assertIn("只吃一個", many)
+        self.assertNotEqual(flag, many)
+
+    def test_訊息帶得出呼叫端與那個位置的名字(self):
+        """判準是通用的，所以用法那一行不准寫死 gate submit，
+        也不准寫死 exam_id —— 寫死的話第二個呼叫端會印錯的用法。"""
+        why = FS.operands(["a", "b"], "foo bar",
+                          FS.Shape(slots=(("thing_id", True),),
+                                   required=1))
+        self.assertIn("forseti.py foo bar <thing_id>", why)
+        self.assertNotIn("gate submit", why)
+        self.assertNotIn("exam_id", why)
+
+    def test_乾淨的會寫進帳本而多帶的不會(self):
+        """端到端量寫入，不攔 `submit`。
+
+        2026-09-18 實測改之前:臨時 root 放一份真考卷，三種寫法
+        （乾淨、`b c`、`--yes`）帳本都從 1 行變 2 行，多的那一筆是
+        `RESULT`。帳本是 append-only，下錯指令留下的那一筆收不回來，
+        而 `state()` 的 `attempts` 會把它算進去。
+        """
+        import types
+        import sufficiency
+        for extra, want in (([], 2), (["b", "c"], 1), (["--yes"], 1)):
+            with self.subTest(extra=extra):
+                with tempfile.TemporaryDirectory() as td:
+                    tmp = Path(td)
+                    (tmp / ".forseti").mkdir(parents=True)
+                    log = tmp / ".forseti" / sufficiency.LOG_NAME
+                    log.write_text(json.dumps({
+                        "kind": "EXAM", "id": "E-test", "at": 0,
+                        "threshold": 0.8,
+                        "dims": {"objective": {"state": "OK"}},
+                        "questions": [{"qid": "q1", "dim": "objective",
+                                       "key_sha": "deadbeef", "key_len": 5,
+                                       "q": "問題"}],
+                    }, ensure_ascii=False) + "\n", encoding="utf-8")
+                    orig_rep = FS.build_report
+                    orig_stdin = sys.stdin
+                    FS.build_report = lambda r: types.SimpleNamespace(root=tmp)
+                    sys.stdin = io.StringIO('{"q1":"x"}')
+                    try:
+                        with contextlib.redirect_stdout(io.StringIO()), \
+                                contextlib.redirect_stderr(io.StringIO()):
+                            FS.main(["forseti", "gate", "submit", "E-test"]
+                                    + extra)
+                    finally:
+                        FS.build_report = orig_rep
+                        sys.stdin = orig_stdin
+                    rows = [json.loads(x) for x in
+                            log.read_text(encoding="utf-8").splitlines() if x]
+                    self.assertEqual(len(rows), want)
+                    kinds = [r.get("kind") for r in rows]
+                    if want == 2:
+                        self.assertIn("RESULT", kinds)
+                    else:
+                        self.assertNotIn("RESULT", kinds)
+
+    def test_那一支走共用判準而且自己不判斷(self):
+        """釘的是「不准長出第四份」。定位分支的方式是看它呼叫
+        `cmd_gate_submit`，不是看 if 的條件怎麼寫。"""
+        import ast
+        src = (ROOT / "apps" / "forseti-cli" / "forseti.py").read_text(
+            encoding="utf-8")
+        main = next(n for n in ast.walk(ast.parse(src))
+                    if isinstance(n, ast.FunctionDef) and n.name == "main")
+        hits = [n for n in ast.walk(main)
+                if isinstance(n, ast.If)
+                and any(isinstance(c, ast.Call)
+                        and isinstance(c.func, ast.Name)
+                        and c.func.id == "cmd_gate_submit"
+                        for c in ast.walk(n))]
+        self.assertEqual(len(hits), 1, "gate submit 的分支不是唯一一處")
+        named = [c.func.id for c in ast.walk(hits[0])
+                 if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)]
+        self.assertIn("operands", named, "那一支沒有走共用判準")
+        attrs = [c.func.attr for c in ast.walk(hits[0])
+                 if isinstance(c, ast.Call)
+                 and isinstance(c.func, ast.Attribute)]
+        self.assertNotIn("startswith", attrs, "自己又判了一次，判準變兩份")
+
+
+class LedgerNoArgSubcommand(unittest.TestCase):
+    """帳本那一邊不吃參數的四支：多餘參數不准被靜默吞掉。
+
+    `NoArgSubcommand` 守的是 `doctor` / `status` / `gate` 那四支。
+    這一組守的是 2026-09-18 15:0x 量到的另外四支，而它們**比那四支重**
+    ——那一組裡只有 `gate takeover` 會改變狀態，這一組有兩支。
+
+    | 寫法 | 改之前 exit | 改之前走到寫入點 |
+    |---|---|---|
+    | `tasks --bogus` | 0 | 沒有（唯讀） |
+    | `events --limit 5` | 0 | 沒有（唯讀） |
+    | `watch --bogus` | 0 | **`Ledger.collect_inbox`** |
+    | `reindex --dry-run` | 0 | **`EventLedger.reindex`** |
+
+    `reindex --dry-run` 是這一組存在的理由：那個旗標的意思是
+    「先別動」，而它跟乾淨呼叫走同一條路，動完還回一句「重建完成」。
+
+    量 `watch` 的時候第一輪拿到「沒走到寫入點」，因為當下 0 個進行中
+    的步驟。**那個 0 是沒有材料，不是證據。** 第二輪換上一個假的
+    進行中步驟才量到 `collect_inbox`。下面 `test_watch乾淨呼叫照樣走到寫入點`
+    也是這樣做的，那個假步驟不是為了方便，是為了讓那一條測得到東西。
+    """
+
+    LEDGER_NO_ARG = (("tasks", "cmd_tasks"),
+                     ("events", "cmd_events"),
+                     ("watch", "cmd_watch"),
+                     ("reindex", "cmd_reindex"))
+
+    FAKE_STEP = {"step_id": "T-fake/s1", "local_id": "s1", "state": "RUNNING",
+                 "objective": "假的，只為了讓 watch 有東西可以巡",
+                 "worker": "w", "can_report": "full", "idle_sec": 1.0,
+                 "retry_count": 0}
+
+    @staticmethod
+    def _dispatch(argv: list[str], spy_on: str):
+        """跑 dispatch，攔掉真正那一支與 `build_report`，**不碰正本**。
+
+        回 `(exit code, 那一支被呼叫幾次, 印出來的東西)`。
+        """
+        import types
+        calls = []
+        orig_rep = FS.build_report
+        orig_cmd = getattr(FS, spy_on)
+        FS.build_report = lambda root: types.SimpleNamespace(root=ROOT)
+        setattr(FS, spy_on, lambda *a, **k: (calls.append(1), 0)[1])
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                rc = FS.main(["forseti"] + argv)
+        finally:
+            FS.build_report = orig_rep
+            setattr(FS, spy_on, orig_cmd)
+        return rc, len(calls), buf.getvalue()
+
+    def test_乾淨呼叫四支都照樣走到那一支(self):
+        """先釘這一條。只守退回的話，把四支擋死也會全綠。"""
+        for cmd, spy in self.LEDGER_NO_ARG:
+            with self.subTest(cmd=cmd):
+                rc, n, _ = self._dispatch([cmd], spy)
+                self.assertEqual((rc, n), (0, 1))
+
+    def test_多餘旗標四支都退回而且不走到那一支(self):
+        for cmd, spy in self.LEDGER_NO_ARG:
+            with self.subTest(cmd=cmd):
+                rc, n, out = self._dispatch([cmd, "--yes"], spy)
+                self.assertEqual((rc, n), (2, 0))
+                self.assertIn("--yes", out)
+
+    def test_多餘位置參數也退回(self):
+        """`events 5` 這種寫法跟 `events --limit 5` 一樣是錯的。
+        只擋 `-` 開頭的話，位置參數那一半照樣靜默。"""
+        for cmd, spy in self.LEDGER_NO_ARG:
+            with self.subTest(cmd=cmd):
+                rc, n, out = self._dispatch([cmd, "foo"], spy)
+                self.assertEqual((rc, n), (2, 0))
+                self.assertIn("foo", out)
+
+    def test_reindex帶多餘參數不會走到寫入點(self):
+        """這一組裡最重的那一支。`--dry-run` 的意思是先別動。
+
+        攔 `EventLedger.reindex` 而不是讀原始碼，因為要量的是
+        「會不會走到」，不是「看起來會不會走到」。
+        """
+        import event_ledger as EL
+        seen = []
+        orig = EL.EventLedger.reindex
+        EL.EventLedger.reindex = lambda self, *a, **k: seen.append(1)
+        try:
+            for extra in (["--dry-run"], ["--bogus", "x"], ["foo"]):
+                with self.subTest(extra=extra):
+                    seen.clear()
+                    rc, _, _ = self._dispatch(
+                        ["reindex"] + extra, "cmd_tasks")
+                    self.assertEqual((rc, len(seen)), (2, 0))
+        finally:
+            EL.EventLedger.reindex = orig
+
+    def test_reindex乾淨呼叫照樣走到寫入點(self):
+        """上面那一條的另一半。這一條紅了代表整支被擋死，
+        而那種擋法會讓上面那一條照樣綠 —— 兩條要一起看。
+
+        `reindex` 換成計數再 `SystemExit`，所以正本的索引
+        一次都沒有被重建。
+        """
+        import event_ledger as EL
+        seen = []
+        orig = EL.EventLedger.reindex
+
+        def boom(self, *a, **k):
+            seen.append(1)
+            raise SystemExit(0)
+
+        EL.EventLedger.reindex = boom
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    FS.main(["forseti", "reindex"])
+        finally:
+            EL.EventLedger.reindex = orig
+        self.assertEqual(len(seen), 1)
+
+    def test_watch帶多餘參數不會走到寫入點(self):
+        """`watch` 的 `collect_inbox` 會把收件匣的檔案移到 `.done/`，
+        那是會改狀態的巡檢，不是唯讀的看一眼。"""
+        seen = []
+        stub = self._fake_led(seen)
+        orig = FS._open_ledger
+        FS._open_ledger = lambda: (None, stub)
+        try:
+            for extra in (["--bogus"], ["foo"]):
+                with self.subTest(extra=extra):
+                    seen.clear()
+                    rc, _, _ = self._dispatch(["watch"] + extra, "cmd_tasks")
+                    self.assertEqual((rc, len(seen)), (2, 0))
+        finally:
+            FS._open_ledger = orig
+
+    def test_watch乾淨呼叫照樣走到寫入點(self):
+        """上面那一條的另一半。
+
+        **假的進行中步驟不是為了方便。** 正本此刻 0 個進行中的步驟，
+        而 `collect_inbox` 在迴圈裡 —— 沒有材料的話這一條會因為
+        「沒東西可巡」而綠，那種綠證明不了守門有沒有把整支擋死。
+        """
+        seen = []
+        stub = self._fake_led(seen)
+        orig = FS._open_ledger
+        FS._open_ledger = lambda: (None, stub)
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit):
+                    FS.main(["forseti", "watch"])
+        finally:
+            FS._open_ledger = orig
+        self.assertEqual(len(seen), 1)
+
+    def _fake_led(self, seen: list):
+        """一本假帳本：有一個進行中的步驟，`collect_inbox` 計數再中止。
+
+        **完全不碰正本** —— 不開 sqlite，也不寫任何檔案。
+        """
+        step = dict(self.FAKE_STEP)
+
+        class _Led:
+            def active_steps(self):
+                return [step]
+
+            def collect_inbox(self, step_id):
+                seen.append(step_id)
+                raise SystemExit(0)
+
+            def check_liveness(self, step_id):  # pragma: no cover
+                raise AssertionError("不該走到這裡，collect_inbox 在它前面")
+
+            def close(self):
+                pass
+
+        return _Led()
+
+    def test_名單上就是量過的那四支(self):
+        """名單是量出來的，不是想出來的。加一支進去而沒有量過它的
+        後果，等於用一份沒有材料的判斷去擋人。"""
+        self.assertEqual(FS.NO_ARG_COMMANDS,
+                         ("tasks", "events", "watch", "reindex"))
+
+    def test_沒有多擋真的吃參數的那幾支(self):
+        """真的吃參數的不准進名單。進去的話 `verify <step>` 會被
+        擋在門外，而那是合法用法。"""
+        for cmd in ("dispatch", "auto", "drain", "event", "verify",
+                    "continuity", "handoff", "replay", "context",
+                    "index", "recall", "claims", "overclaim"):
+            with self.subTest(cmd=cmd):
+                self.assertNotIn(cmd, FS.NO_ARG_COMMANDS)
+
+    def test_四個呼叫端讀的是同一份(self):
+        """判準一份給四支用。四處各自寫死一模一樣的訊息，畫面完全
+        相同，只有這一條看得出來 —— 它改掉 `no_extra_args` 的內容，
+        再看四處有沒有跟著變。"""
+        orig = FS.no_extra_args
+        FS.no_extra_args = lambda args, cmd: "換過的判準" if args else ""
+        try:
+            for cmd, spy in self.LEDGER_NO_ARG:
+                with self.subTest(cmd=cmd):
+                    rc, n, out = self._dispatch([cmd, "--yes"], spy)
+                    self.assertEqual((rc, n), (2, 0))
+                    self.assertIn("換過的判準", out)
+        finally:
+            FS.no_extra_args = orig
+
+    def test_訊息講得出是哪一支(self):
+        """用法那一行要帶呼叫端自己的名字。寫死其中一支的話，
+        另外三支的使用者會照著抄錯的那一行。"""
+        for cmd, spy in self.LEDGER_NO_ARG:
+            with self.subTest(cmd=cmd):
+                _, _, out = self._dispatch([cmd, "--yes"], spy)
+                self.assertIn(f"forseti.py {cmd}", out)
+
+
+class PositionalOperands(unittest.TestCase):
+    """真的吃位置參數的那幾支：旗標不准站在位置參數的位置。
+
+    `LedgerNoArgSubcommand` 守的是不吃參數的四支。這一組守的是
+    **會吃參數的那七支**，而它比那一組重的地方在第二格：
+
+    | 寫法 | 改之前 exit | 改之前走到寫入點 | 收到什麼 |
+    |---|---|---|---|
+    | `verify --yes` | 1 | 沒有 | ── |
+    | `dispatch --yes w` | 1 | 沒有 | ── |
+    | `drain <真 task> --yes` | ── | **`Ledger.drain`** | `(task, '--yes')` |
+    | `dispatch <真 step> --yes r` | ── | **`Ledger.dispatch`** | `(step, '--yes', 'r')` |
+    | `auto <真 task> --yes r` | ── | **`Ledger.auto_dispatch`** | `(task, '--yes', 'r')` |
+    | `event DONE <真 step> why --yes` | ── | **`worker_event`** | `worker='--yes'` |
+
+    上面那一列的 `DONE` 是假材料（2026-09-18 15:5x 實測）：真名單裡沒有
+    這個名字，假帳本的 `worker_event` 不檢查 kind 才讓它「走得到」。
+    結論（第二格沒有人查）成立，換成真 kind 才拿得到證據 ——
+    見 `REAL_KIND` 那一段註解與 `MemberSlots`。
+
+    第一格是 id，查不到就停在「找不到…」，exit 1，什麼都沒寫進去 ——
+    那是訊息指錯地方加上 exit code 錯一級。**第二格是 worker，沒有人
+    去查它**，所以它一路走到寫入點，帳本裡那一筆的 worker 就是那個
+    旗標，而帳本是 append-only，收不回來。
+
+    量的第一版假帳本讓 `_resolve_step` 對任何字串都回得出步驟，於是
+    `verify --yes` 看起來走到了 `verify_step`。**那是自己造的材料，
+    不是證據。** 下面 `_fake_led` 只有對得上才回得出東西，就是為了
+    不讓這一組因為材料太多而綠。
+    """
+
+    REAL_TASK = "T-real"
+    REAL_STEP = "T-real/s1"
+    # **從真名單拿,不寫死字串。** 2026-09-18 15:5x 發現原本這裡是
+    # `"DONE"`,而 `ledger.WORKER_EVENTS` 裡沒有這個名字 —— 假帳本的
+    # `worker_event` 不檢查 kind,所以它照樣「走到寫入點」,而真帳本
+    # 第一行就會 raise。**這一組當時舉的 `event` 那個例子是自己造的
+    # 材料**,結論（第二格沒有人查）對 `drain` / `dispatch` / `auto`
+    # 三支仍然成立,對 `event` 要換成真 kind 才成立。
+    # 這正是這個類別自己 docstring 裡警告過的陷阱的第三次出現。
+    REAL_KIND = L.WORKER_EVENTS[0]
+
+    WRITE_POINTS = ("dispatch", "auto_dispatch", "drain", "worker_event",
+                    "verify_step", "continuity")
+
+    FIRST_SLOT = (["verify", "--yes"],
+                  ["continuity", "--yes"],
+                  ["replay", "--limit"],
+                  ["drain", "--yes", "w"],
+                  ["dispatch", "--yes", "w"],
+                  ["auto", "--yes", "w"],
+                  ["event", "--yes", "s", "why"])
+
+    SECOND_SLOT = (["drain", REAL_TASK, "--yes"],
+                   ["dispatch", REAL_STEP, "--yes", "reason"],
+                   ["auto", REAL_TASK, "--yes", "reason"],
+                   ["event", REAL_KIND, REAL_STEP, "why", "--yes"])
+
+    CLEAN = (["verify", REAL_STEP],
+             ["continuity", REAL_TASK],
+             ["drain", REAL_TASK, "w"],
+             ["dispatch", REAL_STEP, "w"],
+             ["auto", REAL_TASK, "w", "理由在這"],
+             ["event", REAL_KIND, REAL_STEP, "why"])
+
+    def _fake_led(self, hits: list):
+        """一本假帳本：**只有對得上才回得出東西**，寫入點計數再中止。
+
+        完全不碰正本 —— 不開 sqlite，也不寫任何檔案。
+        """
+        real_step, real_task = self.REAL_STEP, self.REAL_TASK
+        points = self.WRITE_POINTS
+
+        class _Led:
+            def __init__(self):
+                self.con = self
+                self._last = ()
+
+            def execute(self, sql, params=()):
+                self._last = params
+                return self
+
+            def fetchone(self):
+                ref = self._last[0] if self._last else ""
+                return (real_step,) if ref == real_step else None
+
+            def fetchall(self):
+                return []
+
+            def state_of(self, task):
+                return "RUNNING" if task == real_task else ""
+
+            def next_step(self, task):
+                return None
+
+            def steps_of(self, task):
+                return []
+
+            def close(self):
+                pass
+
+            def __getattr__(self, name):
+                if name in points:
+                    def _w(*a, **k):
+                        hits.append((name, a, k))
+                        raise SystemExit(99)
+                    return _w
+                raise AttributeError(name)
+
+        return _Led()
+
+    class _FakeMod:
+        # 引用真名單,不自己造一份。造一份的話這個檔就能自己
+        # 決定什麼叫合法 kind,而那正是上面 REAL_KIND 那段
+        # 註解記的那個陷阱。
+        WORKER_EVENTS = L.WORKER_EVENTS
+
+        @staticmethod
+        def is_terminal(state):
+            return False
+
+    def _run(self, argv: list[str]):
+        """回 `(exit code, 走到哪些寫入點, 印出來的東西)`。"""
+        hits: list = []
+        orig = FS._open_ledger
+        FS._open_ledger = lambda: (self._FakeMod, self._fake_led(hits))
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                try:
+                    rc = FS.main(["forseti"] + argv)
+                except SystemExit as e:
+                    rc = f"SystemExit({e.code})"
+        finally:
+            FS._open_ledger = orig
+        return rc, [h[0] for h in hits], buf.getvalue()
+
+    def test_乾淨呼叫六支都照樣走到寫入點(self):
+        """先釘這一條。只守退回的話，把七支擋死也會全綠。"""
+        for argv in self.CLEAN:
+            with self.subTest(argv=argv):
+                rc, hits, _ = self._run(argv)
+                self.assertEqual((rc, len(hits)), ("SystemExit(99)", 1))
+
+    def test_第一格旗標七支都退回而且exit是2(self):
+        """改之前是 exit 1（資料錯）。旗標放錯位置是用法錯，
+        這一支的慣例 2 = 用法錯，錯一級的 exit code 會讓腳本
+        把「你打錯指令」讀成「那個東西不存在」。"""
+        for argv in self.FIRST_SLOT:
+            with self.subTest(argv=argv):
+                rc, hits, out = self._run(argv)
+                self.assertEqual((rc, hits), (2, []))
+                self.assertIn("不是旗標", out)
+
+    def test_第二格旗標四支都退回而且一個寫入點都沒碰到(self):
+        """這一組存在的理由。第二格沒有人去查，改之前它一路走到
+        寫入點，帳本裡那一筆的 worker 就是那個旗標。"""
+        for argv in self.SECOND_SLOT:
+            with self.subTest(argv=argv):
+                rc, hits, out = self._run(argv)
+                self.assertEqual((rc, hits), (2, []))
+                self.assertIn("worker", out)
+
+    def test_理由那一格不准擋旗標(self):
+        """`event` 的第三格是自由文字。擋它就是拿長相定罪，
+        而一個以 `-` 開頭的理由是合法的。這一條紅了代表判準
+        變成「看到 `-` 就退回」，那是多擋。"""
+        rc, hits, _ = self._run(
+            ["event", self.REAL_KIND, self.REAL_STEP, "-開頭的理由", "w"])
+        self.assertEqual((rc, hits), ("SystemExit(99)", ["worker_event"]))
+
+    def test_有理由尾巴的兩支不准擋多的(self):
+        """`dispatch` / `auto` 的第三個以後是理由，自由文字，沒有上限。
+        照 `drain` 那種「剛好兩個」去擋的話，帶理由的合法用法會被
+        擋在門外 —— 那是三種形狀被混成一種的後果。"""
+        for argv in (["dispatch", self.REAL_STEP, "w", "因為", "所以"],
+                     ["auto", self.REAL_TASK, "w", "因為", "所以"]):
+            with self.subTest(argv=argv):
+                rc, hits, _ = self._run(argv)
+                self.assertEqual((rc, len(hits)), ("SystemExit(99)", 1))
+
+    def test_沒有尾巴的那幾支多餘參數要退回(self):
+        """吞掉在這幾支不是顯示問題：`drain <真 task> w extra --yes`
+        改之前走到 `Ledger.drain` 收到 `(task, 'w')`，
+        `verify <真 step> extra` 走到 `verify_step`。"""
+        cases = ([["drain", self.REAL_TASK, "w", "extra", "--yes"],
+                  ["verify", self.REAL_STEP, "extra"],
+                  ["continuity", self.REAL_TASK, "extra", "--yes"],
+                  ["replay", "sess", "extra"]])
+        for argv in cases:
+            with self.subTest(argv=argv):
+                rc, hits, out = self._run(argv)
+                self.assertEqual((rc, hits), (2, []))
+                self.assertIn("多拿到的是", out)
+
+    def test_帶太少仍然歸那一支自己那句話(self):
+        """兩邊不重疊：判準問「長相與數量對不對」，那一句問
+        「到底要哪一個」，而它講得比通用措辭具體。
+
+        **定位的方式是看那一支有沒有被呼叫到，不是看畫面上印什麼。**
+        判準把空的也吃掉的話，它印的用法跟那一支自己印的一模一樣
+        （表裡的名字就是照那一行對齊的），所以比字串的話這一條
+        會因為兩句長得一樣而綠 —— 而那一支其實根本沒被走到。
+        """
+        for cmd in ("verify", "continuity", "drain", "dispatch", "auto"):
+            with self.subTest(cmd=cmd):
+                calls = []
+                orig = getattr(FS, f"cmd_{cmd}")
+                setattr(FS, f"cmd_{cmd}",
+                        lambda *a, **k: (calls.append(1), 2)[1])
+                try:
+                    rc, hits, out = self._run([cmd])
+                finally:
+                    setattr(FS, f"cmd_{cmd}", orig)
+                self.assertEqual((rc, hits, len(calls)), (2, [], 1))
+
+    def test_每個呼叫端讀的是同一份(self):
+        """釘的是「不准長出第二份判準」。八個呼叫端各自寫死同一句
+        的話畫面完全相同，只有這一條看得出來 —— 它換掉
+        `FS.operands` 的回傳值，再看每一處有沒有跟著變。"""
+        orig = FS.operands
+        FS.operands = lambda args, cmd, shape: "換過的判準" if args else ""
+        try:
+            for argv in self.FIRST_SLOT + self.SECOND_SLOT:
+                with self.subTest(argv=argv):
+                    rc, hits, out = self._run(argv)
+                    self.assertEqual((rc, hits), (2, []))
+                    self.assertIn("換過的判準", out)
+        finally:
+            FS.operands = orig
+
+    def test_用法那一行跟那一支自己印的是同一句(self):
+        """判準退回的時候印的用法，要跟他打錯之前那一支自己印的
+        是同一句。兩句不一樣的話，同一個指令會有兩種用法在流通。
+
+        比對的對象是原始碼裡那一行，不是我自己抄一份 ——
+        抄一份的話兩邊一起錯也看不出來。
+        """
+        import re
+        src = (ROOT / "apps" / "forseti-cli" / "forseti.py").read_text(
+            encoding="utf-8")
+        own = dict(re.findall(r'print\("(用法：forseti\.py (\w+)[^"]*)"',
+                              src))
+        checked = 0
+        for line, cmd in list(own.items()):
+            if cmd not in FS.OPERAND_SHAPES:
+                continue
+            checked += 1
+            with self.subTest(cmd=cmd):
+                self.assertEqual(FS.OPERAND_SHAPES[cmd].usage(cmd), line)
+        self.assertEqual(checked, 6, "抓到的用法行數不對，正則失準了")
+
+    def test_沒有多擋不吃參數的那幾支(self):
+        """兩張表不准重疊。`tasks` 進了這一張的話，它會被要求
+        帶一個位置參數，而它根本不吃參數。"""
+        overlap = set(FS.OPERAND_SHAPES) & set(FS.NO_ARG_COMMANDS)
+        self.assertEqual(overlap, set())
+
+    def test_每一格的名字都不是空的(self):
+        """用法那一行是拿名字組出來的。空名字會印出 `<>`，
+        那一行就指不到任何東西。"""
+        for cmd, shape in FS.OPERAND_SHAPES.items():
+            with self.subTest(cmd=cmd):
+                self.assertTrue(shape.slots)
+                self.assertTrue(all(n for n, _ in shape.slots))
+                self.assertLessEqual(shape.required, len(shape.slots))
+
+
+class MemberSlots(unittest.TestCase):
+    """某一格的值必須在某張名單裡。這是第三種判準，跟前兩種不重疊。
+
+    `no_extra_args` 問「該不該有參數」，`PositionalOperands` 問
+    「位置與長相對不對」，這一組問「這個值在不在名單裡」。
+    `event bogus <真 step> why` 四格數量對、沒有一格是旗標，
+    **前兩道都放行**。
+
+    ## 改之前量到什麼（2026-09-18 15:5x，臨時帳本，沒碰正本）
+
+    量的方式是 `L.Ledger(db=<暫存>)` 開一本真帳本，建一個真任務，
+    然後數 `events` 表的列數。**不是假帳本** —— 這一組要問的正是
+    真帳本擋不擋得住，假的答不了。
+
+    | 寫法 | exit | 事件數 | 畫面 |
+    |---|---|---|---|
+    | `event WORKER_PROGRESS <真 step> why` | 0 | 1 → 2 | 已記 |
+    | `event bogus <真 step> why` | 2 | 2 → 2 | 不是 F04 §3 定義的 worker 事件 |
+    | `event bogus <假 step> why` | **1** | 2 → 2 | **找不到步驟** |
+
+    **第二列不是缺口。** `Ledger.worker_event` 第一行就擋，擋在任何
+    寫入之前，所以 kind 打錯從來沒有污染過帳本。
+
+    **缺口是第三列。** 兩格都打錯的時候先撞到步驟那一關，於是畫面把人
+    指向第二格，而第一格才是根本不合法的那一格；exit 也錯一級
+    （1 是資料錯，kind 打錯是用法錯，該是 2）。
+
+    所以這一道做的不是新增攔截，是**把成員資格搬到解析 id 之前**。
+    """
+
+    REAL_STEP = "T-real/s1"
+    GOOD = L.WORKER_EVENTS[0]
+
+    def _run(self, argv: list, *, allowed=None):
+        """回 `(exit code, 走到哪些寫入點, 印出來的東西)`。
+
+        假帳本沿用 `PositionalOperands` 那一本：只有對得上才回得出
+        步驟，寫入點計數再中止。**判準讀的名單不走這裡** ——
+        它去 `_sibling("ledger")` 拿，所以 `allowed` 要換的是真模組上
+        那個常數，不是假帳本上的。
+        """
+        hits: list = []
+        po = PositionalOperands()
+        po.REAL_STEP = self.REAL_STEP
+        orig_open = FS._open_ledger
+        FS._open_ledger = lambda: (po._FakeMod, po._fake_led(hits))
+        orig_allowed = L.WORKER_EVENTS
+        if allowed is not None:
+            L.WORKER_EVENTS = allowed
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), \
+                    contextlib.redirect_stderr(buf):
+                try:
+                    rc = FS.main(["forseti"] + argv)
+                except SystemExit as e:
+                    rc = f"SystemExit({e.code})"
+        finally:
+            FS._open_ledger = orig_open
+            L.WORKER_EVENTS = orig_allowed
+        return rc, [h[0] for h in hits], buf.getvalue()
+
+    def test_八種合法的kind每一種都照樣走到寫入點(self):
+        """先釘這一條。只守退回的話，把 `event` 整支擋死也會全綠。
+
+        **逐一跑完整張名單，不是挑一個代表。** 名單裡漏掉一種的話，
+        那一種會變成「合法卻被拒」，而使用者看到的訊息會說它不合法 ——
+        那種錯比不擋更難查。
+        """
+        self.assertEqual(len(L.WORKER_EVENTS), 8, "F04 §3 是八種")
+        for kind in L.WORKER_EVENTS:
+            with self.subTest(kind=kind):
+                rc, hits, _ = self._run(["event", kind, self.REAL_STEP, "why"])
+                self.assertEqual((rc, hits), ("SystemExit(99)", ["worker_event"]))
+
+    def test_不合法的kind退回而且一個寫入點都沒碰到(self):
+        for bad in ("bogus", "WORKER_DONE", "worker_completion", "DONE"):
+            with self.subTest(kind=bad):
+                rc, hits, out = self._run(["event", bad, self.REAL_STEP, "why"])
+                self.assertEqual((rc, hits), (2, []))
+                self.assertIn(f"{bad} 不是合法的 kind", out)
+
+    def test_kind與步驟都打錯時講的是kind那一句(self):
+        """**這一組存在的理由。** 改之前 `cmd_event` 先 `_resolve_step`，
+        所以兩格都打錯會停在「找不到步驟」exit 1 —— 那句話是真的
+        （那個步驟確實不存在），可是它把人指向第二格，而第一格才是
+        根本不合法的那一格。exit code 也錯一級。
+        """
+        seen: list = []
+        orig = FS._resolve_step
+        FS._resolve_step = lambda led, ref: seen.append(ref)
+        try:
+            rc, hits, out = self._run(["event", "bogus", "查不到的步驟", "why"])
+        finally:
+            FS._resolve_step = orig
+        self.assertEqual((rc, hits), (2, []))
+        self.assertIn("bogus 不是合法的 kind", out)
+        # **定位的方式是看 `_resolve_step` 有沒有被走到，不是看畫面印什麼。**
+        # 這一道的訊息裡就帶著「找不到步驟」那五個字（它在解釋不擋的後果），
+        # 所以比字串的話這一條會因為撞到自己的解釋文而紅 —— 而那跟
+        # 第二格有沒有被拿去查完全無關。
+        self.assertEqual(seen, [], "第一格就不合法，不該再去查第二格")
+
+    def test_合法kind配打錯的步驟仍然是找不到步驟(self):
+        """反過來不准多擋。第一格合法的時候，第二格查不到就是資料錯，
+        照舊 exit 1 停在「找不到步驟」。這一條紅了代表這道判準
+        把兩種錯攪成一種。"""
+        rc, hits, out = self._run(["event", self.GOOD, "查不到的步驟", "why"])
+        self.assertEqual((rc, hits), (1, []))
+        self.assertIn("找不到步驟", out)
+
+    def test_名單是去ledger拿的不是抄一份在這邊(self):
+        """換掉 `ledger.WORKER_EVENTS` 之後，新成員要被接受。
+
+        抄一份到 `forseti.py` 的話這一條會紅。兩邊不一致的症狀是
+        「CLI 說不合法、帳本說合法」，而那種不一致沒有人會發現 ——
+        畫面上看起來就只是一句拒絕。
+        """
+        rc, hits, _ = self._run(
+            ["event", "NEWLY_ADDED", self.REAL_STEP, "why"],
+            allowed=L.WORKER_EVENTS + ("NEWLY_ADDED",))
+        self.assertEqual((rc, hits), ("SystemExit(99)", ["worker_event"]))
+
+    def test_舊成員被拿掉之後就不該再被接受(self):
+        """上一條的反面。只守「加得進去」的話，一份永遠回 True 的
+        假名單也會綠。"""
+        rc, hits, out = self._run(
+            ["event", self.GOOD, self.REAL_STEP, "why"],
+            allowed=tuple(k for k in L.WORKER_EVENTS if k != self.GOOD))
+        self.assertEqual((rc, hits), (2, []))
+        self.assertIn("不是合法的 kind", out)
+
+    def test_第一格是旗標時訊息仍然歸長相那一道(self):
+        """`event --yes s why` 兩道都攔得到 —— 旗標不在任何名單裡。
+        可是那一次真正錯的是旗標放錯位置，不是「--yes 不是合法的 kind」。
+        這一條紅了代表這道判準排到 `operands` 前面去了。"""
+        rc, hits, out = self._run(["event", "--yes", "s", "why"])
+        self.assertEqual((rc, hits), (2, []))
+        self.assertIn("不是旗標", out)
+        self.assertNotIn("不是合法的 kind", out)
+
+    def test_一格都沒帶仍然歸那一支自己那句話(self):
+        """`slot` 不存在就不管，跟 `operands` 同一個政策：
+        這一道問「這個值合不合法」，那一句問「到底要哪幾個」。
+        提早擋的話畫面會說「 不是合法的 kind」，指不到任何東西。"""
+        rc, hits, out = self._run(["event"])
+        self.assertEqual(hits, [])
+        self.assertIn("用法：forseti.py event", out)
+        self.assertNotIn("不是合法的 kind", out)
+
+    def test_沒有多擋別的子指令(self):
+        """這張表只有 `event`。別支進來的話，它們的第一格會被拿去
+        對一張跟它無關的名單。"""
+        self.assertEqual(set(FS.MEMBER_SLOTS), {"event"})
+        for argv in (["verify", "T-real/s1"], ["drain", "T-real", "w"]):
+            with self.subTest(argv=argv):
+                rc, hits, out = self._run(argv)
+                self.assertNotIn("不是合法的", out)
+
+    def test_每一格指到的名單都真的存在(self):
+        """表裡存的是「去哪裡拿」。模組名或常數名打錯的話，
+        判準會在執行時炸掉，而炸的時機是有人打錯 kind 的那一次 ——
+        那是最不該炸的時機。"""
+        for cmd, (slot, name, mod_name, const) in FS.MEMBER_SLOTS.items():
+            with self.subTest(cmd=cmd):
+                mod = FS._sibling(mod_name)
+                self.assertTrue(hasattr(mod, const), f"{mod_name} 沒有 {const}")
+                got = tuple(getattr(mod, const))
+                self.assertTrue(got, f"{mod_name}.{const} 是空的")
+                self.assertTrue(name)
+                shape = FS.OPERAND_SHAPES.get(cmd)
+                self.assertIsNotNone(shape, f"{cmd} 不在 OPERAND_SHAPES")
+                self.assertLess(slot, len(shape.slots))
+                self.assertEqual(shape.slots[slot][0], name,
+                                 "兩張表對同一格的稱呼不一樣，畫面會前後不一")

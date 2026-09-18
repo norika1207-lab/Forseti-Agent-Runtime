@@ -351,8 +351,256 @@ fn open_session(ui_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 把 WebView 的 console 轉到 Rust 的 stderr。
+///
+/// 【2026-09-18】桌面版打開是空白的，而 WebView 的 console 從外面看不到、
+/// Rust 的 stderr 也收不到它。於是「白畫面」跟「還在載入」「視窗沒開」
+/// 長得一模一樣，查不下去。
+///
+/// 【為什麼走 document.title 不走 IPC】
+/// 空白畫面的可能成因之一就是 `window.__TAURI__` 沒被注入
+/// （2026-09-14 踩過一次，靠 withGlobalTauri 修的）。
+/// 走 IPC 的話，如果問題剛好是那個，訊息永遠回不來 ——
+/// **而我會拿到「沒有任何錯誤」，跟「真的沒有錯誤」分不出來。**
+///
+/// `title` 是視窗的屬性不是 WebView 的 API，讀得到跟前端死活無關。
+///
+/// 【已知限制，寫在這裡不寫在別處】
+/// 一、`eval` 要等頁面有 document 才有效，所以重試幾次。
+///     頁面在那之前就炸的話，這一支抓不到 —— 那要 initialization_script，
+///     而那需要改成用 WebviewWindowBuilder 手動建視窗。
+/// 二、title 一次只帶得動最後一則，中間爆出來的會被蓋掉。
+/// 三、原本的標題會被蓋掉，所以只在 debug build 掛。
+/// 直接對 WKWebView 打開 JavaScript。
+///
+/// 【2026-09-18】三條獨立路徑（`eval`、頁面 inline `<script>`、
+/// `WKUserScript`）全部不執行，而 HTML 渲染正常。
+/// 所以是 WKWebView 這一層關了 JS，不是 Tauri 的設定也不是我們的程式碼。
+///
+/// wry 0.55.1 只在 `attributes.javascript_disabled` 為真時
+/// 呼叫 `setAllowsContentJavaScript(false)`，**沒有相反方向的設定**。
+/// 如果 macOS 26 把那個屬性的預設從 true 改成 false，
+/// wry 就沒有任何一條路會把它打開。
+///
+/// 這一支繞過 wry 直接設 true。成功的話那個推論就成立，
+/// 而且是可以回報給上游的結論。
+#[cfg(target_os = "macos")]
+fn force_enable_javascript(w: &tauri::WebviewWindow) {
+    use objc2::rc::Retained;
+    use objc2_web_kit::WKWebView;
+    let r = w.with_webview(|wv| unsafe {
+        let ptr = wv.inner() as *mut WKWebView;
+        if ptr.is_null() {
+            eprintln!("[webview] 拿不到 WKWebView 指標");
+            return;
+        }
+        let view: Retained<WKWebView> = Retained::retain(ptr).unwrap();
+        let cfg = view.configuration();
+        let prefs = cfg.defaultWebpagePreferences();
+        let before = prefs.allowsContentJavaScript();
+        prefs.setAllowsContentJavaScript(true);
+        let after = prefs.allowsContentJavaScript();
+        eprintln!("[webview] allowsContentJavaScript: {before} -> {after}");
+        // 【那個開關本來就是 true,所以問題不在它】
+        // WKPreferences 上還有一個更舊的 `javaScriptEnabled`（已棄用）。
+        // 直接用型別化的 API 讀，不用 KVC —— objc2-web-kit 有它。
+        let wp = cfg.preferences();
+        #[allow(deprecated)]
+        {
+            let old_flag = wp.javaScriptEnabled();
+            eprintln!("[webview] prefs.javaScriptEnabled = {old_flag}");
+            if !old_flag {
+                wp.setJavaScriptEnabled(true);
+                eprintln!("[webview] 已強制打開，現在 = {}",
+                          wp.javaScriptEnabled());
+            }
+        }
+    });
+    if let Err(e) = r {
+        eprintln!("[webview] with_webview 失敗 {e}");
+    }
+}
+
+fn hook_console(w: &tauri::WebviewWindow) {
+    const JS: &str = r#"
+(function(){
+  if (window.__forsetiHooked) return "already";
+  // 【旗標只在真的掛得上之後才設】
+  // 先設旗標的話，第一次在還沒有 document 的時候跑過，
+  // 之後每一次 eval 都會直接 return，於是永遠掛不上 ——
+  // 而 eval 每次都回 Ok，看起來像成功了。
+  if (!document || !document.body) return "no-document";
+  window.__forsetiHooked = true;
+  var seq = 0;
+  function put(kind, args) {
+    try {
+      var parts = [];
+      for (var i = 0; i < args.length; i++) {
+        var a = args[i];
+        if (a instanceof Error) parts.push(a.message + " @ " + String(a.stack||"").split("\n")[1]);
+        else if (a && typeof a === "object") { try { parts.push(JSON.stringify(a).slice(0,180)); } catch (e) { parts.push(String(a)); } }
+        else parts.push(String(a));
+      }
+      seq++;
+      document.title = "FORSETI|" + seq + "|" + kind + "|" + parts.join(" ").slice(0, 260);
+    } catch (e) {}
+  }
+  ["error","warn","log"].forEach(function(k){
+    var orig = console[k] ? console[k].bind(console) : function(){};
+    console[k] = function(){ put(k, arguments); orig.apply(console, arguments); };
+  });
+  window.addEventListener("error", function(e){
+    put("uncaught", [e.message, (e.filename||"") + ":" + (e.lineno||"")]);
+  });
+  window.addEventListener("unhandledrejection", function(e){
+    put("reject", [String(e.reason)]);
+  });
+  put("log", ["console 轉發掛上了"]);
+  return "ok";
+})();
+"#;
+    let w2 = w.clone();
+    std::thread::spawn(move || {
+        // 【先證明這個 thread 有在跑】
+        // 2026-09-18:上一版在迴圈裡重複呼叫 eval 與 title，
+        // 結果連「掛不上」那行都沒印出來 —— 而那個迴圈最多 16.8 秒。
+        // macOS 要求 UI API 在主執行緒，所以它可能卡在第一次呼叫上。
+        // **卡住跟沒跑完在輸出上長得一模一樣，所以先印一行。**
+        eprintln!("[webview] 轉發 thread 起來了");
+        // 【先問它載入了什麼】
+        // 2026-09-18:eval 五次都送進去、title 五次都沒變,
+        // 所以 WebView 沒有在執行任何 JS。那不是時機問題也不是執行緒問題,
+        // 是它可能根本沒載入我們的頁面。
+        eprintln!("[webview] 目前 url = {:?}", w2.url());
+        // 【把「引擎不跑 JS」跟「我們的頁面有問題」分開】
+        // 2026-09-18:eval 在任何時機都改不到 title，連 on_page_load
+        // 的 Finished 那一刻也一樣。所以先問一個更基本的問題:
+        // 這個 WebView 執行得了 JavaScript 嗎。
+        //
+        // 載入一個自帶 <script> 的 data URL。它會把 title 改成 DATAURL_OK。
+        // 變了 = 引擎正常，問題在我們的頁面。
+        // 沒變 = 引擎層面的事，跟 app.js 無關。
+        //
+        // **這是診斷，跑完就把畫面換回去。**
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let probe = "data:text/html,<html><body>probe</body>\
+<script>document.title='DATAURL_OK'</script></html>";
+        match w2.navigate(probe.parse().unwrap()) {
+            Ok(()) => eprintln!("[webview] 診斷頁送出去了"),
+            Err(e) => eprintln!("[webview] 診斷頁送不出去 {e}"),
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        eprintln!("[webview] 診斷頁之後的 title = {:?}", w2.title());
+        // 【wry #1848 的 workaround:resize 強制重繪】
+        // macOS 26 + Apple Silicon + wry 0.55.1 + tauri 2.11.5 上，
+        // WKWebView 的 compositor 會停止呈現新 frame，
+        // 而 DOM 與 accessibility tree 是活的。
+        //
+        // 那個 issue 說 JS 有在跑，而這裡量到的是 title 沒變 ——
+        // title 走 AppKit 不走 compositor，所以兩者對不上。
+        // **resize 之後畫面出來 = compositor 問題、我的 title 量法有問題;
+        //   沒出來 = JS 真的沒跑。這一步是要把那兩件事分開。**
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        let _ = w2.set_size(tauri::LogicalSize::new(341.0, 861.0));
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let _ = w2.set_size(tauri::LogicalSize::new(340.0, 860.0));
+        eprintln!("[webview] resize 強制重繪做了一次");
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        eprintln!("[webview] resize 之後的 title = {:?}", w2.title());
+        // 頁面還沒好的時候 eval 沒有效果，所以重試。
+        // 只試一次的話，慢一點的機器上會靜靜地什麼都沒掛上。
+        // 【無條件講出來】原本只在重試過才印，第一次就成功反而不說話 ——
+        // 於是「掛上了但沒訊息」跟「根本沒掛上」分不出來。
+        // 這一支存在的理由就是要分得出那兩件事。
+        // 【用結果驗證，不用回傳值驗證】
+        // `eval` 的 Ok 只代表「送出去了」，不代表 JS 跑起來。
+        // 2026-09-18 實測:第一次就回 Ok，而 title 一直是 "Forseti" ——
+        // 那段 JS 根本沒執行，因為那時還沒有 document。
+        // **所以判準是 title 有沒有變，不是 eval 回什麼。**
+        let mut hooked = false;
+        for i in 0..3 {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            eprintln!("[webview] 第 {} 圈:準備 eval", i + 1);
+            if let Err(e) = w2.eval(JS) {
+                if i == 0 { eprintln!("[webview] eval 失敗 {e}"); }
+                continue;
+            }
+            eprintln!("[webview] 第 {} 圈:eval 回來了", i + 1);
+            std::thread::sleep(std::time::Duration::from_millis(120));
+            eprintln!("[webview] 第 {} 圈:準備 title()", i + 1);
+            if let Ok(t) = w2.title() {
+                eprintln!("[webview] 第 {} 圈:title = {:?}", i + 1, t);
+                if t.starts_with("FORSETI|") {
+                    eprintln!("[webview] console 轉發掛上了（第 {} 次，{:.1} 秒）",
+                              i + 1, (i as f64 + 1.0) * 0.42);
+                    hooked = true;
+                    break;
+                }
+            }
+        }
+        if !hooked {
+            eprintln!("[webview] console 轉發掛不上:送了四十次，title 一直是 {:?}",
+                      w2.title());
+            eprintln!("[webview] 那代表注入的 JS 沒有執行。頁面本身可能也沒跑起來");
+        }
+        let mut last = String::new();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            match w2.title() {
+                Ok(t) => {
+                    if t != last && t.starts_with("FORSETI|") {
+                        // seq|kind|body
+                        let body = t.splitn(4, '|').nth(3).unwrap_or("");
+                        let kind = t.splitn(4, '|').nth(2).unwrap_or("?");
+                        eprintln!("[webview] {kind}: {body}");
+                        last = t;
+                    }
+                }
+                Err(_) => break,   // 視窗關了
+            }
+        }
+    });
+}
+
 fn main() {
     tauri::Builder::default()
+        // 【2026-09-18 診斷】頁面到底有沒有載入。
+        //
+        // 已經證實的:WebView 沒有在執行任何 JS
+        // （eval 送五次、title 五次都沒變）。兩種可能:
+        //   一、頁面根本沒載入 → 這個 hook 不會被呼叫
+        //   二、載入了但 JS 不跑 → 這個 hook 會被呼叫
+        // **這一行的作用是把那兩種分開，而不是再猜一次。**
+        .on_page_load(|w, payload| {
+            eprintln!("[page] {:?} url={} label={}",
+                      payload.event(), payload.url(), w.label());
+            // 【在 Finished 那一刻問它頁面裡有什麼】
+            // 這是 document 一定存在的時機。先前在 thread 裡重試四十次
+            // 都沒改到 title，而頁面其實幾百毫秒就 Finished 了 ——
+            // 所以那不是時機問題。這一次把「頁面有多少內容」寫進 title，
+            // 空頁面跟「有內容但 JS 不跑」就分得開了。
+            // 診斷頁載完之後立刻讀 title。先前在 thread 裡讀太早，
+            // 讀到的是它 Finished 之前的值 —— 那個「沒變」不算數。
+            // 比較的兩個值直接印出來。上一輪這個 if 沒進去，
+            // 而我看不出為什麼 —— 那種時候就把值攤開，不要再讀一次程式碼。
+            eprintln!("[page] cmp url_as_str={:?} event_dbg={:?}",
+                      &payload.url().as_str()[..payload.url().as_str().len().min(24)],
+                      format!("{:?}", payload.event()));
+            if payload.url().as_str().starts_with("data:")
+                && format!("{:?}", payload.event()) == "Finished" {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                // `on_page_load` 給的是 Webview 不是 WebviewWindow，
+                // 沒有 title()。從 app handle 拿同一個 label 的視窗。
+                let t = w.app_handle()
+                    .get_webview_window(w.label())
+                    .map(|ww| ww.title());
+                eprintln!("[webview] 診斷頁 Finished，title = {t:?}");
+            }
+            if format!("{:?}", payload.event()) == "Finished" {
+                let _ = w.eval(
+                    "try{document.title='PAGE|html='+(document.documentElement.outerHTML||'').length+'|body='+(document.body?document.body.innerHTML.length:-1)+'|scripts='+document.scripts.length+'|ready='+document.readyState;}catch(e){document.title='PAGE|throw|'+e.message;}");
+            }
+        })
         .setup(|app| {
             spawn_watcher(app.handle().clone());
 
@@ -426,6 +674,7 @@ fn main() {
                     let _ = w.set_size(tauri::LogicalSize::new(340.0, 860.0));
                     eprintln!("[forseti] 重設尺寸後 {:?}", w.outer_size());
                     eprintln!("[forseti] show 之後 visible={:?}", w.is_visible());
+                    hook_console(&w);
                 }
                 None => {
                     eprintln!("[forseti] 設定檔沒生出視窗，改用程式建");
@@ -439,12 +688,24 @@ fn main() {
                         .title_bar_style(tauri::TitleBarStyle::Overlay)
                         .hidden_title(true)
                         .resizable(true)
+                        // 【走 WKUserScript 這條，不走 evaluateJavaScript】
+                        // eval 那條在任何時機都沒效果。initialization_script
+                        // 是另一個機制（WKUserScript，頁面載入前注入）。
+                        // 兩個都不跑，才能確定是 WKWebView 把 JS 關了;
+                        // 只有 eval 不跑的話，問題在 eval 那條路。
+                        .initialization_script(
+                            "document.title='INITSCRIPT_OK';")
                         .build()
                     {
                         Ok(w) => {
                             let _ = w.show();
                             let _ = w.set_focus();
-                            eprintln!("[forseti] 視窗建好了");
+                            eprintln!("[forseti] 視窗建好了（手動路徑）");
+                            #[cfg(target_os = "macos")]
+                            force_enable_javascript(&w);
+                            // 手動這條路跟 config 那條走不同程式碼。
+                            // 行為不同的話，範圍就縮到 config 上。
+                            hook_console(&w);
                         }
                         Err(e) => eprintln!("[forseti] 視窗建不起來：{e}"),
                     }

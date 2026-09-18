@@ -709,6 +709,27 @@ def summary(*, baseline_path: Path | None = None) -> dict:
 SUBCOMMANDS: tuple[str, ...] = ("list", "baseline", "run")
 
 
+def shown(value: str) -> str:
+    """把收到的值框起來，讓前後空白在畫面上看得見。
+
+    2026-09-18 實測沒有這一道的後果：`probe run "goal_persistence "`
+    印出來的兩行是這樣 ——
+
+        沒有這一題：goal_persistence
+        有的是：goal_persistence、claim_evidence_honesty、⋯
+
+    **同一個字串，上面說沒有，下面說有。** 使用者看到的是畫面自相
+    矛盾，而真正的差別（一個尾隨空白）在畫面上不存在。大小寫打錯
+    那一種看得見，這一種看不見，所以這一種比較難查。
+
+    **這是顯示，不是判準。** 框起來不改變誰被退回 —— 退回的條件
+    一個字都沒動，改的只是被退回的人看不看得出為什麼。要不要
+    normalize（把空白吃掉當成同一題）是設計決定，不在這裡做：
+    那會改變誰被退回。
+    """
+    return f"「{value}」"
+
+
 def case_ids() -> tuple[str, ...]:
     """`run` 的題名收得了哪些值。**來源只有 PACK 一個。**
 
@@ -727,7 +748,7 @@ def main(argv: list[str]) -> int:
     # 排在未知子指令守門之前，因為「你給的是旗標」比「不認得這個指令」
     # 講得更準 —— 這一支根本沒有任何旗標。
     if args and str(args[0]).startswith("-"):
-        print(f"這一支沒有旗標：{args[0]}", file=sys.stderr)
+        print(f"這一支沒有旗標：{shown(args[0])}", file=sys.stderr)
         print(f"子指令是：{'、'.join(SUBCOMMANDS)}"
               "（題名寫在 run 後面，例如 `probe run goal_persistence`）",
               file=sys.stderr)
@@ -736,7 +757,7 @@ def main(argv: list[str]) -> int:
     # 子指令打錯字 -> 明著退回。實測 `probe lisst` 靜默跑滿十題、exit=0：
     # 要清單的人拿到一份跑完的報告，而且它是綠的。
     if cmd not in SUBCOMMANDS:
-        print(f"不認得這個指令：{cmd}", file=sys.stderr)
+        print(f"不認得這個指令：{shown(cmd)}", file=sys.stderr)
         print(f"有的是：{'、'.join(SUBCOMMANDS)}", file=sys.stderr)
         print("不擋的話這裡不會報錯，它會掉進 run 跑滿整包然後印綠的。",
               file=sys.stderr)
@@ -758,7 +779,7 @@ def main(argv: list[str]) -> int:
         # **這一條沒有實跑過**：跑它就會往正本寫一條基準線。
         # 量測改在測試裡攔 `record_baseline` 做（`ProbeBaselineBy`）。
         if by.startswith("-"):
-            print(f"這不是人名：{by}", file=sys.stderr)
+            print(f"這不是人名：{shown(by)}", file=sys.stderr)
             print("用法：`probe baseline <誰按的>`。這一支沒有旗標。",
                   file=sys.stderr)
             return 2
@@ -777,7 +798,7 @@ def main(argv: list[str]) -> int:
     # 印「可量的 0 個：PASS 0、REGRESSED 0」、exit=0 —— 那是一份**綠的
     # 空報告**，比報錯難發現得多，因為通過率的分母也是 0。
     if only is not None and only not in case_ids():
-        print(f"沒有這一題：{only}", file=sys.stderr)
+        print(f"沒有這一題：{shown(only)}", file=sys.stderr)
         print(f"有的是：{'、'.join(case_ids())}", file=sys.stderr)
         print("不擋的話這裡不會報錯，它會挑出 0 題然後印 PASS 0、exit=0，"
               "看起來像跑過而且全綠。", file=sys.stderr)
