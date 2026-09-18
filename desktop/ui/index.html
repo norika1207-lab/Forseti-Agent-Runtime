@@ -23,36 +23,21 @@
       <span class="tag">Forseti</span>
       <span id="sessName"></span>
       <!-- owner 2026-09-15:「上面一半的那個板塊要被拿掉，可以用彈出的，
-           但是我要讓樹的面積更大。」溫度留在 bar 上,其餘收進 #panel。 -->
+           但是我要讓樹的面積更大。」所以它是彈出的,預設收著。 -->
       <button class="miniT" id="miniT" type="button"
               aria-expanded="false" aria-controls="panel"
-              title="展開溫度與建議">--</button>
+              title="退到哪一輪、context 還剩多少">狀態</button>
       <button class="help" id="helpBtn" aria-label="這些符號是什麼">?</button>
     </div>
 
-    <!-- 溫度。工程書 §17.2 的預設畫面。
-         一個溫度、一行主要變化、一行已驗證進度、一行現在該做什麼。
-         §17.3：預設只顯示單一最高槓桿的事實，其餘全部 drill-down。
-         「A governance tool that continuously shouts is itself a
-         productivity failure.」 -->
+    <!-- 【2026-09-18 砍到剩三個】溫度、三張建議卡、八個維度那一格、
+         以及底下那排 Activity 數字,全部退場。owner:「從簡單的功能
+         變成一套比 ERP 還複雜的戲桶。」
+
+         留下來的只有兩件事:退回去要退到哪一輪(fork 那一軸),
+         以及 context 還剩多少(全量紀錄那一軸)。時間軸是主體,
+         它不在這個面板裡,它就是整個畫面。 -->
     <div class="panel" id="panel" hidden>
-    <div class="vitals" id="vitals">
-      <div class="vRow">
-        <span class="vTemp" id="vTemp">--</span>
-        <span class="vBand" id="vBand"></span>
-        <button class="vWhy" id="vWhy" type="button">為什麼</button>
-      </div>
-      <p class="vLine" id="vChange"></p>
-      <p class="vLine" id="vProg"></p>
-    </div>
-    <!-- 【2026-09-14】退場。它的內容被吸收進上面那組卡片，
-         頂部不並排兩組建議(§17.3 只顯示單一最高槓桿的事實)。
-         元素留著是因為 setAdvice 的跳轉邏輯還在用它的 dataset。 -->
-    <button class="adviceBox" id="adviceBox" type="button" hidden>
-      <span id="adviceText">讀取中</span>
-      <span id="adviceWhy"></span>
-      <span class="goto" id="adviceGoto" hidden></span>
-    </button>
     <!-- 退回去的話，退到哪一輪。ROADMAP P0 第 1 項、Vol4 Stage 4。
          這一格跟別處在講的不是同一題：紅點白點紫點講的是「哪裡出問題」，
          這一格講的是「如果現在要退，退到哪、憑什麼、會丟掉多少」。
@@ -67,22 +52,12 @@
       </div>
     </div>
 
-    <!-- 三張卡片。bible.md I-04：事前給三個選項不吵，事後跳警告才吵。
-         每張可展開 Vol3 §12 要求的五件事：為什麼是現在、證據、
-         信心、不理會會怎樣。點「用這句」把話複製走。 -->
-    <div class="cards" id="cards"></div>
-
-
     <!-- Context 是預警，不是統計，所以不擠進底下那排數字。
          壓縮發生後畫一個黑點是事後，這一條是事前。 -->
     <div class="ctx" id="ctx" hidden>
       <div class="ctxBar"><i id="ctxFill"></i></div>
       <p id="ctxText"></p>
     </div>
-    <!-- 這四個數字全部是 Activity。v5.0 §34.1 明寫
-         Activity「Never sufficient evidence of progress」，
-         所以它們不預設顯示，按「為什麼」才展開。 -->
-    <div class="subs" id="subs" hidden></div>
     </div>
   </header>
 
@@ -110,13 +85,10 @@
       <button class="x" id="pickClose" aria-label="關閉">×</button>
     </div>
     <div class="pickViews" role="group" aria-label="檢視">
+      <!-- owner 2026-09-14:「我們有討論過用一堆分頁來呈現嗎？
+           我不懂你分頁做一堆，然後用戶要？」七個砍到兩個。 -->
       <button class="vw" data-view="tree" aria-pressed="true">對話</button>
       <button class="vw" data-view="list" aria-pressed="false">需要注意</button>
-      <button class="vw" data-view="work" aria-pressed="false">在做什麼</button>
-      <button class="vw" data-view="spec" aria-pressed="false">讀文件</button>
-      <button class="vw" data-view="machine" aria-pressed="false">這台機器</button>
-      <button class="vw" data-view="feat" aria-pressed="false">功能</button>
-      <button class="vw" data-view="audit" aria-pressed="false">自我審計</button>
     </div>
     <div class="pickSearch">
       <input id="pickQuery" type="search" placeholder="搜尋第一句話"

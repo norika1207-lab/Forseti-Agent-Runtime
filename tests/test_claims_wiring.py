@@ -39,16 +39,21 @@ OVERSTATED = ("說謊", "騙人", "造假", "撒謊")
 
 
 class TestReachesScreen(unittest.TestCase):
-    """後端算的那兩個東西，畫面有沒有讀。"""
+    """後端算的那個東西，畫面有沒有讀。
+
+    【2026-09-18 砍到剩三個】原本兩個。`claim_total` 那個總數住在
+    頂部的統計列(`.subs`),那一塊連同溫度卡整批退場,所以
+    「畫面有沒有讀 claim_total」不再是一個問題 —— 沒有地方讀它。
+    後端還在寫,下面 `test_backend_still_writes_both` 照舊守著,
+    畫面那一半的斷言拿掉。
+
+    留下來的 `s.claims` 是時間軸上每一輪的宣稱,那個還在畫。
+    """
 
     def test_row_claims_is_read_by_ui(self):
         self.assertIn("s.claims", JS,
                       "desktop_api 把結果寫進 row['claims']，app.js 沒讀它。"
                       "後端算了沒人用，等於沒做")
-
-    def test_claim_total_is_read_by_ui(self):
-        self.assertIn("d.claim_total", JS,
-                      "snapshot 有 claim_total，統計列沒顯示")
 
     def test_backend_still_writes_both(self):
         self.assertIn('row["claims"] = uniq', API,
@@ -78,7 +83,13 @@ class TestStylesExist(unittest.TestCase):
 
 
 class TestLabelDoesNotOverstate(unittest.TestCase):
-    """標籤不准把「查不到」講成「說謊」。"""
+    """標籤不准把「查不到」講成「說謊」。
+
+    【2026-09-18】那句「查不到不等於它說謊」的說明住在統計列上,
+    統計列退場它也跟著走。守那一句的斷言拿掉,
+    守文案不准把 UNKNOWN 講成說謊的那條留著 ——
+    它掃的是時間軸上還在畫的那些宣稱。
+    """
 
     def test_no_overstated_words_near_claims(self):
         # 只看跟 claim 有關的那幾段，不掃全檔 ——
@@ -95,12 +106,6 @@ class TestLabelDoesNotOverstate(unittest.TestCase):
                         "不", before,
                         f"claim 相關文案出現肯定的「{w}」。"
                         "UNKNOWN 是驗證器搆不到，不是它說謊")
-
-    def test_tooltip_explains_unknown(self):
-        self.assertIn("查不到不等於它說謊", JS,
-                      "統計列的說明要講清楚 UNKNOWN 的意思，"
-                      "不然這個數字會被讀成說謊次數")
-
 
 class TestRealSnapshot(unittest.TestCase):
     """真的跑一次，驗算出來的數字跟去重。

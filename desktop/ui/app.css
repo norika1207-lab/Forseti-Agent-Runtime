@@ -126,7 +126,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .top,.lane,.bottom{max-width:480px;margin-left:auto;margin-right:auto;
   width:100%;box-sizing:border-box}
 
-
 /* ── 資訊中心 ───────────────────────────────────
    owner 2026-09-14 把那塊流動顏料拿掉了。理由不用她講:
    一個抽象的色斑看久了只會變成裝飾，而一句
@@ -159,20 +158,6 @@ button{font:inherit;cursor:pointer;color:inherit}
   color:var(--ink-2);font:590 11.5px var(--sans);line-height:20px;
   transition:background .18s var(--ease),color .18s var(--ease)}
 .help:hover{background:var(--ink-3);color:#fff}
-
-/* 建議本身是主角。 */
-/* 建議整塊可點，點了跳到它在講的那一輪。
-   owner 2026-09-14:「我看著他沒感覺，因為我不知道他在指什麼。」
-   一句指不到東西的建議，看的人不知道它在說誰。
-
-   代價:這一塊要收回滑鼠事件，所以它不能拖視窗了。
-   頂部其他地方還可以拖。 */
-/* 只有真的有地方可跳的時候才收走事件。
-   跳不了的時候它是一塊純顯示，那就該還給拖曳。 */
-.adviceBox{pointer-events:none;display:block;width:100%;text-align:left;
-  border:0;background:transparent;padding:9px 10px 10px;margin:0 -10px;
-  border-radius:var(--r-md);cursor:default;
-  transition:background .16s var(--ease)}
 .adviceBox.can{pointer-events:auto;cursor:pointer}
 .adviceBox.can:hover{background:var(--surface-3)}
 .adviceBox.can:active{background:var(--hair-2)}
@@ -184,10 +169,6 @@ button{font:inherit;cursor:pointer;color:inherit}
   margin-right:8px;vertical-align:.12em}
 #adviceWhy{display:block;margin:6px 0 0;font-size:11.5px;line-height:1.46;
   color:var(--ink-3);letter-spacing:-.005em}
-.goto{display:inline-flex;align-items:center;gap:4px;margin-top:8px;
-  font-size:11px;font-weight:560;color:var(--blue);letter-spacing:-.005em}
-.goto[hidden]{display:none}
-.goto::after{content:"↓";font-size:12px;line-height:1}
 
 /* 分項。規格表的排法:小灰標籤在上，數字在下。
    溫度計不合成單一分數 —— 每一格量的是一件說得出名字的事。 */
@@ -202,9 +183,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .ctx[data-level="close"] .ctxBar i{background:var(--red)}
 #ctxText{margin:7px 0 0;font-size:11px;color:var(--ink-3);
   letter-spacing:-.005em}
-
-.subs{display:flex;gap:0;padding:16px 0 20px;min-height:54px;
-  pointer-events:none}
 /* 分項那幾格不收滑鼠事件。
    【2026-09-14 第二次踩到】它們原本 auto 是為了 hover tooltip，
    結果整條 54px 都不能拖。那幾個數字的意思在 `?` 圖例裡講過了，
@@ -212,8 +190,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 
    拖曳區被吃掉這件事今天發生兩次，兩次都是加了可互動元素之後
    沒回頭看還剩多少地方能拖。 */
-.sub{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;
-  position:relative;padding-right:10px;pointer-events:none}
 .sub+.sub{padding-left:14px;
   box-shadow:inset 1px 0 0 var(--hair)}
 .sub .k{font-size:10.5px;letter-spacing:-.005em;color:var(--ink-3);
@@ -224,7 +200,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .sub.hot .n{color:var(--ink)}
 .sub.hot .k{color:var(--amber)}
 .sub.ok .n{color:var(--green)}
-.subs.empty{padding-bottom:22px}
 .subs .none{font-size:11.5px;color:var(--ink-3);align-self:center}
 
 /* ── 線道 ──────────────────────────────────── */
@@ -454,7 +429,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .fam.plain .none{border:0;padding:6px 16px 0;font-size:11px;
   color:var(--ink-4);line-height:1.55}
 
-
 /* ── 圖例 ───────────────────────────────────────
    owner 2026-09-14：「說實話我看不懂。」
    看不懂的介面等於沒有介面。 */
@@ -501,7 +475,6 @@ button{font:inherit;cursor:pointer;color:inherit}
   padding:5px 7px;display:flex;align-items:center;gap:4px}
 .lgLine{width:3px;height:22px;border-radius:2px;display:block}
 
-
 /* ── Session 選擇器 ───────────────────────────── */
 .picker[hidden]{display:none}
 .picker{position:fixed;inset:0;z-index:90;display:flex;flex-direction:column;
@@ -545,7 +518,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pk[aria-current="true"] .pkTitle{font-weight:590}
 .pkNone{padding:20px;font-size:12px;color:var(--ink-3)}
 
-
 /* 跳過去之後閃一下。
    捲到了但不知道是哪一張，等於沒跳。 */
 @keyframes flashcard{
@@ -557,7 +529,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 @media (prefers-reduced-motion:reduce){
   .body.flash{animation:none;outline:2px solid var(--blue);outline-offset:2px}
 }
-
 
 /* ── 一輪的動作面板 ─────────────────────────────
    點了節點要能做事，不是只能看。 */
@@ -588,7 +559,6 @@ button{font:inherit;cursor:pointer;color:inherit}
   font:11px var(--mono);letter-spacing:-.02em;
   overflow-x:auto;white-space:nowrap;-webkit-user-select:all;user-select:all}
 
-
 /* 空輸出/停滯的那一輪。owner 的第一條天條就是「絕對不准吐空白」。 */
 .starve{display:inline-flex;align-items:center;font-size:11px;
   letter-spacing:-.005em;color:#FFB3AE;margin-top:8px;
@@ -616,197 +586,38 @@ button{font:inherit;cursor:pointer;color:inherit}
   text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .claimlist .cev{flex:none;font-size:9.5px;opacity:.7;
   font-variant-numeric:tabular-nums}
-
-
-/* ── 執行層 §30 ─────────────────────────────────
-   Widget 原本只有觀測層:看得到 AI 做錯什麼，
-   卻不能在同一個地方看它接下來要做什麼。 */
-.task{margin:10px 16px;padding:14px 16px;border-radius:var(--r-xl);
-  background:var(--surface);border:.5px solid var(--hair)}
-.taskTop{display:flex;align-items:baseline;gap:9px;margin-bottom:7px}
-.taskState{font-size:10.5px;font-weight:590;letter-spacing:.03em;
-  padding:2.5px 8px;border-radius:var(--r-pill);
-  background:rgba(10,132,255,.18);color:#6BB6FF;flex:0 0 auto}
-.taskId{font:10.5px var(--mono);color:var(--ink-4);letter-spacing:-.02em;
-  margin-left:auto}
-.taskObj{font-size:12.5px;line-height:1.5;color:var(--ink);
-  letter-spacing:-.005em}
-.taskNext{margin-top:9px;padding-top:9px;border-top:.5px solid var(--hair);
-  font-size:11.5px;color:var(--ink-3)}
-.taskMetrics{display:flex;gap:16px;margin-top:10px}
-.metric{flex:1;min-width:0}
 .metric .k{display:block;font-size:10.5px;color:var(--ink-3)}
 .metric .v{display:block;font:300 17px/1.2 var(--display);color:var(--ink);
   letter-spacing:-.02em;font-variant-numeric:tabular-nums;margin-top:2px}
 .metric.bad .v{color:var(--red)}
 .metric .note{display:block;font-size:10.5px;color:var(--ink-4);margin-top:3px;
   line-height:1.4}
-
-
-/* ── 這台機器 §31 ───────────────────────────────
-   owner 2026-09-14 換機器那一晚：
-   「Forseti 說什麼可以看到我們做了什麼，但沒有一個功能幫的到我。」
-   換機器該搬什麼、現在有幾個，直接是畫面上一列數字。 */
-.mach{margin:10px 16px;padding:14px 16px;border-radius:var(--r-xl);
-  background:var(--surface);border:.5px solid var(--hair)}
-.machHead{display:flex;align-items:baseline;gap:9px;margin-bottom:12px}
-.machHost{font:590 14px var(--display);letter-spacing:-.015em;color:var(--ink)}
-.machModel{font:10.5px var(--mono);color:var(--ink-4);margin-left:auto;
-  letter-spacing:-.02em}
-.mi{display:flex;align-items:baseline;gap:10px;padding:9px 0}
-.mi+.mi{box-shadow:inset 0 .5px 0 var(--hair)}
-.mi .dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;
-  background:var(--green);align-self:center}
-.mi.gone .dot{background:var(--red)}
-.mi .nm{flex:1;min-width:0;font-size:12.5px;color:var(--ink);
-  letter-spacing:-.005em}
 .mi .ct{font:300 17px/1 var(--display);color:var(--ink);
   font-variant-numeric:tabular-nums;letter-spacing:-.02em;flex:0 0 auto}
 .mi.gone .ct{color:var(--red)}
 .mi .sub{display:block;font-size:10.5px;color:var(--ink-3);margin-top:3px;
   line-height:1.45}
 .mi.gone .sub{color:#FFB3AE}
-
-
-/* ── 功能自檢 §33 ───────────────────────────────
-   owner 2026-09-14：「我要列出來的功能表上的所有功能都可以被驗證。」
-
-   每一項跑兩次:真實資料看現況，合成違規確認它會叫。
-   **一個回 0 的偵測器跟一個壞掉的偵測器，在真實資料上長得一樣。** */
-.chk{margin:10px 16px;padding:4px 0}
-.chkTop{display:flex;align-items:baseline;gap:10px;padding:0 16px 12px}
-.chkBig{font:250 30px/1 var(--display);letter-spacing:-.03em;color:var(--green)}
 .chkBig.bad{color:var(--red)}
-.chkNote{font-size:11.5px;color:var(--ink-3);line-height:1.45}
-.ci{display:flex;align-items:flex-start;gap:11px;padding:11px 16px;
-  background:var(--surface);border:.5px solid var(--hair);
-  border-radius:var(--r-lg);margin-bottom:8px}
 .ci .tag{font-size:10px;font-weight:590;letter-spacing:.03em;padding:3px 8px;
   border-radius:var(--r-pill);flex:0 0 auto;
   background:rgba(48,209,88,.18);color:#7FE29A}
 .ci.dead .tag{background:rgba(255,69,58,.22);color:#FFB3AE}
 .ci .body{flex:1;min-width:0}
-.ci .nm{display:block;font-size:12.5px;color:var(--ink);letter-spacing:-.005em}
 .ci .sp{display:block;font:10.5px var(--mono);color:var(--ink-4);margin-top:3px;
   letter-spacing:-.02em}
 .ci .live{font:300 17px/1 var(--display);color:var(--ink);flex:0 0 auto;
   font-variant-numeric:tabular-nums;letter-spacing:-.02em}
-
-
-/* ── 功能說明 §36 ───────────────────────────────
-   owner 2026-09-14：「明天是赤裸裸的給人看。」
-   每一項三件事:抓什麼、憑什麼（規格編號）、現在的真實數字。
-   沒接的照實列 —— 藏起來的那一項，正是會被問到的那一項。 */
-.fHead{padding:14px 16px 6px}
-.fBig{font:250 32px/1 var(--display);letter-spacing:-.03em;color:var(--green)}
 .fBig.bad{color:var(--red)}
-.fSub{display:block;font-size:11.5px;color:var(--ink-3);margin-top:7px;
-  line-height:1.5}
-.fScale{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
-.fScale span{font-size:10.5px;color:var(--ink-2);background:rgba(255,255,255,.09);
-  padding:3px 9px;border-radius:var(--r-pill);white-space:nowrap}
-.fScale b{font-weight:600;color:var(--ink);font-variant-numeric:tabular-nums}
-
-.fi{margin:0 16px 8px;padding:13px 15px;border-radius:var(--r-lg);
-  background:var(--surface);border:.5px solid var(--hair)}
-.fi.dead{border-color:rgba(255,69,58,.45)}
-.fiTop{display:flex;align-items:baseline;gap:9px}
-.fiTag{font-size:10px;font-weight:590;letter-spacing:.03em;padding:3px 8px;
-  border-radius:var(--r-pill);background:rgba(48,209,88,.18);color:#7FE29A;
-  flex:0 0 auto}
-.fi.dead .fiTag{background:rgba(255,69,58,.22);color:#FFB3AE}
-.fiName{font-size:13px;font-weight:560;color:var(--ink);letter-spacing:-.01em}
-.fiLive{margin-left:auto;font:300 18px/1 var(--display);color:var(--ink);
-  font-variant-numeric:tabular-nums;letter-spacing:-.02em;flex:0 0 auto}
-.fiWhat{font-size:11.5px;line-height:1.5;color:var(--ink-2);margin-top:7px}
-.fiSpec{font:10.5px var(--mono);color:var(--ink-4);margin-top:6px;
-  letter-spacing:-.02em}
-.fGap{margin:16px 16px 8px;font-size:11px;font-weight:590;letter-spacing:.03em;
-  color:var(--ink-3)}
-
-/* 還沒做的那一區。owner 2026-09-17:「到底有做哪些，沒做那些」
-   跟上面那份用同一個 .fi 版型，不另做一套 ——
-   兩份長得不一樣的話，人會以為它們在講兩件不同的事。
-   差別只在標籤的顏色與多出來的「擋住的是」那一行。 */
-/* 標題不准被壓縮。380 寬底下 flex 會把它當成可縮的項目，
-   於是「還沒做的」被拆成「還沒做」加下一行一個「的」。 */
-.fGap.miss{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
-  margin-top:22px;color:var(--ink-2);font-size:12px}
-.fGapT{flex:0 0 auto;white-space:nowrap}
-.fGap.miss b{font:300 16px/1 var(--display);color:var(--ink);
-  font-variant-numeric:tabular-nums}
-.fKinds{margin-left:auto;display:flex;gap:10px;flex-wrap:wrap;
-  font-size:10.5px;font-weight:400;color:var(--ink-4)}
-.fKinds b{font-size:11px;color:var(--ink-3)}
-
-.fi.miss{background:rgba(255,255,255,.035);
-  border-color:rgba(255,255,255,.08)}
-
-/* 四種擋法四個顏色。混成同一色的話，
-   「一行都沒有」跟「等你決定」看起來像同一件事，
-   而那兩件的下一步完全不同。 */
-.fi.miss .fiTag{background:rgba(255,255,255,.1);color:var(--ink-3)}
-.fi.b-NO_CODE .fiTag{background:rgba(255,69,58,.16);color:#FFB3AE}
-.fi.b-JS_ONLY .fiTag{background:rgba(191,90,242,.18);color:#D9A6FF}
-.fi.b-NO_DATA .fiTag{background:rgba(255,159,10,.16);color:#FFCC80}
-.fi.b-OWNER .fiTag{background:rgba(10,132,255,.18);color:#9BC8FF}
-
-.fiBlock{font-size:11px;line-height:1.5;color:var(--ink-3);margin-top:6px;
-  padding-left:9px;border-left:2px solid rgba(255,255,255,.12)}
-.gi{margin:0 16px 6px;padding:11px 15px;border-radius:var(--r-lg);
-  background:rgba(255,255,255,.05)}
 .gi .n{font-size:12.5px;color:var(--ink-2)}
 .gi .n b{color:var(--ink);font-weight:560}
 .gi .w{display:block;font-size:11px;color:var(--ink-4);margin-top:4px;
   line-height:1.45}
-
-
-/* ── 自我審計 §39 ───────────────────────────────
-   owner 2026-09-14：「你自己審計都不做。」
-
-   一個抓 AI 出錯的工具，第一個要攤開的是自己的錯 ——
-   不然它只是一個對別人嚴格的東西。 */
-.aHead{padding:16px 16px 10px}
-.aBig{font:250 32px/1 var(--display);letter-spacing:-.03em;color:var(--red)}
-.aSub{display:block;font-size:11.5px;color:var(--ink-3);margin-top:8px;
-  line-height:1.5}
-.af{margin:0 16px 8px;padding:13px 15px;border-radius:var(--r-lg);
-  background:var(--surface);border:.5px solid rgba(255,69,58,.35)}
-.afT{font-size:13px;font-weight:590;color:#FF9A94;letter-spacing:-.01em}
-.afD{font-size:11.5px;line-height:1.55;color:var(--ink-2);margin-top:7px}
-.afH{font-size:11px;line-height:1.5;color:var(--ink-3);margin-top:8px;
-  padding-top:8px;border-top:.5px solid var(--hair)}
-.afH b{color:var(--ink-2);font-weight:560}
-
-
-/* ── 讀文件 §40 §41 ───────────────────────────
-   owner 2026-09-14：「讀文件沒有全部讀好並且擅自作主，
-   這也是重大事件，也是標注紅色，一開始就是紅色，
-   後面不可能會出現綠色。」
-
-   所以這裡的紅不是裝飾,是狀態。會亮是因為它要在一堆綠色數字裡
-   被先看到 —— 一個沒人注意到的警告等於沒有警告。 */
-.redHead .aBig{color:var(--red);
-  text-shadow:0 0 18px rgba(255,69,58,.55),0 0 44px rgba(255,69,58,.25)}
-.redHead .aSub{color:#FFB3AE}
-
-.af.crit{border:1px solid rgba(255,69,58,.5);
-  background:linear-gradient(180deg,rgba(255,69,58,.13),rgba(255,69,58,.05));
-  box-shadow:0 0 0 1px rgba(255,69,58,.18),0 0 22px rgba(255,69,58,.22)}
-.af.crit .afT{color:#FF6961}
-
-/* 會發亮的紅。慢呼吸,不是閃爍 —— 閃爍會讓人想關掉它。 */
-.critTag{display:inline-block;font-size:10.5px;letter-spacing:.03em;
-  color:#fff;background:var(--red);padding:2.5px 9px;
-  border-radius:var(--r-pill);margin-bottom:8px;
-  box-shadow:0 0 14px rgba(255,69,58,.7);
-  animation:critGlow 2.6s var(--ease) infinite}
 @keyframes critGlow{
   0%,100%{box-shadow:0 0 10px rgba(255,69,58,.45)}
   50%{box-shadow:0 0 22px rgba(255,69,58,.95)}}
 @media (prefers-reduced-motion:reduce){
   .critTag{animation:none;box-shadow:0 0 14px rgba(255,69,58,.7)}}
-
 
 /* ── 漢堡裡的檢視 §42 ─────────────────────────
    底部那排分頁拿掉之後它們搬到這裡。跟 session 清單同一個入口,
@@ -819,7 +630,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pickViews .vw:hover{background:var(--surface-3);color:var(--ink)}
 .pickViews .vw[aria-pressed="true"]{background:var(--ink);color:var(--bg);
   border-color:transparent;font-weight:510}
-
 
 /* ── 會飄的線 §22.7 ─────────────────────────
    owner 2026-09-14：「線不能只有直線，歪掉飄移的越嚴重，
@@ -845,61 +655,11 @@ button{font:inherit;cursor:pointer;color:inherit}
 
 /* 舊的直條線退場。節點端點的圓還留著，它標的是一輪的起訖。 */
 .gut .v{display:none}
-
-
-/* ── 溫度卡 §17.2 ──────────────────────────
-   一個溫度、一行主要變化、一行已驗證進度。
-   這裡刻意沒有百分比:bible.md Q-03 原文「Temperature =
-   Cognitive/Runtime degradation，而不是 Context fullness」。 */
-/* 容器讓滑鼠穿過去，視窗才推得動；只有真的要被點的子元素接事件。 */
-.vitals{padding:2px 20px 14px;pointer-events:none}
-.vRow{display:flex;align-items:baseline;gap:9px}
-.vTemp{font:250 34px/1 var(--display);letter-spacing:-.03em;
-  font-variant-numeric:tabular-nums;color:var(--ink)}
-.vTemp::after{content:"°C";font-size:15px;margin-left:2px;color:var(--ink-3)}
-.vTemp.watch{color:var(--amber)}
-.vTemp.degraded{color:#FF9F0A}
-.vTemp.critical{color:var(--red);
-  text-shadow:0 0 20px rgba(255,69,58,.5)}
-.vBand{font-size:11px;letter-spacing:.04em;color:var(--ink-3);
-  padding:2px 8px;border-radius:var(--r-pill);background:var(--surface-3)}
-.vWhy{pointer-events:auto;margin-left:auto;font-size:11.5px;border:0;padding:3px 10px;
-  border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-2)}
-.vWhy:hover{background:var(--surface-2);color:var(--ink)}
-.vLine{margin:7px 0 0;font-size:12px;line-height:1.45;color:var(--ink-2)}
-.vLine b{font-weight:510;color:var(--ink);font-variant-numeric:tabular-nums}
-.vLine .unk{color:var(--ink-4)}
-
-/* drill-down 的八個維度。預設收起。 */
-.dims{pointer-events:auto;display:none;margin:12px 0 0;padding:11px 0 2px;
-  border-top:.5px solid var(--hair)}
 .dims.open{display:block}
-.dims li{display:flex;align-items:center;gap:8px;list-style:none;
-  padding:4px 0;font-size:11.5px;color:var(--ink-2)}
-.dims .nm{flex:0 0 68px;color:var(--ink-3)}
-.dims .track{flex:1;height:3px;border-radius:2px;background:var(--surface-3);
-  overflow:hidden}
-.dims .track i{display:block;height:100%;border-radius:2px;
-  background:var(--ink-3)}
-.dims .track i.hot{background:var(--amber)}
 .dims .track i.bad{background:var(--red)}
 .dims .ev{flex:0 0 auto;font-size:10.5px;color:var(--ink-4);
   max-width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dims .none{color:var(--ink-4);font-size:10.5px}
-
-/* [hidden] 只是屬性，display 要自己寫回來。
-   .subs 現在預設收起(Activity 不是進度，不佔第一眼)。 */
-.subs[hidden]{display:none}
-
-
-/* ── 三張卡片 I-04 ──────────────────────────
-   §17.3 預設只顯示單一最高槓桿的事實，其餘 drill-down。
-   所以第一張展開，其他收成一行。 */
-/* 容器讓滑鼠穿過去(視窗要推得動)，卡片本身才接事件。 */
-.cards{padding:0 20px 4px;pointer-events:none}
-.card2{pointer-events:auto;border:.5px solid var(--hair);border-radius:var(--r-lg);
-  background:var(--surface-2);padding:11px 13px 12px;margin-bottom:8px}
-.card2.hot{border-color:rgba(255,149,0,.45)}
 .card2 .t{font-size:13.5px;font-weight:600;letter-spacing:-.01em;
   color:var(--ink);line-height:1.4}
 /* 【內文要有上限】2026-09-17 實測:rehydration 那張卡的內文 1204px，
@@ -915,22 +675,8 @@ button{font:inherit;cursor:pointer;color:inherit}
   background:var(--surface-3);
   max-height:132px;overflow-y:auto;overscroll-behavior:contain}
 .card2 .row{display:flex;gap:7px;margin-top:9px;align-items:center}
-.card2 button{border:0;font-size:11.5px;padding:4px 11px;
-  border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-2)}
-.card2 button.use{background:var(--blue);color:#fff;font-weight:510}
-.card2 button:hover{filter:brightness(1.06)}
-.card2 .five{display:none;margin:9px 0 0;padding-top:9px;
-  border-top:.5px solid var(--hair)}
 .card2 .five.open{display:block}
-.card2 .five li{list-style:none;display:flex;gap:8px;padding:3px 0;
-  font-size:11.5px;color:var(--ink-2);line-height:1.45}
 .card2 .five .k{flex:0 0 74px;color:var(--ink-4)}
-.cards .more{pointer-events:auto;font-size:11.5px;color:var(--ink-3);background:none;border:0;
-  padding:2px 0 6px}
-.cards .more:hover{color:var(--ink)}
-
-.adviceBox[hidden]{display:none}
-
 
 /* ── 需要注意：三層 §12.2 §12.3 ────────────
    第一層按嚴重度分三格(spec-v2.0 §21.1 的 Family C/B/A)，
@@ -955,7 +701,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 .fam li .fpT{flex:1;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap}
 
-
 /* ── 紫框：它可能正在偏離你的目標 §5.4 ─────────
    規格寫紅底白字白框。框壓在線上，不躺在側邊清單裡，
    因為「你看到的位置就是它發生的位置」。
@@ -976,107 +721,29 @@ button{font:inherit;cursor:pointer;color:inherit}
 .driftBox .dNo{background:rgba(255,255,255,.16);color:#fff}
 .driftBox button:hover{filter:brightness(.95)}
 
-
 /* 提早收工。§31
    帳本上有已授權的下一步，而它把發言權交回去等人開口。
    這個顏色刻意跟「工具失敗」分開 —— 失敗是誠實的，這個不是。 */
 .starve.premature{color:#FFC061;background:rgba(255,159,10,.2)}
-
-/* 目標錨點閘門。跟八維度一起展開，但自成一塊。§28.6 */
-/* 可靠度曲線。§16.1。跟八維度共用同一個 open 開關。 */
-.hcurve{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .hcurve{display:block}
-.hcurve .hd{margin:0 0 5px;color:var(--ink-2)}
 .hcurve .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .hcurve .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-.hcSvg{display:block;width:100%;height:62px}
-.hcFoot{margin:5px 0 0;color:var(--ink-3);font-size:10.5px;line-height:1.5}
-.hcFoot b{color:var(--ink-2);font-weight:590}
 .hcFoot.dim{color:var(--ink-4)}
-/* Blast Radius §16.1。跟八維度共用同一個 open 開關,不長出第二套狀態。 */
-.blast{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .blast{display:block}
-.blast .hd{margin:0 0 5px;color:var(--ink-2)}
 .blast .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .blast .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-.blRow{display:flex;align-items:baseline;gap:8px;padding:1.5px 0}
-.blF{flex:1 1 auto;color:var(--ink-2);overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.blN{flex:0 0 34px;text-align:right;color:var(--ink-2);
-  font-variant-numeric:tabular-nums}
-.blN.blDim{color:var(--ink-4)}
-.blHead{color:var(--ink-4);font-size:10px;padding-bottom:3px;
-  border-bottom:.5px solid var(--hair);margin-bottom:2px}
-.blHead .blF,.blHead .blN{color:var(--ink-4)}
-.blNote{margin:5px 0 0;color:var(--ink-4);font-size:10.5px;line-height:1.5}
-/* 「這是快取不是剛算的」。刻意不做成警告色 —— 它不是錯誤,
-   是一個要看得到的事實。做成紅的會讓人以為有東西壞了。 */
-.blast .hd .blStale{margin-left:6px;padding:0 5px;border-radius:3px;
-  background:var(--surface-3);color:var(--ink-3);font-size:9.5px;
-  font-weight:400;vertical-align:middle}
 .blNote.bad{color:var(--red)}
 /* 「快取寫不進去」。這一個跟上面那個 .blStale 相反,它是壞掉的東西,
    所以用警告色。壞的是速度不是答案,所以只有字變色,不加背景。 */
 .blast .hd .blStale.bad{color:var(--red)}
-/* 盲點清單。等寬字體,因為它們是「檔名:行號」,
-   要能一眼對齊比對,而且是拿去貼進編輯器的東西。 */
-/* 高度是行高的整數倍(15.5px 乘 8)。第一版用 132px,
-   捲動區最後一行被裁成上半截 —— 半行讀起來像畫面壞了,
-   而不是像「下面還有」。 */
-.blindSpots{margin:3px 0 0;padding:0 6px 0 2px;list-style:none;
-  max-height:124px;overflow-y:auto}
-/* 窄面板(約 227px)塞不下一整行,所以會折。
-   **第一版用 text-indent 做 hanging indent,結果把 .py / JS 那個
-   半邊標示拉到容器外,被 overflow 裁掉 —— DOM 裡有,畫面上沒有。**
-   實測截圖才看到的。改成 flex:標示固定不縮,路徑自己折,
-   折出來的行天然對齊在標示右邊。 */
-.blindSpots li{color:var(--ink-3);font-size:10px;line-height:1.55;
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
-  display:flex;gap:4px;align-items:baseline}
-.blindSpots .bsHalf{flex:0 0 auto;min-width:20px;color:var(--ink-4)}
-.blindSpots .bsWhere{flex:1 1 auto;min-width:0;overflow-wrap:anywhere}
-.blindSpots .bsLine{color:var(--ink-4)}
-.blindSpots .bsCall{color:var(--ink-4);font-size:9.5px}
-/* 可點的那幾行。點開看是哪些檔依賴它,不只是幾個。 */
-.blHit{cursor:pointer;border-radius:3px;margin:0 -4px;padding:1.5px 4px}
-.blHit:hover{background:var(--hair)}
-.blHit:focus-visible{outline:1px solid var(--ink-4);outline-offset:-1px}
-.blHit.on{background:var(--hair)}
-.blHit.on .blF{color:var(--ink)}
-.blDetail{margin:6px 0 0;padding:6px 0 2px;border-top:.5px dashed var(--hair)}
-.blDetail .hd2{margin:0 0 4px;color:var(--ink-2);font-size:10.5px;
-  font-variant-numeric:tabular-nums}
-.blChips{display:flex;flex-wrap:wrap;gap:3px;margin:2px 0 0}
-.blChip{display:inline-block;padding:0 5px;border-radius:8px;font-size:10px;
-  line-height:16px;background:var(--hair);color:var(--ink-3)}
-.blChip.d1{color:var(--ink-2)}
-.blChip.d2{color:var(--ink-4)}
 .blChips .none{color:var(--ink-4);font-size:10.5px}
-.blFind{margin:5px 0 0}
-.blQ{width:100%;box-sizing:border-box;padding:3px 6px;
-  border:.5px solid var(--hair);border-radius:3px;background:transparent;
-  color:var(--ink-2);font:inherit;font-size:10.5px}
-.blQ::placeholder{color:var(--ink-4)}
-.blQ:focus{outline:none;border-color:var(--ink-4)}
-.blHits{margin:3px 0 0}
-.blHits .blF{font-size:10.5px}
-
-.gate{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 2px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .gate{display:block}
-.gate .hd{margin:0;color:var(--ink-2)}
-.gate .hd b{color:var(--ink)}
 .gate .hd .bad{color:var(--red)}
 .gate .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .gate .tag{margin-left:8px;padding:1px 5px;border-radius:4px;
   background:var(--surface-3);color:var(--ink-4);font-size:10px}
 .gate .sub{margin:3px 0 0;color:var(--ink-3);font-size:10.5px}
 .gate .sub b{color:var(--ink-2)}
-.gate .hd2{margin:7px 0 2px;color:var(--ink-2)}
-.gate ul{margin:0;padding-left:14px}
-.gate li{color:var(--ink-3);font-size:10.5px;margin:2px 0}
 
 /* 建議那條路。基準線安靜、不搶戲，它的作用是讓實際那條線的偏離看得出來。 */
 .drift .baseline{fill:none;stroke:var(--ink-4);stroke-width:1;
@@ -1140,38 +807,12 @@ button{font:inherit;cursor:pointer;color:inherit}
 
 .drift text{fill:var(--ink-4);font:500 9.5px/1 var(--sans)}
 .drift text.back{fill:var(--green)}
-
-/* ── 在做什麼 ────────────────────────────────────
-   一張卡一件任務。狀態、目的、兩個指標、下一步、事件流。
-   指標只有兩個是刻意的:F06 §5 就只有兩個,多加的都是我發明的。 */
-.wk{margin:10px 14px 0;padding:13px 14px 12px;border-radius:var(--r-lg);
-  background:var(--surface-2)}
-.wkTop{display:flex;align-items:center;gap:8px}
 .wk .st{padding:1.5px 8px;border-radius:var(--r-pill);background:var(--surface-3);
   color:var(--ink-2);font:600 10px/1.6 var(--sans);letter-spacing:.04em}
 .wk .id{color:var(--ink-4);font:400 10px/1.6 var(--mono)}
-.wk .obj{margin:8px 0 0;color:var(--ink);font:500 13px/1.45 var(--sans)}
-
-.wk .mets{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
-.wk .met{padding:2px 8px;border-radius:var(--r-sm);background:var(--surface-3);
-  color:var(--ink-3);font:400 10.5px/1.6 var(--sans);
-  font-variant-numeric:tabular-nums}
-.wk .met b{color:var(--ink-2);font-weight:600}
 /* 自動接續率低、或她被迫說太多次繼續,那兩個數字要自己跳出來。 */
 .wk .met.bad{background:rgba(255,69,58,.14)}
 .wk .met.bad b{color:var(--red)}
-
-.wk .nx{margin:10px 0 0;padding-top:9px;border-top:.5px solid var(--hair);
-  color:var(--ink-3);font:400 11.5px/1.5 var(--sans)}
-.wk .nx b{color:var(--ink)}
-/* 派不動要說出原因。安靜的沒反應正是這整套東西要消滅的東西。 */
-.wk .nx.stuck{color:var(--amber)}
-/* 做完等收尾不是警示，是一件在等人按的事 */
-.wk .nx.fin{color:var(--green)}
-
-.wk .evs{list-style:none;margin:9px 0 0;padding:0}
-.wk .evs li{display:flex;align-items:baseline;gap:8px;padding:3px 0;
-  border-top:.5px solid var(--hair-2)}
 .wk .evs .k{flex:0 0 96px;color:var(--ink-4);font:500 9.5px/1.6 var(--mono);
   letter-spacing:.02em}
 .wk .evs .c{flex:1;min-width:0;color:var(--ink-3);font:400 11px/1.45 var(--sans);
@@ -1198,15 +839,6 @@ button{font:inherit;cursor:pointer;color:inherit}
 /* 動作按鈕。會改帳本的東西，樣式要克制但按得到。 */
 .wk .acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;
   margin-top:10px;padding-top:9px;border-top:.5px solid var(--hair)}
-.wk .ac{padding:3px 10px;border:0;border-radius:var(--r-pill);
-  background:var(--surface-3);color:var(--ink-2);
-  font:500 11px/1.5 var(--sans);cursor:pointer;
-  transition:background .16s var(--ease),color .16s var(--ease)}
-.wk .ac:hover{background:var(--blue);color:#fff}
-/* 等第二次確認的狀態。顏色換掉，不然按鈕看起來沒差別。 */
-.wk .ac.armed{background:var(--amber);color:#1C1C1E}
-.wk .ac:disabled{opacity:.5;cursor:default}
-.wk .acOut{flex:1 1 100%;color:var(--ink-3);font:400 10.5px/1.5 var(--sans)}
 .wk .acOut.good{color:var(--green)}
 .wk .acOut.bad{color:var(--amber)}
 
@@ -1328,212 +960,19 @@ button{font:inherit;cursor:pointer;color:inherit}
   padding:3px 10px;background:var(--surface-3);color:var(--ink);cursor:pointer}
 .rGo[hidden]{display:none}
 .rHist{font-size:11px;color:var(--ink-3)}
-
-/* §40 污染登記簿。跟 .blast / .gate 一樣掛在八維度那個展開開關底下。
-   狀態色刻意只用兩級:還沒收的用一般文字色,收乾淨的才變淡。
-   把還沒收的塗紅會讓四筆全紅,而全紅跟全灰一樣不可行動。 */
-.pollution{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .pollution{display:block}
-.pollution .hd{margin:0 0 5px;color:var(--ink-2)}
 .pollution .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .pollution .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-/* 筆數多的時候不讓它把整個面板推爆,捲動高度取行高整數倍 ——
-   半行讀起來像畫面壞了,不像「下面還有」(5c 那次的教訓)。 */
-.plList{position:relative;max-height:248px;overflow:auto;margin:3px 0 0;
-  padding-right:8px}
-/* 捲得動的時候底部收一層漸層。被切一半的那一行讀起來就變成
-   「下面還有」，而不是「這一格壞了」。只有量到超出才加這個 class。 */
-.plList.cut{-webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),
-  transparent 100%);mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),
-  transparent 100%)}
-.plMore{margin:2px 0 0;color:var(--ink-4);font-size:10px}
-.plRow{padding:5px 0;border-top:.5px dashed var(--hair)}
-.plRow:first-child{border-top:none;padding-top:0}
-.plHead{display:flex;align-items:baseline;gap:6px;margin:0 0 3px}
-.plSt{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:10px;
-  background:var(--surface-3);color:var(--ink-2)}
-.plSt.RESOLVED{color:var(--ink-4)}
-.plGuard{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:10px;
-  background:var(--surface-3);color:var(--ink-3)}
 .plGuard.off{color:var(--ink-4)}
-.plId{flex:1 1 auto;min-width:0;padding-right:2px;text-align:right;
-  color:var(--ink-4);font-size:10px;overflow:hidden;
-  text-overflow:ellipsis;white-space:nowrap}
-.plOld{margin:0;color:var(--ink-4);font-size:10.5px;
-  text-decoration:line-through;overflow-wrap:anywhere}
-.plNew{margin:2px 0 0;color:var(--ink-2);font-size:10.5px;
-  overflow-wrap:anywhere}
-/* 機制那一行是這一格存在的理由,所以它不比更正那一行淡。 */
-.plWhy{margin:3px 0 0;color:var(--ink-3);font-size:10.5px;
-  overflow-wrap:anywhere}
-.plNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-/* 只靠人記得的那幾筆。**跟其他說明文字不能長得一樣** ——
-   §40.2 要的是偵測器，而這幾筆現在什麼都沒有攔著。
-   它跟旁邊那句「攔著的筆數」是同一個分母的兩半，
-   長成同一種灰色的話，風險那一半會消失在說明文字裡。 */
-.plRisk{color:var(--amber)}
-.plSrcs{display:flex;flex-wrap:wrap;gap:3px;margin:3px 0 0;
-  color:var(--ink-4);font-size:10px}
-.plSrc{display:inline-block;padding:0 5px;border-radius:8px;
-  background:var(--surface-3);color:var(--ink-4);font-size:9.5px;
-  overflow-wrap:anywhere}
-
-/* §12.2 來源優先序。跟八維度共用同一個展開開關,不長第二套狀態。 */
-.sot{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .sot{display:block}
-.sot .hd{margin:0 0 5px;color:var(--ink-2)}
 .sot .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .sot .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-.sotList{position:relative;max-height:248px;overflow:auto;margin:3px 0 0;
-  padding-right:8px}
-.sotList.cut{-webkit-mask-image:linear-gradient(to bottom,
-  #000 calc(100% - 22px),transparent 100%);
-  mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent 100%)}
-.sotMore{margin:2px 0 0;color:var(--ink-4);font-size:10px}
-.sotRow{padding:5px 0;border-top:.5px dashed var(--hair)}
-.sotRow:first-child{border-top:none;padding-top:0}
-.sotHead{display:flex;align-items:baseline;gap:6px;margin:0 0 3px}
-.sotSt{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:10px;
-  background:var(--surface-3);color:var(--ink-2)}
-/* 不適用不是欠工,所以它淡;沒有來源是欠工,所以它不淡。 */
-.sotSt.NOT_APPLICABLE{color:var(--ink-4)}
-.sotSt.NO_SOURCE{color:var(--ink-2)}
-.sotTy{flex:1 1 auto;min-width:0;color:var(--ink-3);font-size:10.5px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sotPref{margin:0;color:var(--ink-2);font-size:10.5px;overflow-wrap:anywhere}
-.sotNos{display:flex;flex-wrap:wrap;gap:3px;margin:3px 0 0;
-  color:var(--ink-4);font-size:10px}
-.sotNo{display:inline-block;padding:0 5px;border-radius:8px;
-  background:var(--surface-3);color:var(--ink-4);font-size:9.5px;
-  overflow-wrap:anywhere}
-.sotUse{margin:3px 0 0;color:var(--ink-3);font-size:10.5px;
-  overflow-wrap:anywhere}
-/* 量出來的那一行不淡 —— 它是七行裡唯一有即時證據的。 */
-.sotLive{margin:3px 0 0;color:var(--ink-2);font-size:10.5px;
-  overflow-wrap:anywhere}
-.sotLive.no{color:var(--ink-2)}
-.sotStale{margin:3px 0 0;color:var(--ink-2);font-size:10.5px;
-  overflow-wrap:anywhere}
-.sotNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-
-/* §11.1 持久身份。跟八維度共用同一個展開開關,不長第二套狀態。 */
-.idn{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .idn{display:block}
-.idn .hd{margin:0 0 5px;color:var(--ink-2)}
 .idn .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .idn .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-.idnList{position:relative;max-height:248px;overflow:auto;margin:3px 0 0;
-  padding-right:8px}
-.idnList.cut{-webkit-mask-image:linear-gradient(to bottom,
-  #000 calc(100% - 22px),transparent 100%);
-  mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent 100%)}
-.idnMore{margin:2px 0 0;color:var(--ink-4);font-size:10px}
-.idnRow{padding:5px 0;border-top:.5px dashed var(--hair)}
-.idnRow:first-child{border-top:none;padding-top:0}
-.idnHead{display:flex;align-items:baseline;gap:6px;margin:0 0 3px}
-.idnSt{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:10px;
-  background:var(--surface-3);color:var(--ink-2)}
-/* 沒有來源是欠工,所以它不淡。跟 .sotSt.NO_SOURCE 同一條理由。 */
-.idnSt.NO_SOURCE{color:var(--ink-2)}
-.idnSt.CONFLATED{color:var(--ink-2)}
-.idnTy{flex:1 1 auto;min-width:0;color:var(--ink-3);font-size:10.5px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.idnQ{margin:0;color:var(--ink-3);font-size:10.5px;overflow-wrap:anywhere}
-.idnLive{margin:3px 0 0;color:var(--ink-2);font-size:10.5px;
-  overflow-wrap:anywhere}
-.idnEv{margin:3px 0 0;color:var(--ink-2);font-size:10.5px;line-height:1.5;
-  overflow-wrap:anywhere}
-.idnStale{margin:3px 0 0;color:var(--ink-2);font-size:10.5px;
-  overflow-wrap:anywhere}
-.idnNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-/* 「這幾條是上一次量的」。跟 .blStale 同一條理由,刻意不做成警告色
-   —— 它不是錯誤,是一個要看得到的事實。做成紅的會讓人以為壞了。 */
-.idnCache{margin:3px 0 0;color:var(--ink-3);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-
-/* §5 / §17.1 Workflow。跟 .idn 同一組樣式語彙,共用 .dims.open 這一個
-   展開開關 —— 不要再長出第二套狀態。 */
-.wfl{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .wfl{display:block}
-.wfl .hd{margin:0 0 5px;color:var(--ink-2)}
 .wfl .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .wfl .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-.wflList{position:relative;max-height:248px;overflow:auto;margin:3px 0 0;
-  padding-right:8px}
-.wflList.cut{-webkit-mask-image:linear-gradient(to bottom,
-  #000 calc(100% - 22px),transparent 100%);
-  mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent 100%)}
-.wflMore{margin:2px 0 0;color:var(--ink-4);font-size:10px}
-.wflRow{padding:5px 0;border-top:.5px dashed var(--hair)}
-.wflRow:first-child{border-top:none;padding-top:0}
-.wflHead{display:flex;align-items:baseline;gap:6px;margin:0 0 3px}
-.wflSt{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:10px;
-  background:var(--surface-3);color:var(--ink-2)}
-.wflId{flex:1 1 auto;min-width:0;color:var(--ink-3);font-size:10.5px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wflObj{margin:0;color:var(--ink-3);font-size:10.5px;overflow-wrap:anywhere}
-.wflCnt{margin:3px 0 0;color:var(--ink-2);font-size:10.5px}
-.wflReady{margin:3px 0 0;color:var(--ink-2);font-size:10.5px;
-  overflow-wrap:anywhere}
-.wflBlocked{margin:3px 0 0;color:var(--ink-3);font-size:10.5px;
-  overflow-wrap:anywhere}
-/* 資料壞了不是在等人,所以這一行不淡。 */
-.wflBad{margin:3px 0 0;color:var(--amber);font-size:10.5px;
-  overflow-wrap:anywhere}
-.wflBd{margin:3px 0 0;color:var(--ink-3);font-size:10.5px}
-/* 沒有人登記過是欠工,不是好消息,所以它不淡。
-   跟 .idnSt.NO_SOURCE / .sotSt.NO_SOURCE 同一條理由。 */
-.wflBd.UNDECLARED{color:var(--ink-2)}
-.wflMiss{margin:3px 0 0;color:var(--ink-2);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere;display:flex;gap:5px;align-items:baseline}
-.wflMs{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:9.5px;
-  background:var(--surface-3);color:var(--ink-2)}
-.wflNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-
-/* §15 Probe Packs。跟 .wfl / .idn 同一組樣式語彙,共用 .dims.open
-   這一個展開開關 —— 不要再長出第二套狀態。 */
-.prb{display:none;pointer-events:auto;margin:2px 0 0;padding:9px 0 4px;
-  border-top:.5px solid var(--hair);font-size:11px;line-height:1.5}
 .dims.open ~ .prb{display:block}
-.prb .hd{margin:0 0 5px;color:var(--ink-2)}
 .prb .hd .sub{margin-left:8px;color:var(--ink-4);font-size:10.5px}
 .prb .hd .none{margin-left:8px;color:var(--ink-4);font-size:10.5px}
-.prbList{position:relative;max-height:248px;overflow:auto;margin:3px 0 0;
-  padding-right:8px}
-.prbList.cut{-webkit-mask-image:linear-gradient(to bottom,
-  #000 calc(100% - 22px),transparent 100%);
-  mask-image:linear-gradient(to bottom,#000 calc(100% - 22px),transparent 100%)}
-.prbMore{margin:2px 0 0;color:var(--ink-4);font-size:10px}
-.prbRow{padding:5px 0;border-top:.5px dashed var(--hair)}
-.prbRow:first-child{border-top:none;padding-top:0}
-.prbHead{display:flex;align-items:baseline;gap:6px;margin:0 0 3px}
-.prbSt{flex:0 0 auto;padding:0 5px;border-radius:8px;font-size:10px;
-  background:var(--surface-3);color:var(--ink-2)}
-/* 退化是紅字,那是這一格唯一要人立刻看的事。 */
-.prbSt.REGRESSED{color:var(--red)}
-/* 沒有基準線可比不是通過,所以它不綠。 */
-.prbSt.NEW{color:var(--amber)}
-/* **沒有東西可量不准跟通過長一樣。** 這一格的整個意義就在這條。 */
-.prbSt.NO_VERIFIER{color:var(--ink-4)}
-.prbId{flex:1 1 auto;min-width:0;color:var(--ink-3);font-size:10.5px;
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.prbDm{flex:0 0 auto;color:var(--ink-4);font-size:9.5px}
-.prbWhy{margin:0;color:var(--ink-3);font-size:10.5px;overflow-wrap:anywhere}
-.prbChg{margin:3px 0 0;color:var(--red);font-size:10.5px;
-  overflow-wrap:anywhere}
-/* 沒有東西可量那一段是事實不是錯誤,所以不用警告色,但也不淡到看不見。 */
-.prbNv{margin:3px 0 0;color:var(--ink-3);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-/* 沒有基準線、十類沒蓋滿,這兩件會讓上面那個通過率失去意義。 */
-.prbWarn{margin:3px 0 0;color:var(--amber);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
-.prbNote{margin:3px 0 0;color:var(--ink-4);font-size:10px;line-height:1.5;
-  overflow-wrap:anywhere}
