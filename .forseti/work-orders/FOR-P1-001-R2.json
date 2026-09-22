@@ -1,0 +1,31 @@
+{
+  "task_id": "FOR-P1-001-R2",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "kind": "stalled_receipt_recovery",
+  "goal": "Replace the contradictory P1 delivery receipt reconciliation with one auditable path-by-path record after the R1 retry ended without an artifact.",
+  "allowed_paths": [
+    ".forseti/work-orders/FOR-P1-001.delivery-receipt.json"
+  ],
+  "forbidden_paths": [
+    "apps/**",
+    "desktop/**",
+    "tools/**",
+    "tests/**",
+    "docs/**",
+    ".forseti/commander-state.json"
+  ],
+  "dependencies": ["FOR-P1-001-R1"],
+  "acceptance": [
+    "The receipt has a complete path-by-path table for ledger.py, recovery_contract.py, test_f05.py, test_f07.py, test_recovery_contract.py, and test_task_continue.py.",
+    "Each table row exactly matches the current git status category: modified, untracked, clean, or UNKNOWN; it must not claim an untracked path is unobserved.",
+    "Each row is explicitly classified as P1 work, pre-existing dirty change, or UNKNOWN provenance; UNKNOWN is acceptable and preferable to invention.",
+    "No file other than the delivery receipt is modified, and state remains SUBMITTED."
+  ],
+  "required_evidence": [
+    "exact git status --short command and output recorded in receipt",
+    "path-by-path reconciliation",
+    "amended_delivery_receipt"
+  ],
+  "done_definition": "SUBMITTED only; independent verifier decides P1 status.",
+  "timebox_minutes": 10
+}
