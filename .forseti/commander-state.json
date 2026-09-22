@@ -1,0 +1,16 @@
+{
+  "contract_version": "forseti-recovery-dag-0.1",
+  "north_star": "A Forseti repair must preserve computer usability and provide verifiable execution continuity; a green test suite or a prose report is not delivery.",
+  "ui_safety_lock": {
+    "state": "ACTIVE",
+    "reason": "Forseti.app caused a severe macOS stall. No worker may launch, deploy, drive, or accessibility-test the desktop app until FOR-P0-001 is independently verified.",
+    "evidence": ["PID 38762 entered uninterruptible U state after the reported stall"]
+  },
+  "concurrency_limit": 1,
+  "tasks": [
+    {"id": "FOR-P0-001", "state": "STALLED", "depends_on": [], "owner": "Commander recovery", "work_order": ".forseti/work-orders/FOR-P0-001.json", "stall_evidence": "The assigned Codex task is idle; its latest turn is interrupted and has produced no new tool output or Delivery Receipt."},
+    {"id": "FOR-P1-001", "state": "BLOCKED", "depends_on": ["FOR-P0-001"], "owner": null, "work_order": ".forseti/work-orders/FOR-P1-001.json"},
+    {"id": "FOR-P1-002", "state": "BLOCKED", "depends_on": ["FOR-P0-001", "FOR-P1-001"], "owner": null, "work_order": ".forseti/work-orders/FOR-P1-002.json"},
+    {"id": "FOR-P2-001", "state": "BLOCKED", "depends_on": ["FOR-P1-002"], "owner": null, "work_order": ".forseti/work-orders/FOR-P2-001.json"}
+  ]
+}

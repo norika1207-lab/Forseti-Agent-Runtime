@@ -1,0 +1,17 @@
+{
+  "task_id": "FOR-P2-001",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "goal": "Prove the repaired continuity path and desktop interaction contract as one integration slice.",
+  "allowed_paths": ["apps/forseti-cli/**", "desktop/**", "tools/**", "tests/**", "test/**", "docs/**"],
+  "forbidden_paths": [".forseti/commander-state.json"],
+  "dependencies": ["FOR-P1-002"],
+  "acceptance": [
+    "A valid long-running task remains untouched.",
+    "A real inactive authorized task yields one recoverable delivery packet.",
+    "Receipt-only blank output preserves the result and requests synthesis.",
+    "UI evidence is required for a UI-complete claim; otherwise the task remains unverified."
+  ],
+  "required_evidence": ["integration_test_report", "independent_verification_receipt", "ui_evidence_or_explicit_unverified_status"],
+  "done_definition": "VERIFIED_COMPLETE requires an independent verifier and a deliberately approved UI-safety test plan.",
+  "timebox_minutes": 120
+}

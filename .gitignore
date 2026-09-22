@@ -35,6 +35,12 @@ node_modules/
 !.forseti/PRODUCT_DIRECTION.md
 # Widget 設計規格。owner 2026-09-13 到 09-14 口述的設計意圖正本。
 !.forseti/WIDGET_SPEC.md
+# Commander state and Work Orders are collaboration contracts, not runtime
+# telemetry. They must travel with the repository so a replacement session can
+# reconstruct the DAG without relying on chat history.
+!.forseti/commander-state.json
+!.forseti/work-orders/
+!.forseti/work-orders/*.json
 ._*
 .DS_Store
 

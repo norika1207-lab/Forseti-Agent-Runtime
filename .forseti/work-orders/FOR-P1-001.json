@@ -1,0 +1,17 @@
+{
+  "task_id": "FOR-P1-001",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "goal": "Make the durable continuation decision safe and independently testable.",
+  "allowed_paths": ["apps/forseti-cli/ledger.py", "apps/forseti-cli/recovery_contract.py", "apps/forseti-cli/forseti.py", "tests/test_f05.py", "tests/test_f07.py", "tests/test_task_continue.py", "tests/test_recovery_contract.py"],
+  "forbidden_paths": ["desktop/**", "tools/codex-desktop-controller.sh", ".forseti/commander-state.json"],
+  "dependencies": ["FOR-P0-001"],
+  "acceptance": [
+    "An active command or write is never interrupted, including when an earlier ResultReceipt exists.",
+    "Blank output with durable receipts requests synthesis only and never reruns completed work.",
+    "A genuinely inactive authorized step emits exactly one idempotent original-input delivery request.",
+    "The delivery packet can be read from durable state; it is not reconstructed from chat prose."
+  ],
+  "required_evidence": ["focused_regression_tests", "changed_files", "delivery_receipt"],
+  "done_definition": "SUBMITTED only; verifier reruns all focused F05/F07/continuation tests.",
+  "timebox_minutes": 90
+}

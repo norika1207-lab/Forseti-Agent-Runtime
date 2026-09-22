@@ -1,0 +1,18 @@
+{
+  "task_id": "FOR-P0-001",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "goal": "Contain and locate the Forseti desktop freeze without interacting with the desktop app.",
+  "allowed_paths": ["desktop/src-tauri/src/main.rs", "desktop/ui/app.js", "desktop/ui/app.css", "desktop/package.json", "tests/**", "test/**", "tools/ui-*.py"],
+  "forbidden_paths": ["apps/forseti-cli/**", "tools/codex-desktop-controller.sh", ".forseti/commander-state.json"],
+  "prohibited_actions": ["launch Forseti.app", "run deploy scripts", "use Accessibility or osascript", "open or drive the desktop UI"],
+  "acceptance": [
+    "Identify the concrete source path that can produce event amplification, synchronous UI blocking, or hover-triggered recomputation; do not infer a root cause from process liveness.",
+    "Patch only an evidenced cause and add an offline regression test or static contract test.",
+    "Run the targeted test and git diff --check without launching the desktop app.",
+    "Write a Delivery Receipt containing changed files, test output, remaining unknowns, and why no live UI claim is made."
+  ],
+  "required_evidence": ["changed_files", "test_report", "diff_check", "delivery_receipt"],
+  "done_definition": "SUBMITTED only; an independent verifier must pass the acceptance criteria before VERIFIED_COMPLETE.",
+  "on_stall": "Persist the exact command, observed evidence, blocker, and next action. Do not broaden into continuity, controller, or product UI work.",
+  "timebox_minutes": 90
+}

@@ -1,0 +1,29 @@
+{
+  "task_id": "FOR-P0-001",
+  "state": "SUBMITTED",
+  "changed_files": [
+    "desktop/ui/app.js",
+    "tests/test_hover_event_guard.py"
+  ],
+  "evidence": {
+    "root_cause": {
+      "file": "desktop/ui/app.js",
+      "path": "document mouseover delegation around tooltip rendering",
+      "observed": "Each mouseover rebuilt tooltip HTML, scanned sibling dots, and called getComputedStyle; pointer movement within one dot could amplify event/render work."
+    },
+    "patch": "Changed tooltip delegation to pointerover/pointerout and added same-dot identity suppression before DOM rebuild."
+  },
+  "test_report": {
+    "command": "python3 -m pytest -q tests/test_hover_event_guard.py tests/test_ui_contract.py tests/test_poll_overlap.py",
+    "result": "95 passed"
+  },
+  "diff_check": {
+    "command": "git diff --check",
+    "result": "passed"
+  },
+  "remaining_unknowns": [
+    "The exact contribution of synchronous Python API subprocess latency and WKWebView compositor behavior is not isolated by this static-only work order.",
+    "No live AX/Tauri/UI test was run because commander-state.json ui_safety_lock is ACTIVE."
+  ],
+  "verification_boundary": "SUBMITTED only; independent verifier must evaluate acceptance criteria before VERIFIED_COMPLETE."
+}

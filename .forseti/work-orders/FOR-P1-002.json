@@ -1,0 +1,18 @@
+{
+  "task_id": "FOR-P1-002",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "goal": "Implement the host delivery adapter without unsafe foreground-window fallbacks.",
+  "allowed_paths": ["tools/codex-desktop-controller.sh", "tools/**continuation**", "tests/**controller**", "tests/**continuation**", "docs/**continuation**"],
+  "forbidden_paths": ["desktop/**", "apps/forseti-cli/ledger.py", ".forseti/commander-state.json"],
+  "dependencies": ["FOR-P0-001", "FOR-P1-001"],
+  "acceptance": [
+    "No timer is the normal continuation engine.",
+    "No fallback may send to a frontmost or merely visible window.",
+    "Delivery accepts only a durable, idempotent original-action packet for an exact target.",
+    "Missing target identity, permission, active work signal, or authorization must fail closed.",
+    "No real desktop interaction is claimed verified until the UI-safety lock is explicitly lifted."
+  ],
+  "required_evidence": ["offline_adapter_tests", "static_safety_checks", "delivery_receipt"],
+  "done_definition": "SUBMITTED only; verifier confirms all fail-closed paths.",
+  "timebox_minutes": 90
+}
