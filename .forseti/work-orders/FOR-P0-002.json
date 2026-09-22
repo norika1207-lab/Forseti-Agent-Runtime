@@ -1,0 +1,55 @@
+{
+  "task_id": "FOR-P0-002",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "kind": "offline_desktop_refresh_isolation",
+  "goal": "Replace the desktop UI's unconditional two-second Python strands polling with the existing Rust .forseti file-change event while preserving initial load, coalescing, visible slow-read state, and offline testability.",
+  "specs_read_full": [
+    "ARCH-EXEC-001",
+    "F01-PEC-001",
+    "F02-TSM-001",
+    "F04-EVT-001",
+    "F05-WDG-001",
+    "F07-OUT-001"
+  ],
+  "allowed_paths": [
+    "desktop/ui/app.js",
+    "tools/ui-harness.py",
+    "tools/ui-render-check.py",
+    "tests/test_poll_overlap.py",
+    "tests/test_ui_contract.py",
+    "tests/test_ui_render.py",
+    ".forseti/work-orders/FOR-P0-002.delivery-receipt.json"
+  ],
+  "forbidden_paths": [
+    "desktop/src-tauri/**",
+    "apps/**",
+    "hooks/**",
+    ".forseti/commander-state.json",
+    "docs/COMMANDER_STATUS.md"
+  ],
+  "prohibited_actions": [
+    "launch Forseti.app",
+    "run deploy scripts",
+    "run Tauri build or desktop integration tests",
+    "use Accessibility, AX, osascript, cliclick, foreground-window automation, mouse, or keyboard automation"
+  ],
+  "acceptance": [
+    "The product UI subscribes to window.__TAURI__.event.listen for forseti://changed before requesting its initial refresh.",
+    "The product UI contains no setInterval(tick, ...) or setInterval(loadFoundation, ...) loop.",
+    "Same-turn event bursts coalesce, and events arriving during an in-flight refresh cause at most one trailing refresh rather than being lost or spawning overlap.",
+    "Repository-change refresh invalidates backend-derived view caches and refreshes the foundation state without moving decision logic into Rust or JavaScript.",
+    "A slow Python read becomes visibly observable through a one-shot timer, and the timer is cleared on completion or failure.",
+    "The offline harness can emit deterministic synthetic forseti://changed events, and focused static/render contracts are updated to test event-driven behavior rather than product polling.",
+    "No Forseti.app, Tauri build, deployment, AX, Accessibility, mouse, keyboard, foreground-window, or live UI action occurs."
+  ],
+  "required_evidence": [
+    "focused_offline_tests",
+    "product_source_static_scan",
+    "scoped_git_diff_check",
+    "no_prohibited_process",
+    "delivery_receipt"
+  ],
+  "done_definition": "SUBMITTED only; an independent verifier must rerun the offline checks before VERIFIED_COMPLETE. This task never unlocks or authorizes FOR-P2-001.",
+  "recovery_key": "FOR-P0-002:event-refresh-20260922T2115+0800",
+  "timebox_minutes": 90
+}

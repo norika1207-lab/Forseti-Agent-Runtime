@@ -1,6 +1,6 @@
 # Forseti 即時施工狀態
 
-最後依證據更新：2026-09-22 19:13 Asia/Taipei
+最後依證據更新：2026-09-22 21:15 Asia/Taipei
 
 這一頁是 Commander 的 Git 可追蹤狀態，不是 Worker 自述。每次狀態變更都必須能對應到 Git diff、測試輸出、Delivery Receipt 或明確的阻塞證據。
 
@@ -15,6 +15,7 @@
 | 工作項 | 狀態 | 可做範圍 | 目前證據／阻塞 |
 | --- | --- | --- | --- |
 | `FOR-P0-001` 桌面卡死隔離與定位 | `VERIFIED_COMPLETE`（限縮範圍） | 僅靜態診斷與離線測試；禁止 UI 操作 | tooltip hover 的事件放大已改用 pointer event 並對相同 dot 去重。獨立離線驗證 `95 passed`，commit `5e78264`。此 Gate 只驗證該 hover 修補；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
+| `FOR-P0-002` 事件驅動刷新隔離 | `RUNNING`（離線） | `app.js`、離線 harness 與對應測試 | Rust 已有 debounce 後的 `forseti://changed` 事件，但前端未訂閱且每 2 秒啟動高成本 `strands`。正在 NewDrive 隔離分支改成首次載入一次、事件刷新、in-flight 合併；禁止 app launch、deploy、Tauri build、AX 與 UI 操作。 |
 | `FOR-P1-001` 持久續作契約 | `VERIFIED_COMPLETE`（限縮範圍） | Ledger / recovery contract / focused tests | Commander 獨立重跑 F05/F07/continuation/recovery suite，結果 `55 passed`；scoped diff check 與 Python compile 也通過。R2 收據逐檔如實標示 Git 狀態，作者 provenance 保留 `UNKNOWN`，不以猜測取代證據。此 Gate 只驗證持久續作政策，未驗證 host transport、桌面或部署。 |
 | `FOR-P1-002` Host delivery adapter | `VERIFIED_COMPLETE`（限縮範圍） | 精確目標、原始指令封包、fail-closed | Commander 獨立重跑 controller/adapter 離線 suite，結果 `10 passed`。controller 拒絕舊 polling 參數，且無前景視窗、AppleScript、點擊或 timer loop。這只驗證 packet production，不驗證任何實機 host transport 或桌面 delivery；UI safety lock 仍有效。 |
 | `FOR-P2-PLAN-001` UI 安全測試計畫 | `VERIFIED_COMPLETE`（僅文件） | 文件與 Delivery Receipt | R1 獨立 verifier 確認恢復後 receipt 為 3033 bytes、JSON 與 delivered paths 正確、必要安全條款與限定 diff 檢查通過，且沒有 Forseti/Tauri process。這只驗證計畫文件；安全鎖仍啟用。 |
