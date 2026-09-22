@@ -14,8 +14,8 @@
 
 | 工作項 | 狀態 | 可做範圍 | 目前證據／阻塞 |
 | --- | --- | --- | --- |
-| `FOR-P0-001` 桌面卡死隔離與定位 | `SUBMITTED` | 僅靜態診斷與離線測試；禁止 UI 操作 | 已修補 tooltip hover 的事件放大：改用 pointer event 並對相同 dot 去重，避免移動游標時反覆重建 tooltip、掃描 sibling 與讀取 computed style。獨立離線驗證 `95 passed`；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
-| `FOR-P1-001` 持久續作契約 | `BLOCKED` | Ledger / recovery contract / focused tests | 等待 P0 的桌面安全 Gate。已有局部測試，不可當完整交付。 |
+| `FOR-P0-001` 桌面卡死隔離與定位 | `VERIFIED_COMPLETE`（限縮範圍） | 僅靜態診斷與離線測試；禁止 UI 操作 | tooltip hover 的事件放大已改用 pointer event 並對相同 dot 去重。獨立離線驗證 `95 passed`，commit `5e78264`。此 Gate 只驗證該 hover 修補；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
+| `FOR-P1-001` 持久續作契約 | `READY` | Ledger / recovery contract / focused tests | P0 的 scoped verifier 已通過。此工作不允許動 desktop 或解除安全鎖。 |
 | `FOR-P1-002` Host delivery adapter | `BLOCKED` | 精確目標、原始指令封包、fail-closed | 依賴 P0 和 P1。禁止前景視窗 fallback 與 timer 作為正常續作引擎。 |
 | `FOR-P2-001` 整合驗收 | `BLOCKED` | 一條完整恢復回路 | 必須由獨立 verifier 驗證；UI 沒有證據即維持未驗證。 |
 

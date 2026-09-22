@@ -1,0 +1,16 @@
+{
+  "task_id": "FOR-P0-001",
+  "state": "VERIFIED_COMPLETE",
+  "verifier": "Forseti Commander independent offline verifier",
+  "verified_commit": "5e782644b974695d180f338c385378bcdeee8657",
+  "verification": {
+    "command": "python3 -m pytest -q tests/test_hover_event_guard.py tests/test_ui_contract.py tests/test_poll_overlap.py",
+    "result": "95 passed",
+    "diff_check": "git diff --check passed",
+    "changed_scope": [
+      "desktop/ui/app.js tooltip event delegation",
+      "tests/test_hover_event_guard.py"
+    ]
+  },
+  "scope_boundary": "This verifies the tooltip hover event-storm fix only. It does not prove the desktop app is safe to launch or clear the ui_safety_lock."
+}
