@@ -1,0 +1,35 @@
+{
+  "task_id": "FOR-P1-002",
+  "state": "SUBMITTED",
+  "changed_files": [
+    "tools/codex-desktop-controller.sh",
+    "tests/test_controller_contract.py",
+    "docs/AUTONOMOUS_CONTINUATION_CONTRACT_2026-09-22.md"
+  ],
+  "focused_regression_tests": {
+    "command": "python3 -m pytest -q tests/test_controller_contract.py tests/test_desktop_adapter.py",
+    "result": "10 passed in 0.28s"
+  },
+  "static_safety_checks": [
+    {
+      "command": "rg -n 'frontmost|osascript|cliclick|setInterval|sleep 10' tools/codex-desktop-controller.sh",
+      "result": "no matches"
+    },
+    {
+      "command": "git diff --check -- tools/codex-desktop-controller.sh docs/AUTONOMOUS_CONTINUATION_CONTRACT_2026-09-22.md tests/test_controller_contract.py",
+      "result": "passed"
+    }
+  ],
+  "acceptance_evidence": [
+    "Legacy polling flags are rejected with exit 64 before any adapter process runs.",
+    "The adapter requires an exact target, Accessibility permission, a valid ACTIVE/IDLE state, and an observation id; missing values return FAIL_CLOSED.",
+    "Only a durable ACTIVE followed by IDLE can return the original ledger next_action and its idempotency key.",
+    "The controller contains no foreground-window fallback, AppleScript, click automation, or timer loop."
+  ],
+  "remaining_unknowns": [
+    "The app integration layer is pre-existing and was not modified by this work order.",
+    "No host transport actually injects the packet into a desktop session in this scope.",
+    "No desktop, AX, Tauri, deployment, or live UI test was performed; UI safety lock remains active."
+  ],
+  "verification_boundary": "SUBMITTED only; independent verifier must validate the allowed-path diff and rerun the offline tests before VERIFIED_COMPLETE."
+}

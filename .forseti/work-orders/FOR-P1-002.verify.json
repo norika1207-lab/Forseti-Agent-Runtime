@@ -1,0 +1,27 @@
+{
+  "task_id": "FOR-P1-002",
+  "state": "VERIFIED_COMPLETE",
+  "verifier": "Forseti Commander independent verifier",
+  "verification_scope": "Offline host-adapter safety and durable packet production only. Excludes host transport, desktop UI, AX, deployment, and any claim that Forseti.app is safe to launch.",
+  "commands": [
+    "python3 -m pytest -q tests/test_controller_contract.py tests/test_desktop_adapter.py",
+    "git diff --check -- tools/codex-desktop-controller.sh docs/AUTONOMOUS_CONTINUATION_CONTRACT_2026-09-22.md tests/test_controller_contract.py",
+    "rg -n 'frontmost|osascript|cliclick|setInterval|sleep 10' tools/codex-desktop-controller.sh"
+  ],
+  "results": [
+    "10 passed in 0.22s",
+    "scoped diff check passed",
+    "static forbidden-token scan produced no matches"
+  ],
+  "acceptance_evidence": [
+    "Legacy polling options fail with exit 64 before adapter execution.",
+    "Missing permission, exact target, valid state, or observation identity returns FAIL_CLOSED.",
+    "Only durable ACTIVE then IDLE yields a ledger-derived original-action packet with an idempotency key.",
+    "No foreground-window fallback, click automation, AppleScript, or timer loop is present in the controller entrypoint."
+  ],
+  "remaining_unknowns": [
+    "No packet was injected into a real desktop session.",
+    "No desktop, AX, Tauri, deployment, or live UI test was performed.",
+    "The UI safety lock remains ACTIVE."
+  ]
+}
