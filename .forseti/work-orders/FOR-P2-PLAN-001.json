@@ -1,0 +1,39 @@
+{
+  "task_id": "FOR-P2-PLAN-001",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "kind": "ui_safety_plan",
+  "goal": "Produce an evidence-first, operator-approved test plan for one controlled Forseti desktop integration slice without launching or driving the app.",
+  "allowed_paths": [
+    "docs/UI_SAFETY_TEST_PLAN_2026-09-22.md",
+    ".forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json"
+  ],
+  "forbidden_paths": [
+    "apps/**",
+    "desktop/**",
+    "tools/**",
+    "tests/**",
+    "test/**",
+    ".forseti/commander-state.json",
+    "docs/COMMANDER_STATUS.md"
+  ],
+  "prohibited_actions": [
+    "launch Forseti.app",
+    "run deploy scripts",
+    "run Tauri or desktop integration tests",
+    "use Accessibility, osascript, cliclick, or foreground-window automation"
+  ],
+  "acceptance": [
+    "Define the single integration claim to test and list the exact evidence that can support it; do not claim the desktop is safe.",
+    "Specify offline preflight checks, one-at-a-time execution boundaries, observable stop conditions, and a non-UI recovery path after a macOS stall.",
+    "Require explicit owner approval immediately before any UI launch; reboot alone is not approval and the safety lock remains ACTIVE.",
+    "List every prohibited automation path and state that no AX, mouse, keyboard, foreground-window, polling, or deploy mechanism is permitted.",
+    "Submit a Delivery Receipt with changed files, static validation, remaining unknowns, and an explicit statement that no UI action occurred."
+  ],
+  "required_evidence": [
+    "ui_safety_test_plan",
+    "delivery_receipt",
+    "git_diff_check"
+  ],
+  "done_definition": "SUBMITTED only; Commander independently verifies the document before requesting owner approval.",
+  "timebox_minutes": 45
+}
