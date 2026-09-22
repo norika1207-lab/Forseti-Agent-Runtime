@@ -1,0 +1,95 @@
+{
+  "task_id": "FOR-P0-002",
+  "state": "SUBMITTED",
+  "submitted_at": "2026-09-22T21:57:27+0800",
+  "recovery_key": "FOR-P0-002:event-refresh-20260922T2115+0800",
+  "base_commit": "ef4a938f6420ef6170ba8fbdb3a56786b4c94da0",
+  "branch": "codex/event-driven-refresh",
+  "changed_files": [
+    "desktop/ui/app.js",
+    "tests/test_poll_overlap.py",
+    "tests/test_ui_render.py",
+    "tools/ui-harness.py",
+    "tools/ui-render-check.py",
+    ".forseti/work-orders/FOR-P0-002.delivery-receipt.json"
+  ],
+  "spec_evidence": [
+    {
+      "id": "ARCH-EXEC-001",
+      "sha256": "4ca6689973e538f4235fcdf91747f1539a6f6cfb411711ad765930ee97fd654f"
+    },
+    {
+      "id": "F01-PEC-001",
+      "sha256": "fe86cb2a1ab7e9de3a8125dadf7c708587b8b498dac3570b194b486c6481fb7a"
+    },
+    {
+      "id": "F02-TSM-001",
+      "sha256": "99ec01294dde8c7f33088ed837b0cf2ec03ca66dca0ffc52a4fbf055fc2ccee4"
+    },
+    {
+      "id": "F04-EVT-001",
+      "sha256": "91dfb59b5dfae747776d10fd5599d710b30d2be14efef6f58de1c8174b0fb60d"
+    },
+    {
+      "id": "F05-WDG-001",
+      "sha256": "17ca3a6ee9c45ad6362cec304963668d3fac43eacc53e35ec31ab08c02e560a9"
+    },
+    {
+      "id": "F07-OUT-001",
+      "sha256": "c721da66a062474c5a342f83fccc2ede6870e6b7cd6f4d97c9a59fa1f0f49445"
+    }
+  ],
+  "focused_offline_tests": [
+    {
+      "command": "python3 -m pytest -q tests/test_poll_overlap.py tests/test_ui_contract.py tests/test_hover_event_guard.py tests/test_ui_render.py",
+      "result": "238 passed in 187.23s"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_poll_overlap.py tests/test_ui_contract.py tests/test_hover_event_guard.py",
+      "result": "95 passed in 0.22s"
+    },
+    {
+      "command": "python3 -m py_compile tools/ui-harness.py tools/ui-render-check.py tests/test_poll_overlap.py tests/test_ui_render.py",
+      "result": "passed"
+    },
+    {
+      "command": "/Users/norikaoda/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --check desktop/ui/app.js",
+      "result": "passed"
+    }
+  ],
+  "static_safety_checks": [
+    {
+      "command": "rg -n 'setInterval\\s*\\(' desktop/ui/app.js",
+      "result": "no matches"
+    },
+    {
+      "command": "git diff --check",
+      "result": "passed"
+    },
+    {
+      "command": "git diff --name-only",
+      "result": "only the five allowed implementation/test paths before this receipt was added"
+    },
+    {
+      "command": "pgrep -fal 'Forseti\\.app|forseti-desktop|tauri (dev|build)|cliclick|osascript'",
+      "result": "no prohibited process; output contained only the pgrep command itself"
+    }
+  ],
+  "acceptance_evidence": [
+    "The UI subscribes to window.__TAURI__.event.listen for forseti://changed before its initial refresh.",
+    "Repository events invalidate all backend-derived view caches and request a refreshed foundation snapshot.",
+    "Same-turn event bursts coalesce through one microtask; an event received in flight records one trailing refresh without parallel Python invocation.",
+    "Slow reads use a one-shot timer that is cleared in finally on both success and failure.",
+    "The product source contains no setInterval loop.",
+    "The offline harness emits deterministic synthetic forseti://changed events and safely embeds transcripts containing literal script tags.",
+    "Offline browser tests cover repository-event refresh, empty-ledger rendering, cache refetching, and preservation of armed action state."
+  ],
+  "remaining_unknowns": [
+    "No Forseti.app or Tauri integration run was performed because ui_safety_lock remains ACTIVE.",
+    "The existing Rust watcher and real WebView event delivery were not runtime-verified in this work order.",
+    "The underlying strands cold-read latency remains outside this work order; this change prevents overlap and exposes slow reads but does not optimize Python execution.",
+    "An independent verifier must rerun the offline checks before VERIFIED_COMPLETE."
+  ],
+  "no_ui_action_statement": "No Forseti.app, Tauri build, deployment, AX, Accessibility, mouse, keyboard, foreground-window automation, or live UI action was performed.",
+  "verification_boundary": "SUBMITTED only; independent verification is required. This receipt does not unlock or authorize FOR-P2-001."
+}

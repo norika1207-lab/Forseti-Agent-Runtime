@@ -30,6 +30,7 @@ window.addEventListener("unhandledrejection", (e) => {
 // 規格 `.forseti/WIDGET_SPEC.md`。
 
 const invoke = window.__TAURI__?.core?.invoke;
+const listen = window.__TAURI__?.event?.listen;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
 const flat = (s) => (s || "").split(/\s+/).filter(Boolean).join(" ");
@@ -466,8 +467,8 @@ function renderBlast(d) {
     return;
   }
   // 重畫會把 innerHTML 整個換掉，包含使用者正在打字的那個輸入框。
-  // 先記下焦點與游標位置，畫完再放回去 —— 不然每 2 秒一次的輪詢
-  // 會在打字打到一半時把字跟游標吃掉。
+  // 先記下焦點與游標位置，畫完再放回去 —— 不然 repository event
+  // 觸發重畫時會把打到一半的字與游標吃掉。
   const oldQ = box.querySelector(".blQ");
   const qFocused = !!oldQ && document.activeElement === oldQ;
   const qCaret = oldQ ? oldQ.selectionStart : null;
@@ -557,7 +558,7 @@ function renderBlast(d) {
       : "") +
     (b.js_why ? `<p class="blNote">JS 半邊沒算成：${esc(b.js_why)}</p>` : "");
 
-  // 事件綁在容器上，不是每一行綁一個 —— renderBlast 每次輪詢都會
+  // 事件綁在容器上，不是每一行綁一個 —— renderBlast 每次刷新都會
   // 重畫 innerHTML，逐行綁會隨著重畫次數累積成一堆孤兒 listener。
   // 容器本身只在第一次建立，所以這個旗標保證只綁一次。
   if (!box.dataset.wired) {
@@ -648,8 +649,8 @@ function renderBlastHits(box) {
 }
 
 /* 目前展開的是哪一個檔，加上它算出來的內容。
-   存起來是因為 renderBlast 每 1 到 3 秒重畫一次 innerHTML，
-   不存的話她點開的明細會在下一次輪詢自己消失。 */
+   存起來是因為 renderBlast 會在 repository event 後重畫 innerHTML，
+   不存的話她點開的明細會在下一次刷新自己消失。 */
 let blastOpen = null;
 let blastHtml = "";
 
@@ -786,8 +787,8 @@ function renderPollution(d) {
     box.className = "pollution";
     $("vitals").appendChild(box);
   }
-  // **這一格是捲動的，而它每 1 到 3 秒整塊換 innerHTML。**
-  // 預設行為是使用者捲到第 3 筆，兩秒後自己彈回頂端，而且沒有任何
+  // **這一格是捲動的，而 repository event 會整塊換 innerHTML。**
+  // 預設行為是使用者捲到第 3 筆，刷新後自己彈回頂端，而且沒有任何
   // 錯誤訊息 —— 實測捲到底 450px、6.5 秒後回到 0，節點已經不是同一個。
   // 症狀是「後面那幾筆永遠看不到」。跟搜尋框吃字是同一個根因。
   const oldList = box.querySelector(".plList");
@@ -1440,8 +1441,8 @@ function renderGate(d) {
 /* 三張卡片。bible.md I-04。
    點「用這句」把話放進剪貼簿 —— 她要做的事就只剩貼上去。 */
 let cardsOpen = false;
-/* 展開過的卡片。renderCards 每次 tick 會重建 innerHTML，
-   不記住的話她點開的東西兩秒後就自己關上。 */
+/* 展開過的卡片。renderCards 每次刷新會重建 innerHTML，
+   不記住的話她點開的東西會在下一個 repository event 後自己關上。 */
 const cardsWhy = new Set();
 
 function renderCards(d) {
@@ -2458,17 +2459,17 @@ function wireActs(box) {
   });
 }
 
-/* 使用者正按到一半的時候，輪詢不要把這一頁抽掉。
+/* 使用者正按到一半的時候，事件刷新不要把這一頁抽掉。
 
    【2026-09-17 實測抓到的，症狀是三顆動作鈕完全按不動】
    `wireActs` 是兩段式的：第一下把鈕改成「再按一次確定」，
    第二下才真的送出。那個確認窗是 5 秒（`app.js` 同一支的 setTimeout）。
-   而輪詢是這個檔案最底下那個 tick 的 setInterval，兩秒一輪，
-   每一輪 `renderWork()` 第一行
+   當時底部的固定兩秒計時器會持續呼叫 tick，
+   每一次 `renderWork()` 第一行
    `lane.textContent = ""` 把整塊清掉重建 —— 重建出來的是新的節點、
    新的 closure，`armed` 就沒了。
 
-   所以只要兩下之間跨過一次輪詢（也就是超過兩秒），第二下會被當成
+   所以當時只要兩下之間跨過一次輪詢，第二下就會被當成
    新的第一下，永遠送不出去。實測：兩下間隔 300 毫秒，指令清單裡
    有 `act`；間隔 2500 毫秒，指令清單裡一個 `act` 都沒有，
    而畫面上沒有任何錯誤訊息 —— 使用者看到的是「按了沒反應」。
@@ -2482,7 +2483,7 @@ function wireActs(box) {
    最多凍結 5 秒，因為那個計時器到時一定會把 `armed` 還原。
    `disabled` 是送出中的那一段，同理。
 
-   **只守輪詢那一條路，不守 `syncView`。** 換分頁是使用者自己的
+   **現在守 repository event 刷新，不守 `syncView`。** 換分頁是使用者自己的
    動作，那時候本來就該整頁重畫。 */
 function workBusy() {
   return !!document.querySelector("#lane .ac.armed, #lane .ac:disabled");
@@ -3138,7 +3139,7 @@ function choose(id) {
   closePicker();
   rows = [];
   lastCount = 0;
-  tick();
+  requestRefresh();
 }
 
 async function openPicker() {
@@ -3165,7 +3166,7 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !picker.hidden) closePicker();
 });
 
-/* ── 輪詢 §13 1 到 3 秒 ──────────────────────── */
+/* ── 事件驅動刷新 ────────────────────────────── */
 
 // 量不到就說出來，而且要說在看得見的地方。
 //
@@ -3186,9 +3187,9 @@ function fatal(title, detail) {
   $("adviceWhy").textContent = detail;
 }
 
-/* 上一輪還沒回來就跳過這一輪。
+/* 上一次讀取還沒回來時，把後續事件合併成一次 trailing refresh。
 
-   【2026-09-18 事故】輪詢是兩秒一輪（那一行在這個檔最底下），而
+   【2026-09-18 事故】當時的輪詢是兩秒一輪，而
    `strands` 在真實資料上要 17.6 秒（冷）／6.7 秒（熱）。
    於是每一輪都在上一輪還沒回來的時候又起一個 Python 子行程，
    八九個同時跑互相搶 CPU，每一個因此更慢，累積得更多 ——
@@ -3198,22 +3199,46 @@ function fatal(title, detail) {
    `fatal()` 沒被觸發，因為 invoke 既沒成功也沒拋錯，它還在跑。
    實測 ps:App 跑了 5 分 50 秒，而它底下的 Python 子行程只有 8 秒大。
 
-   這個旗標治的是「重疊」。真正的 17.6 秒要另外治，
+   `forseti://changed` 由 Rust watcher 合併檔案事件。前端仍要守住
+   「事件在 Python 執行中到達」：不能遺失，也不能再開一個子行程。
+
+   這組旗標治的是「重疊與事件合併」。真正的 17.6 秒要另外治，
    那是 `_meta_rows` 2.4 秒、四次 subprocess 1.4 秒、
    `claims.verify` 36 次 1 秒、`blast.summary` 0.9 秒加起來的。 */
 let inFlight = false;
+let refreshPending = false;
+let refreshScheduled = false;
+let foundationPending = false;
 let slowSince = 0;
+let slowTimer = null;
+let stopChangedListener = null;
+
+function invalidateBackendCaches() {
+  workCache = null;
+  machCache = null;
+  featCache = null;
+  auditCache = null;
+  specCache = null;
+}
+
+function requestRefresh({ invalidateCaches = false, refreshFoundation = false } = {}) {
+  if (invalidateCaches) invalidateBackendCaches();
+  if (refreshFoundation) foundationPending = true;
+  refreshPending = true;
+  if (inFlight || refreshScheduled) return;
+
+  // 同一個 watcher burst 只排一個 microtask。若事件在讀取中到達，
+  // finally 會再排一次；不遺失，也不會平行啟動 Python。
+  refreshScheduled = true;
+  queueMicrotask(() => {
+    refreshScheduled = false;
+    if (refreshPending && !inFlight) void tick();
+  });
+}
 
 async function tick() {
   if (inFlight) {
-    // 等太久要讓人看得出它在跑，不是死了。
-    // 一片黑加一個小字「啟動中」，跟當掉長得一模一樣。
-    if (slowSince && Date.now() - slowSince > 4000) {
-      const s = $("stat");
-      if (s) {
-        s.textContent = `讀取中 ${Math.round((Date.now() - slowSince) / 1000)}s`;
-      }
-    }
+    refreshPending = true;
     return;
   }
   if (!invoke) {
@@ -3223,10 +3248,18 @@ async function tick() {
     return;
   }
   inFlight = true;
-  if (!slowSince) slowSince = Date.now();
+  refreshPending = false;
+  const refreshFoundation = foundationPending;
+  foundationPending = false;
+  slowSince = Date.now();
+  slowTimer = setTimeout(() => {
+    if (!inFlight) return;
+    const s = $("stat");
+    if (s) s.textContent = `讀取中 ${Math.round((Date.now() - slowSince) / 1000)}s`;
+  }, 4000);
   try {
+    if (refreshFoundation) await loadFoundation();
     const raw = await invoke("strands", { session: picked });
-    slowSince = 0;
     const d = JSON.parse(raw);
     if (d.error) throw new Error(d.error);
     rows = d.rows || [];
@@ -3274,14 +3307,47 @@ async function tick() {
     fatal("讀不到 transcript", String(e).slice(0, 200));
   } finally {
     // 【一定要放回去】放在 finally 不放在 try 的結尾:
-    // 拋錯的時候旗標留在 true，之後每一輪都會被跳過，
+    // 拋錯的時候旗標留在 true，之後每個事件都會被跳過，
     // 畫面從此不再更新，而那跟「沒有新的事情發生」長得一樣。
     //
     // （這裡刻意不用另外四個字描述那個狀態,
     //   `test_sot` 禁止這個檔出現它們 —— 沒量到不等於沒事。）
+    if (slowTimer) clearTimeout(slowTimer);
+    slowTimer = null;
+    slowSince = 0;
     inFlight = false;
+    if (refreshPending) requestRefresh();
   }
 }
+
+function repositoryChanged() {
+  requestRefresh({ invalidateCaches: true, refreshFoundation: true });
+}
+
+async function startRefresh() {
+  if (!invoke) {
+    requestRefresh();
+    return;
+  }
+  if (!listen) {
+    fatal("拿不到 Tauri 事件",
+      "window.__TAURI__.event.listen 不存在。無法安全改用 .forseti 檔案事件，" +
+      "因此不啟動背景輪詢。");
+    return;
+  }
+  try {
+    // 先訂閱再載入，避免 listener 安裝與第一次 snapshot 之間漏事件。
+    stopChangedListener = await listen("forseti://changed", repositoryChanged);
+    requestRefresh({ refreshFoundation: true });
+  } catch (e) {
+    fatal("接不上 Tauri 事件", String(e).slice(0, 200));
+  }
+}
+
+addEventListener("pagehide", () => {
+  if (stopChangedListener) stopChangedListener();
+  stopChangedListener = null;
+});
 
 function syncView() {
   // 換分頁一定回到頂端。
@@ -3345,8 +3411,6 @@ $("followBtn").addEventListener("click", () => {
   if (follow) $("scroll").scrollTop = $("scroll").scrollHeight;
 });
 
-// 根基先算。線色要用它,所以要在第一次畫線之前拿到。§40
-loadFoundation().then(tick);
-setInterval(tick, 2000);
-// 讀文件的狀態會隨著我實際去讀而變,每分鐘重算一次。
-setInterval(loadFoundation, 60000);
+// Rust watcher 已把 .forseti 的連續寫入合併成一個事件；前端先訂閱，
+// 再做唯一一次初始讀取。之後沒有 timer/polling loop。§40 / F04
+startRefresh();

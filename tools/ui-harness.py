@@ -42,6 +42,7 @@ STUB = '''<script>
 // 假的 Tauri。**這正是這支工具的盲點所在** ——
 // 它讓 app.js 跑得起來，也讓「連不連得上後端」永遠測不到。
 const FIX = JSON.parse(document.getElementById("fx").textContent);
+const EVENT_HANDLERS = new Map();
 window.__TAURI__ = { core: { invoke: async (cmd, args) => {
   const v = FIX[cmd];
   // 帶參數的指令(blast_detail)。fixture 存的是「參數值 → 回傳」的表,
@@ -55,9 +56,31 @@ window.__TAURI__ = { core: { invoke: async (cmd, args) => {
       why: "harness fixture 沒有預先算這一個(只算了排行榜上那幾個)" });
   }
   return JSON.stringify(v ?? {});
+} }, event: { listen: async (name, handler) => {
+  const rows = EVENT_HANDLERS.get(name) || [];
+  rows.push(handler);
+  EVENT_HANDLERS.set(name, rows);
+  return () => EVENT_HANDLERS.set(name,
+    (EVENT_HANDLERS.get(name) || []).filter((x) => x !== handler));
 } } };
+window.__FORSETI_HARNESS_EMIT__ = async (name, payload = null) => {
+  for (const handler of EVENT_HANDLERS.get(name) || []) {
+    await handler({ event: name, payload });
+  }
+};
 </script>
 <script src="app.js"></script>'''
+
+
+def _script_json(blob: str) -> str:
+    """Make JSON safe inside an HTML script-data element.
+
+    Escaping only closing tags is insufficient: a literal ``<script`` in the
+    transcript moves the HTML tokenizer into the double-escaped state, where
+    the fixture's real closing tag is not recognized. Encoding every ``<`` as
+    a JSON unicode escape avoids both opening and closing tag transitions.
+    """
+    return blob.replace("<", "\\u003c")
 
 
 def build(out: Path, fake: bool, session: str = "") -> None:
@@ -139,13 +162,13 @@ def build(out: Path, fake: bool, session: str = "") -> None:
 
     html = (UI / "index.html").read_text(encoding="utf-8")
     html = html.replace('<script src="app.js"></script>', STUB)
-    # `</` 一定要跳脫。
+    # `<` 一定要編成 JSON unicode escape。
     #
-    # 【2026-09-14 實測】transcript 裡本來就會出現 `</script>` 這種字串
-    # （這個 session 自己就在討論 HTML）。不跳脫的話標籤提前關閉，
-    # 後面整份 app.js 被當成文字印在畫面上，
-    # 而錯誤訊息是「invoke is not a function」—— 完全看不出真正原因。
-    blob = (out / "fixture.json").read_text(encoding="utf-8").replace("</", "<\\/")
+    # `</script>` 會提前關閉標籤；只有 `<script>` 也會讓 tokenizer 進入
+    # double-escaped state，連 fixture 真正的 closing tag 都不認。兩種都
+    # 會使 app.js 在 body 尚未建立時執行，症狀只剩元素是 null。
+    blob = _script_json(
+        (out / "fixture.json").read_text(encoding="utf-8"))
     html = html.replace(
         "</head>",
         '<script type="application/json" id="fx">' + blob + "</script>\n</head>")

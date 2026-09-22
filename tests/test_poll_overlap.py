@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""輪詢不准重疊。
+"""事件刷新不准重疊、遺失或退回 timer polling。
 
 ## 事故(2026-09-18，owner 開桌面版當場看到)
 
@@ -39,7 +39,7 @@ ROOT = Path(__file__).resolve().parents[1]
 JS = ROOT / "desktop" / "ui" / "app.js"
 
 
-class 輪詢不准重疊(unittest.TestCase):
+class 事件刷新不准重疊(unittest.TestCase):
 
     def setUp(self):
         self.js = JS.read_text(encoding="utf-8")
@@ -47,13 +47,15 @@ class 輪詢不准重疊(unittest.TestCase):
     def test_有防重疊的旗標(self):
         self.assertIn("let inFlight", self.js, "沒有防重疊的旗標")
 
-    def test_開頭就擋掉重疊的那一輪(self):
-        """擋要擋在最前面。擋在 invoke 之後就已經起了子行程。"""
+    def test_執行中事件只記一個待刷新(self):
+        """事件到達時不能再起子行程，也不能安靜遺失。"""
         m = re.search(r"async function tick\(\)\s*\{(.{0,400})", self.js, re.S)
         self.assertIsNotNone(m, "找不到 tick()")
         head = m.group(1)
         self.assertIn("if (inFlight)", head,
                       "重疊檢查不在 tick 開頭，擋不住起子行程")
+        self.assertIn("refreshPending = true", head,
+                      "執行中的事件被丟掉，完成後不會補刷新")
         self.assertIn("return", head)
 
     def test_旗標一定放得回去(self):
@@ -67,26 +69,34 @@ class 輪詢不准重疊(unittest.TestCase):
         self.assertIn("inFlight = false", m.group(1),
                       "旗標不是在 finally 放回去的")
 
-    def test_等太久要讓人看得出它在跑(self):
-        """一片黑加一個小字，跟當掉長得一模一樣。
-
-        比對的是「重疊分支裡有沒有寫東西上去」，不是
-        「這個檔案有沒有出現某幾個字」——「載入中」那幾個字
-        `app.js` 別的地方本來就有，寬鬆的比對找到的是它們
-        （2026-09-18 反向驗證當場抓到:把提示整段拿掉也不會紅）。
-        """
+    def test_等太久用單次timer顯示不是polling(self):
         import re
         self.assertIn("slowSince", self.js, "沒有量它等了多久")
-        m = re.search(r"if \(inFlight\)\s*\{(.{0,400}?)\n  \}", self.js, re.S)
-        self.assertIsNotNone(m, "找不到重疊分支")
-        branch = m.group(1)
-        self.assertIn("textContent", branch,
-                      "重疊分支裡沒有把任何東西寫上畫面，等久了看不出它在跑")
-        self.assertIn("slowSince", branch, "沒有用等待時間算出要顯示什麼")
+        self.assertRegex(self.js, r"slowTimer\s*=\s*setTimeout\(")
+        self.assertIn("clearTimeout(slowTimer)", self.js)
 
-    def test_輪詢間隔還在(self):
-        """防重疊不是拿掉輪詢。拿掉的話畫面就不會自己更新了。"""
-        self.assertRegex(self.js, r"setInterval\(tick,\s*\d+\)")
+    def test_訂閱既有rust事件而且先訂閱再首次刷新(self):
+        self.assertIn('listen("forseti://changed", repositoryChanged)', self.js)
+        body = re.search(r"async function startRefresh\(\)\s*\{(.*?)\n\}",
+                         self.js, re.S)
+        self.assertIsNotNone(body)
+        code = body.group(1)
+        self.assertLess(code.index('listen("forseti://changed"'),
+                        code.index("requestRefresh({ refreshFoundation: true })"))
+
+    def test_同一burst用microtask合併(self):
+        self.assertIn("let refreshScheduled = false", self.js)
+        self.assertIn("queueMicrotask", self.js)
+        self.assertIn("if (inFlight || refreshScheduled) return", self.js)
+
+    def test_完成後只補待處理刷新(self):
+        m = re.search(r"\}\s*finally\s*\{(.*?)\n  \}", self.js, re.S)
+        self.assertIsNotNone(m)
+        self.assertIn("inFlight = false", m.group(1))
+        self.assertIn("if (refreshPending) requestRefresh()", m.group(1))
+
+    def test_產品碼沒有背景輪詢(self):
+        self.assertNotRegex(self.js, r"setInterval\s*\(")
 
 
 if __name__ == "__main__":

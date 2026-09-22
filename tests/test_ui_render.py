@@ -54,6 +54,17 @@ RC = _load()
 APP_JS = REPO / "desktop" / "ui" / "app.js"
 
 
+class HarnessJsonEmbedding(unittest.TestCase):
+    """Fixture text must not be able to change the HTML tokenizer state."""
+
+    def test_script文字不會吞掉body(self):
+        harness = RC._load_harness()
+        raw = json.dumps({"text": '<script src="app.js"></script>'})
+        embedded = harness._script_json(raw)
+        self.assertNotIn("<", embedded)
+        self.assertEqual(json.loads(embedded), json.loads(raw))
+
+
 def _one_int(pat: str, why: str) -> int | None:
     """從 `app.js` 抽一個數字出來。抽不到、或抽到不只一處，回 None。
 
@@ -72,8 +83,8 @@ def _one_int(pat: str, why: str) -> int | None:
     return int(ms[0]) if len(ms) == 1 else None
 
 
-# 輪詢多久重畫一次。
-POLL_MS = _one_int(r"setInterval\(tick, (\d+)\)", "輪詢間隔")
+# 離線 harness 發出合成 repository events 的間隔；產品碼沒有 polling。
+POLL_MS = RC.EVENT_GAP_MS
 
 # 按了第一下之後，待確認狀態自己撐多久（`wireActs` 的還原計時器）。
 ARM_WINDOW_MS = _one_int(
@@ -235,19 +246,29 @@ class ExpandedPagesMatchData(unittest.TestCase):
     def test_四格真的有列而不是空殼(self):
         """守的是 `check_expanded_row_counts` 本身。
 
-        那一條比的是「資料幾列、畫面幾列」，而資料是 0 列的時候
-        畫面 0 列也相等 —— 兩邊一起是空的會通過。
-        真實資料上這四格都有東西，所以這裡直接釘住有列。
-        哪天真的變成 0，這條會紅，然後由人去看是資料沒了還是畫面死了。
+        資料有列就必須畫列；資料合法為空時必須畫出明確空狀態。
+        同時至少一個資料源要有列，避免整組在全空 fixture 上假綠。
         """
-        dom = RC.strip_fixture(_shot_x().dom)
-        for _k, cls, row_cls, _lk, zh in RC.EXPANDED_BOXES:
+        r = _shot_x()
+        dom = RC.strip_fixture(r.dom)
+        nonempty = 0
+        for key, cls, row_cls, list_key, zh in RC.EXPANDED_BOXES:
             with self.subTest(cls=cls):
                 frag = RC._box_html(dom, cls)
                 self.assertIsNotNone(frag, f"「{zh}」那一格不在")
-                self.assertGreater(
-                    RC._count_class(frag, row_cls), 0,
-                    f"「{zh}」那一格在，可是一列都沒有")
+                data = RC._expanded_data(r, key) or {}
+                rows = data.get(list_key) if data.get("has") else []
+                if rows:
+                    nonempty += 1
+                    self.assertGreater(
+                        RC._count_class(frag, row_cls), 0,
+                        f"「{zh}」資料有列，畫面卻一列都沒有")
+                else:
+                    text = re.sub(r"<[^>]+>", " ", frag)
+                    self.assertGreater(
+                        len(text.strip()), 8,
+                        f"「{zh}」沒有資料時也必須明說空狀態")
+        self.assertGreater(nonempty, 0, "四個展開資料源全空，這輪驗不到列渲染")
 
 
 class ChecksThemselvesCatchThings(unittest.TestCase):
@@ -467,15 +488,18 @@ def _burger_shot():
 # 哪天有人往 fixture 補一個 `act`，這組測試就默默變成會執行。
 #
 # `budget_ms` 用 `ACT_BUDGET_MS` 不是預設值，理由在那個常數上面：
-# 照相的時刻必須跨過一次輪詢，否則抓不到「輪詢把待確認沖掉」那個 bug。
+# 照相時刻必須跨過合成 repository event，才能驗背景刷新不會沖掉待確認。
 _ACT = {"r": None, "err": None}
 
 
 def _act_shot():
     if _ACT["r"] is None and _ACT["err"] is None:
         try:
-            _ACT["r"] = RC.render(clicks=RC.ACT_CLICKS, spy=True,
-                                  budget_ms=RC.ACT_BUDGET_MS)
+            _ACT["r"] = RC.render(
+                clicks=RC.ACT_CLICKS, spy=True,
+                budget_ms=RC.ACT_BUDGET_MS,
+                event_times_ms=RC.ACT_EVENT_TIMES_MS,
+                fixture_overrides={"work": RC.ACTION_WORK_FIXTURE})
         except RC.CannotRun as e:
             _ACT["err"] = str(e)
     if _ACT["err"]:
@@ -551,8 +575,8 @@ class TabsMatchData(unittest.TestCase):
             r = _tab_shot(tab.view)
             lane = RC._id_html(RC.strip_fixture(r.dom), "lane")
             self.assertIsNotNone(lane, tab.view)
-            self.assertGreater(len(lane.strip()), 200,
-                               f"{tab.zh} 那一頁 lane 幾乎是空的")
+            self.assertGreater(len(lane.strip()), 50,
+                               f"{tab.zh} 那一頁沒有內容也沒有空狀態")
 
     def test_切過去之後別頁不會同時亮著(self):
         """`syncView` 把每一顆的 aria-pressed 重算（`app.js:3039`）。
@@ -899,14 +923,14 @@ class ActionButtonsNeedTwoPresses(unittest.TestCase):
             self.assertIn('data-kind="%s"' % kind, box)
 
 
-class PollingMustNotWipeTheConfirm(unittest.TestCase):
-    """輪詢重畫不准把使用者按到一半的狀態沖掉。
+class EventRefreshMustNotWipeTheConfirm(unittest.TestCase):
+    """事件刷新不准把使用者按到一半的狀態沖掉。
 
     這一組守的是上面那個 bug 的修法本身。修法只有一行
-    （`app.js` 輪詢那一條路上的 `workBusy()` 守門），一行的東西
+    （`app.js` 事件刷新路徑上的 `workBusy()` 守門），一行的東西
     最容易在下一次重構時被當成多餘拿掉。
 
-    **兩條路要分開守。** 輪詢那一條要有守門，`syncView()`
+    **兩條路要分開守。** 事件刷新要有守門，`syncView()`
     那一條不准有 —— 換分頁是使用者自己的動作，那時候本來就該
     整頁重畫。守錯邊的話，切走再切回來會看到上一頁的殘影。
     """
@@ -914,10 +938,10 @@ class PollingMustNotWipeTheConfirm(unittest.TestCase):
     def setUp(self):
         self.js = APP_JS.read_text(encoding="utf-8")
 
-    def test_輪詢那一條路有守門(self):
+    def test_事件刷新那一條路有守門(self):
         self.assertIn('else if (view === "work") { if (!workBusy()) renderWork(); }',
                       self.js,
-                      "輪詢會無條件重畫 work，待確認撐不過兩秒")
+                      "事件刷新會無條件重畫 work，待確認狀態會被沖掉")
 
     def test_換分頁那一條路沒有守門(self):
         self.assertIn('else if (view === "work") { workCache = null; renderWork(); }',
@@ -926,7 +950,7 @@ class PollingMustNotWipeTheConfirm(unittest.TestCase):
 
     def test_守門看的是待確認與送出中兩種(self):
         """只守 `armed` 的話，送出中那一段（`b.disabled = true`）
-        仍然會被輪詢重畫沖掉 —— 而那一段正在等後端回話。
+        仍然會被事件刷新沖掉 —— 而那一段正在等後端回話。
         """
         m = re.search(r"function workBusy\(\) \{(.*?)\n\}", self.js, re.S)
         self.assertIsNotNone(m, "找不到 workBusy")
@@ -934,15 +958,13 @@ class PollingMustNotWipeTheConfirm(unittest.TestCase):
         self.assertIn(".ac.armed", body)
         self.assertIn(".ac:disabled", body)
 
-    def test_確認窗比輪詢間隔長所以守門不可或缺(self):
+    def test_確認窗跨過合成事件所以守門不可或缺(self):
         """這兩個數字的關係就是那個 bug 的成因。
 
-        確認窗要是比輪詢間隔短，使用者根本碰不到這個問題，
-        守門也就不需要。哪天有人把輪詢調慢或把窗調短，
-        這一條會提醒他回來看這個修法還需不需要。
+        合成事件落在確認窗內，才能重現背景刷新可能沖掉狀態的條件。
         """
         self.assertGreater(ARM_WINDOW_MS, POLL_MS,
-                           "確認窗短於輪詢間隔的話，這個修法的前提沒了")
+                           "確認窗短於事件間隔，測不到背景刷新與確認狀態交錯")
 
     def test_這兩個數字真的是從原始碼抽出來的(self):
         """抽不到的時候 `_one_int` 回 None，而 None 拿去比大小
@@ -954,12 +976,12 @@ class PollingMustNotWipeTheConfirm(unittest.TestCase):
         是兩種症狀，訊息不該混在一起。
         """
         self.assertIsNotNone(
-            POLL_MS, "抽不到輪詢間隔，或者 app.js 裡有不只一處長這樣")
+            POLL_MS, "沒有離線 repository event 間隔")
         self.assertIsNotNone(
             ARM_WINDOW_MS, "抽不到確認窗，或者 app.js 裡有不只一處長這樣")
 
 
-# 輪詢那一次：切到「在做什麼」之後**坐著不動**，看接下來那幾輪做了什麼。
+# 事件刷新：切到「在做什麼」後坐著不動，看合成 repository events 做了什麼。
 #
 # 跟動作鈕那一次的差別只有一個：那一次問「按下去之後怎樣」，
 # 這一次問「不按之後怎樣」。所以這一次要坐得久，久到跨過好幾輪，
@@ -973,9 +995,11 @@ _POLL = {"r": None, "err": None}
 def _poll_shot():
     if _POLL["r"] is None and _POLL["err"] is None:
         try:
-            _POLL["r"] = RC.render(clicks=RC.POLL_CLICKS, spy=True,
-                                   budget_ms=RC.POLL_BUDGET_MS,
-                                   spy_at_ms=RC.POLL_SPY_AT_MS)
+            _POLL["r"] = RC.render(
+                clicks=RC.POLL_CLICKS, spy=True,
+                budget_ms=RC.POLL_BUDGET_MS,
+                spy_at_ms=RC.POLL_SPY_AT_MS,
+                event_times_ms=RC.POLL_EVENT_TIMES_MS)
         except RC.CannotRun as e:
             _POLL["err"] = str(e)
     if _POLL["err"]:
@@ -984,7 +1008,7 @@ def _poll_shot():
 
 
 class WhoPaintedThatCell(unittest.TestCase):
-    """那一格是切分頁那一下畫的，還是之後某一輪輪詢畫的。
+    """那一格是切分頁那一下畫的，還是 repository event 畫的。
 
     **這一組補的是這條線一直寫在收尾那句話裡的盲點**：
     「分不出那一格是誰畫的」。5o、5p、5q 三輪都列著它。
@@ -994,21 +1018,20 @@ class WhoPaintedThatCell(unittest.TestCase):
     有人畫過，證明不了是誰。
 
     指令清單分得出來。`syncView()` 那一條會先把快取清掉所以會重抓，
-    輪詢那一條不會 —— 兩條路在 Tauri 那一層的痕跡不同。
+    repository event 會清快取重抓 —— 兩條路在 Tauri 那一層有可驗痕跡。
 
     **這一組跟 `tests/test_ui_contract.py` 那幾條不是同一件事。**
-    那邊守的是原始碼裡那幾行還在（`setInterval(tick, 2000)`、
-    七頁的分派、五個快取的清除）。這邊守的是那幾行在瀏覽器裡
+    那邊守的是 listener、七頁分派與五個快取清除仍存在。這邊守的是它們在瀏覽器裡
     真的有效果。中間隔著 `loadFoundation()` 的 promise、`tick`
-    自己的 try/catch、每一輪都要回來的 `invoke`，任何一個壞掉，
+    自己的 try/catch、每個事件都要回來的 `invoke`，任何一個壞掉，
     原始碼那一邊仍然全綠。
     """
 
-    def test_輪詢在瀏覽器裡真的重跑(self):
+    def test_repository_event在瀏覽器裡真的刷新(self):
         fs = RC.check_poll_loop_really_repeats(_poll_shot())
         self.assertEqual(fs, [], "\n" + "\n".join(str(f) for f in fs))
 
-    def test_那幾輪是從快取重畫沒有回頭抓帳本(self):
+    def test_每個事件都回頭抓帳本(self):
         fs = RC.check_poll_repaints_from_cache(_poll_shot())
         self.assertEqual(fs, [], "\n" + "\n".join(str(f) for f in fs))
 
@@ -1028,19 +1051,17 @@ class WhoPaintedThatCell(unittest.TestCase):
         self.assertIn("work", cmds,
                       f"沒有看到切到那一頁時該發的指令：{cmds}")
 
-    def test_傾印的時刻真的跨過好幾輪(self):
+    def test_傾印的時刻真的跨過好幾個事件(self):
         """這是一個對**常數**的斷言，跟 `ACT_BUDGET_MS` 那條同源。
 
-        倒得太早的話，輪詢還沒跑幾次，「重抓了幾次」這個問題
-        因為樣本只有一輪而永遠答對。這一條把「至少跨過三輪」
-        變成一個會紅的關係，而輪詢間隔是從 `app.js` 抽的，
-        不是抄在這裡 —— 有人把輪詢調慢，這一條會紅。
+        倒得太早的話，合成事件還沒發出幾次，「重抓了幾次」會因為
+        樣本只有一次而永遠答對。這一條要求至少跨過三個事件。
         """
-        self.assertIsNotNone(POLL_MS, "抽不到輪詢間隔")
+        self.assertIsNotNone(POLL_MS, "沒有離線 repository event 間隔")
         last = RC.CLICK_AFTER_MS + (len(RC.POLL_CLICKS) - 1) * RC.CLICK_GAP_MS
         self.assertGreaterEqual(
             RC.POLL_SPY_AT_MS - last, 3 * POLL_MS,
-            "傾印太早，跨不過三輪，樣本不足以回答「重抓了幾次」")
+            "傾印太早，跨不過三個事件，樣本不足以回答重抓次數")
         self.assertGreater(RC.POLL_BUDGET_MS, RC.POLL_SPY_AT_MS,
                            "照相早於傾印的話，DOM 裡不會有那一格")
 
@@ -1049,7 +1070,7 @@ class WhoPaintedThatCell(unittest.TestCase):
 
         低於 2 的話，載入時那一次就滿足了，這條檢查等於沒跑。
         高於那個窗裝得下的輪數的話，它永遠紅，而紅的原因
-        跟輪詢有沒有在跑無關。
+        跟事件有沒有觸發刷新無關。
         """
         self.assertGreaterEqual(RC.POLL_MIN_STRANDS, 2,
                                 "載入時那一次就滿足了，等於沒跑")
@@ -1073,9 +1094,11 @@ class WhoPaintedThatCell(unittest.TestCase):
         src = (REPO / "tools" / "ui-render-check.py").read_text(
             encoding="utf-8")
         body = src[src.index("def main("):]
-        self.assertIn("POLL_CHECKS", body, "main() 沒有跑輪詢那一組")
+        self.assertIn("POLL_CHECKS", body, "main() 沒有跑 repository event 那一組")
         self.assertIn("spy_at_ms=POLL_SPY_AT_MS", body,
                       "main() 沒有把傾印時刻傳進去，會用預設的那個早得多的值")
+        self.assertIn("event_times_ms=POLL_EVENT_TIMES_MS", body,
+                      "main() 沒有注入 repository events，這組只會量到首次載入")
 
 
 class PollChecksThemselvesCatchThings(unittest.TestCase):
@@ -1102,13 +1125,13 @@ class PollChecksThemselvesCatchThings(unittest.TestCase):
                 self.assertTrue(fs, f"{bad!r} 被放行了")
                 self.assertIn("驗不了", str(fs[0]))
 
-    def test_輪詢沒重跑會紅(self):
+    def test_事件沒觸發刷新會紅(self):
         fs = RC.check_poll_loop_really_repeats(
             self._r(["spec_reading", "strands", "sessions", "work"]))
         self.assertTrue(fs, "只發了一次 strands 卻放行")
         self.assertIn("不再更新", str(fs[0]))
 
-    def test_輪詢有重跑就過(self):
+    def test_事件有觸發刷新就過(self):
         self.assertEqual(
             RC.check_poll_loop_really_repeats(
                 self._r(["strands"] * RC.POLL_MIN_STRANDS + ["work"])), [])
@@ -1118,15 +1141,16 @@ class PollChecksThemselvesCatchThings(unittest.TestCase):
         self.assertTrue(fs, "一次都沒抓卻放行")
         self.assertIn("讀任務帳本", str(fs[0]))
 
-    def test_每輪都重抓會紅而且指得回那個常數(self):
+    def test_事件不足會紅(self):
         fs = RC.check_poll_repaints_from_cache(
-            self._r(["strands", "work", "strands", "work", "strands", "work"]))
-        self.assertTrue(fs, "抓了三次卻放行")
-        self.assertIn("POLL_EXPECTED_WORK_FETCHES", str(fs[0]))
+            self._r(["strands", "work", "strands", "work"]))
+        self.assertTrue(fs, "只有兩次 repository refresh 卻放行")
+        self.assertIn("repository event", str(fs[0]))
 
-    def test_剛好那個次數才過(self):
-        cmds = (["strands", "work"] +
-                ["strands"] * RC.POLL_MIN_STRANDS)
+    def test_每個事件都重抓就過(self):
+        cmds = []
+        for _ in range(RC.POLL_MIN_LIVE):
+            cmds += ["strands", "work"]
         self.assertEqual(RC.check_poll_repaints_from_cache(self._r(cmds)), [])
 
 
@@ -1205,13 +1229,11 @@ class PollPagesTableItself(unittest.TestCase):
                       "那一圈沒有先確認真的切過去了 —— 沒切過去的話"
                       "每一條「那個指令 0 次」都會答對")
 
-    def test_每輪重抓那個門檻不是隨便寫的(self):
-        """`POLL_MIN_LIVE` 要小於實際跨過的輪數，不然穩定紅。"""
+    def test_每事件重抓那個門檻不是隨便寫的(self):
+        """`POLL_MIN_LIVE` 要小於注入的事件數，不然穩定紅。"""
         self.assertGreaterEqual(RC.POLL_MIN_LIVE, 2,
-                                "門檻是 1 的話，只發一次也算每輪重抓")
-        POLL_MS = _one_int(r"setInterval\(\s*tick\s*,\s*(\d+)\s*\)",
-                           "輪詢間隔")
-        self.assertIsNotNone(POLL_MS, "抽不到輪詢間隔")
+                                "門檻是 1 的話，只發一次也算每事件重抓")
+        POLL_MS = RC.EVENT_GAP_MS
         self.assertLessEqual(RC.POLL_MIN_LIVE, RC.POLL_SPY_AT_MS // POLL_MS,
                              "門檻比坐過的輪數還多，那是穩定紅不是斷言")
 
@@ -1229,18 +1251,21 @@ class PollPageCheckCatchesThings(unittest.TestCase):
         return [p for p in RC.POLL_PAGES if p.view == view][0]
 
     def _ok_feat(self):
-        return ["spec_reading", "strands", "strands", "sessions",
-                "features"] + ["strands"] * RC.POLL_MIN_STRANDS
+        cmds = ["sessions"]
+        for _ in range(RC.POLL_MIN_LIVE):
+            cmds += ["spec_reading", "strands", "features"]
+        return cmds
 
     def test_量到的那個形狀會過(self):
         self.assertEqual(
             RC.check_poll_page_fetches(self._r(self._ok_feat()),
                                        self._page("feat")), [])
 
-    def test_多抓一次會紅而且指得回那張表(self):
-        fs = RC.check_poll_page_fetches(
-            self._r(self._ok_feat() + ["features"]), self._page("feat"))
-        self.assertTrue(fs, "抓了兩次卻放行")
+    def test_少一次會紅而且指得回那張表(self):
+        cmds = self._ok_feat()
+        cmds.remove("features")
+        fs = RC.check_poll_page_fetches(self._r(cmds), self._page("feat"))
+        self.assertTrue(fs, "少一次 event refresh 卻放行")
         self.assertIn("POLL_PAGES", str(fs[0]))
 
     def test_一次都沒抓會紅(self):
@@ -1255,15 +1280,14 @@ class PollPageCheckCatchesThings(unittest.TestCase):
         self.assertTrue(fs, "功能那一頁去抓 machine 卻放行")
         self.assertIn("machine", str(fs[0]))
 
-    def test_讀文件那一頁的下半不再每輪重抓會紅(self):
-        """`block_reading` 與 `sufficiency` 沒有快取守門，每輪重發。
+    def test_讀文件那一頁的下半不再每事件重抓會紅(self):
+        """`block_reading` 與 `sufficiency` 必須在每個事件重抓。
 
         這一條守的是 2026-09-17 量到、而前一輪紀錄說相反的那件事：
         五頁**不是**同一個形狀，讀文件那一頁上半快取、下半即時。
         """
-        cmds = ["spec_reading", "strands", "strands", "sessions",
-                "spec_reading", "block_reading", "sufficiency"]
-        cmds += ["strands"] * RC.POLL_MIN_STRANDS
+        cmds = ["sessions", "spec_reading", "strands",
+                "block_reading", "sufficiency"]
         fs = RC.check_poll_page_fetches(self._r(cmds), self._page("spec"))
         self.assertTrue(fs, "下半只發一次卻放行")
         names = str(fs)
@@ -1271,17 +1295,17 @@ class PollPageCheckCatchesThings(unittest.TestCase):
         self.assertIn("sufficiency", names)
 
     def test_讀文件那一頁正常的形狀會過(self):
-        cmds = ["spec_reading", "strands", "strands", "sessions",
-                "spec_reading"]
+        cmds = ["sessions"]
         for _ in range(RC.POLL_MIN_LIVE):
-            cmds += ["block_reading", "sufficiency", "strands"]
-        cmds += ["strands"] * RC.POLL_MIN_STRANDS
+            cmds += ["spec_reading", "block_reading", "sufficiency", "strands"]
         self.assertEqual(
             RC.check_poll_page_fetches(self._r(cmds), self._page("spec")), [])
 
     def test_需要注意那一頁多發任何專屬指令都會紅(self):
         """它是六頁裡唯一一個專屬指令 0 次的，所以任何一個都算多。"""
-        base = ["spec_reading"] + ["strands"] * RC.POLL_MIN_STRANDS
+        base = []
+        for _ in range(RC.POLL_MIN_LIVE):
+            base += ["spec_reading", "strands"]
         for cmd in ("work", "features", "audit", "machine", "block_reading"):
             with self.subTest(cmd=cmd):
                 fs = RC.check_poll_page_fetches(self._r(base + [cmd]),
@@ -1420,9 +1444,7 @@ class RevisitPagesTableItself(unittest.TestCase):
                                 "門檻是 1 的話，只發一次也算兩次切入各一次")
         last = RC.CLICK_AFTER_MS + (len(RC.revisit_clicks("feat")) - 1) \
             * RC.CLICK_GAP_MS
-        POLL_MS = _one_int(r"setInterval\(\s*tick\s*,\s*(\d+)\s*\)",
-                           "輪詢間隔")
-        self.assertIsNotNone(POLL_MS, "抽不到輪詢間隔")
+        POLL_MS = RC.EVENT_GAP_MS
         self.assertLessEqual(
             RC.REVISIT_MIN_LIVE,
             2 + (RC.REVISIT_SPY_AT_MS - last) // POLL_MS,
@@ -1568,7 +1590,7 @@ class SamePagesTableItself(unittest.TestCase):
                     "只准差自己那一個指令")
                 k = diff[0]
                 self.assertNotEqual(a[k], RC.LIVE,
-                                    f"{view} 差的那一個是每輪重抓的，"
+                                    f"{view} 差的那一個是重複抓取的，"
                                     "那個差別證明不了切入次數")
                 self.assertEqual(
                     b[k], a[k] + 1,

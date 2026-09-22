@@ -210,6 +210,31 @@ CLICK_AFTER_MS = 2500
 # 這個數字加上 `CLICK_AFTER_MS` 仍然要小於 `--virtual-time-budget`。
 CLICK_GAP_MS = 400
 
+# Product code is event-driven. These times belong only to the offline harness:
+# they deterministically simulate Rust's debounced `forseti://changed` event.
+EVENT_GAP_MS = 2000
+ACT_EVENT_TIMES_MS = (5500,)
+POLL_EVENT_TIMES_MS = (4000, 6000, 8000, 10000)
+
+ACTION_WORK_FIXTURE = {
+    "ok": True,
+    "total": 1,
+    "active": 1,
+    "tasks": [{
+        "id": "render-check-task",
+        "state": "RUNNING",
+        "objective": "驗證事件刷新不會沖掉待確認狀態",
+        "events_total": 0,
+        "events": [],
+        "continuity": {},
+        "next_step": {"objective": "完成離線事件測試"},
+    }],
+    "steps": [],
+    "steps_more": 0,
+    "blocked": [],
+    "active_rows": [],
+}
+
 
 # 傾印觀察器結果要比最後一下再晚多久（毫秒，虛擬時間）。
 #
@@ -341,10 +366,44 @@ def _inject_clicks(page: Path, sels: tuple[str, ...], after_ms: int) -> None:
     page.write_text(h, encoding="utf-8")
 
 
+def _inject_repository_events(page: Path, times_ms: tuple[int, ...]) -> None:
+    """Emit deterministic file-change events in the offline harness only."""
+    if not times_ms:
+        return
+    h = page.read_text(encoding="utf-8")
+    calls = "\n".join(
+        "setTimeout(function(){ "
+        "window.__FORSETI_HARNESS_EMIT__ && "
+        "window.__FORSETI_HARNESS_EMIT__('forseti://changed'); }, %d);" % ms
+        for ms in times_ms
+    )
+    js = "<script>\n%s\n</script>\n" % calls
+    if "</body>" in h:
+        h = h.replace("</body>", js + "</body>", 1)
+    else:
+        h += js
+    page.write_text(h, encoding="utf-8")
+
+
+def _inject_fixture_overrides(page: Path, overrides: dict) -> None:
+    """Override selected fake backend responses before app.js starts."""
+    if not overrides:
+        return
+    h = page.read_text(encoding="utf-8")
+    tag = '<script src="app.js"></script>'
+    if tag not in h:
+        raise CannotRun("暫存頁面裡找不到 app.js，fixture override 插不進去")
+    blob = json.dumps(overrides, ensure_ascii=False).replace("<", "\\u003c")
+    inject = "<script>Object.assign(FIX, %s);</script>\n%s" % (blob, tag)
+    page.write_text(h.replace(tag, inject, 1), encoding="utf-8")
+
+
 def render(session: str = "", fake: bool = False,
            outdir: Path | None = None, timeout: int = 120,
            clicks: tuple[str, ...] = (), spy: bool = False,
-           budget_ms: int = 8000, spy_at_ms: int | None = None) -> Render:
+           budget_ms: int = 8000, spy_at_ms: int | None = None,
+           event_times_ms: tuple[int, ...] = (),
+           fixture_overrides: dict | None = None) -> Render:
     """產頁面、丟進 Chrome、把跑完 JS 的 DOM 撈回來。
 
     `clicks` 給的是 CSS 選擇器，照相之前依序按下去。
@@ -354,9 +413,8 @@ def render(session: str = "", fake: bool = False,
     結果寫進 DOM 的 `#rcSpy`。預設關著 —— 它多插兩段 script，
     而多數檢查不需要它，能少一層就少一層。
 
-    `budget_ms` 是照相的時刻（虛擬時間）。**它是一個斷言的一部分，
-    不是一個效能旋鈕** —— 動作鈕那一組要的正是「按下之後跨過
-    一次輪詢再照」，理由寫在 `ACT_BUDGET_MS`。
+    `event_times_ms` 只在離線 harness 發出合成 `forseti://changed`。
+    產品碼不含 timer polling；這個參數讓 render test 可重現事件刷新。
 
     `spy_at_ms` 是觀察器傾印的時刻。不給的話跟著最後一下走
     （那是動作鈕那一組要的：按完就看）。**輪詢那一組要的相反** ——
@@ -390,10 +448,12 @@ def render(session: str = "", fake: bool = False,
         page = out / "index.html"
         if not page.exists():
             raise CannotRun(f"harness 沒有寫出 index.html：{out}")
+        _inject_fixture_overrides(page, fixture_overrides or {})
         if spy:
             # 順序有意義：觀察器要在 app.js 之前，傾印要在最後一下之後。
             _inject_invoke_spy(page)
         _inject_clicks(page, clicks, CLICK_AFTER_MS)
+        _inject_repository_events(page, event_times_ms)
         if spy:
             _inject_spy_dump(
                 page,
@@ -1174,13 +1234,13 @@ ARMED_LABEL = "再按一次確定"
 # **這個數字自己就是一條斷言。** 它要落在一個窗裡：
 #
 #   按下那一刻            3300（CLICK_AFTER_MS + 2 * CLICK_GAP_MS）
-#   ＋2000 以上           跨過至少一次輪詢（`setInterval(tick, 2000)`）
+#   repository event      5500（ACT_EVENT_TIMES_MS）
 #   ＋5000 以下           確認窗自己的計時器還沒把 armed 還原
 #
 # 也就是 (5300, 8300)。取 7000，兩邊各留一千多毫秒。
 #
-# 為什麼一定要跨過輪詞：2026-09-17 抓到的那個 bug 正是
-# 「輪詢重畫把 armed 沖掉」，照相時機若落在第一次輪詢之前，
+# 為什麼一定要跨過事件：2026-09-17 抓到的那類 bug 正是
+# 「背景重畫把 armed 沖掉」，照相時機若落在事件之前，
 # 那個 bug 會照出一張乾淨的畫面。預設的 8000 只比 8300 早 300，
 # 窄到一次時序抖動就會翻面 —— 而翻面之後是**綠的**，
 # 也就是往「看起來沒事」的方向壞。
@@ -1451,9 +1511,9 @@ def check_blast_cache_badge(r: Render) -> list[Finding]:
     return []
 
 
-# ------------------------------------------------- 輪詢那一條路（誰畫的）
+# ------------------------------------------- repository event 路徑（誰畫的）
 
-# 切到「在做什麼」之後，坐著不動，看那幾輪各自發了什麼。
+# 切到「在做什麼」之後，坐著不動，看合成事件各自發了什麼。
 POLL_CLICKS = ("#burgerBtn", '.vw[data-view="work"]')
 
 # 這一組傾印與照相的時刻（虛擬時間毫秒）。
@@ -1464,34 +1524,24 @@ POLL_CLICKS = ("#burgerBtn", '.vw[data-view="work"]')
 #
 #   最後一下        2900（CLICK_AFTER_MS + CLICK_GAP_MS）
 #   傾印           10500，也就是之後還有 7600 毫秒
-#   輪詢間隔        2000（`setInterval(tick, 2000)`）
-#   所以中間至少跨過 3 輪
+#   合成事件間隔    2000（EVENT_GAP_MS）
+#   所以中間至少跨過 3 個事件
 #
-# 倒得太早的話，輪詢還沒跑幾次，「重抓了幾次」這個問題會因為樣本
-# 只有一輪而永遠答對 —— 往綠的方向壞。
+# 倒得太早的話，事件還沒發出幾次，「重抓了幾次」會因為樣本
+# 只有一次而永遠答對 —— 往綠的方向壞。
 POLL_SPY_AT_MS = 10500
 POLL_BUDGET_MS = 11000
 
-# 坐過那幾輪，`strands` 至少要被發幾次。
+# 合成事件發出後，`strands` 至少要被發幾次。
 #
-# 實測是 6（初次那一下加上五輪）。**寫 3 不寫 6**，因為這一條要
-# 回答的是「輪詢在真的瀏覽器裡到底有沒有重跑」，不是「跑得剛好幾次」。
+# **寫 3 不綁死實測值**，因為這一條要回答的是「事件在瀏覽器裡
+# 到底有沒有觸發刷新」，不是「虛擬時間剛好跑了幾次」。
 # 綁死 6 的話，虛擬時間的一次抖動就會紅，而紅的原因跟這條在問的事無關。
 POLL_MIN_STRANDS = 3
 
-# 坐過那幾輪，「在做什麼」那一頁重抓幾次任務帳本。
-#
-# **這個 1 是量出來的，不是訂出來的。** 2026-09-17 實測：切過去之後
-# 跨過至少三輪，`work` 這個指令總共只發了一次，也就是切進去那一次。
-# 之後每一輪 `renderWork()` 都跑了，但 `app.js` 的 `if (!workCache)`
-# 讓它從快取重畫，一次都沒有回頭去問後端。
-#
-# 寫成常數是為了讓這個事實有一個看得到的位置。它不是「應該如此」，
-# 是「現在如此」，而現在如此代表使用者坐在那一頁上，帳本更新了
-# 畫面也不會變，沒有錯誤訊息，跟「真的沒有新任務」長得一模一樣。
-# 要不要改成會重抓，是快取政策，規格沒有定義，所以這裡不替 owner 決定，
-# 只把它變成一條會說話的斷言（見 `.forseti/BLOCKERS.md` B-16）。
-POLL_EXPECTED_WORK_FETCHES = 1
+# 每個 repository event 都清除 backend cache，因此「在做什麼」也要
+# 重新抓帳本。這個標籤只用在診斷訊息，不是產品輪詢間隔。
+POLL_EXPECTED_WORK_FETCHES = "每事件"
 
 
 def _spy_cmds(r: Render, where: str):
@@ -1527,18 +1577,17 @@ def _spy_cmds(r: Render, where: str):
 
 
 def check_poll_loop_really_repeats(r: Render) -> list[Finding]:
-    """輪詢在真的瀏覽器裡真的重跑，不是只有載入時那一次。
+    """repository events 在瀏覽器裡真的觸發刷新。
 
-    **這一條跟原始碼層那一條不是同一件事。** `tests/test_ui_contract.py`
-    守的是 `setInterval(tick, 2000)` 這一行還在、分派那幾行還在；
-    這一條守的是那一行在瀏覽器裡真的有效果。中間隔著的東西
+    **這一條跟原始碼層那一條不是同一件事。** 靜態測試守 listener
+    與事件分派還在；這一條守的是合成事件在瀏覽器裡真的有效果。中間隔著
     （`loadFoundation()` 的 promise、tick 自己的 try/catch、
-    每一輪都要成功回來的 `invoke`）任何一個壞掉，原始碼那一條仍然全綠。
+    每次都要成功回來的 `invoke`）任何一個壞掉，靜態測試仍可能全綠。
 
     量的是 `strands` 的次數，因為 `tick` 的第一件事就是發它。
-    發了幾次等於這條線真的跑了幾輪。
+    發了幾次等於事件刷新真的跑了幾次。
     """
-    where = "整頁 ／ 兩秒一輪的輪詢"
+    where = "整頁 ／ repository event 刷新"
     cmds, bad = _spy_cmds(r, where)
     if bad:
         return bad
@@ -1555,13 +1604,12 @@ def check_poll_loop_really_repeats(r: Render) -> list[Finding]:
 
 
 def check_poll_repaints_from_cache(r: Render) -> list[Finding]:
-    """切到「在做什麼」之後坐著不動，那幾輪重抓了幾次任務帳本。
+    """切到「在做什麼」後，repository events 是否重抓任務帳本。
 
     **這一條補的是「分不出那一格是誰畫的」那個盲點。** 在這之前，
     畫面上有內容只證明有人畫過，畫的是 `syncView`（切分頁那一下）
-    還是輪詢（之後每兩秒），DOM 上分不出來，兩條路畫出來的
-    HTML 一模一樣。指令清單分得出來：切分頁那一下會清快取所以會重抓，
-    輪詢那幾輪不會。
+    還是 repository event，DOM 上分不出來，兩條路畫出的 HTML 一模一樣。
+    指令清單可以直接證明每個事件有沒有重新抓後端資料。
 
     兩個方向都會紅，而兩邊的症狀不一樣：
 
@@ -1571,12 +1619,12 @@ def check_poll_repaints_from_cache(r: Render) -> list[Finding]:
     2026-09-17 量出來寫進 `POLL_EXPECTED_WORK_FETCHES` 的一個事實，
     改動它的人要一起改那個常數與 B-16，不能讓它安靜地變。
     """
-    where = "在做什麼 ／ 輪詢重畫"
+    where = "在做什麼 ／ repository event 刷新"
     cmds, bad = _spy_cmds(r, where)
     if bad:
         return bad
     n = cmds.count("work")
-    if n == POLL_EXPECTED_WORK_FETCHES:
+    if n >= POLL_MIN_LIVE:
         return []
     if n == 0:
         return [Finding(
@@ -1587,12 +1635,10 @@ def check_poll_repaints_from_cache(r: Render) -> list[Finding]:
             actual=f"一次都沒抓（全部指令：{'、'.join(cmds)}）")]
     return [Finding(
         where=where,
-        symptom="輪詢重抓任務帳本的次數變了，快取政策被動過，"
-                "而這個數字是量出來的事實，不是預設值",
-        expected=f"跨過至少三輪只抓 {POLL_EXPECTED_WORK_FETCHES} 次"
-                 "（之後每一輪都從 workCache 重畫）",
-        actual=f"抓了 {n} 次。要改的話連 POLL_EXPECTED_WORK_FETCHES "
-               "與 BLOCKERS.md 的 B-16 一起改")]
+        symptom="repository event 沒有讓任務帳本持續更新，"
+                "畫面可能停在舊快取且沒有錯誤訊息",
+        expected=f"至少 {POLL_MIN_LIVE} 次 work（{POLL_EXPECTED_WORK_FETCHES}）",
+        actual=f"只抓了 {n} 次")]
 
 
 # ------------------------------------------ 另外五頁：誰畫的（同一個問題）
@@ -1607,12 +1653,12 @@ PAGE_CMDS = ("work", "features", "audit", "machine",
              "spec_reading", "block_reading", "sufficiency")
 
 # 期望值的第二種：不是某個次數，是「每一輪都重抓」。
-LIVE = "每輪"
+LIVE = "重複"
 
-# 「每輪重抓」至少要看到幾次。
+# 事件路徑與重複切入路徑共用這個 marker；兩邊都至少要看到幾次。
 #
 # 寫 3 不寫實測的 5，跟 `POLL_MIN_STRANDS` 同一個理由：這一條問的是
-# 「這一條路在瀏覽器裡到底有沒有每輪重跑」，不是「跑得剛好幾次」。
+# 「這一條路在瀏覽器裡到底有沒有重跑」，不是「跑得剛好幾次」。
 # 綁死實測值的話，虛擬時間抖一下就紅，而紅的原因跟這條在問的事無關。
 POLL_MIN_LIVE = 3
 
@@ -1628,14 +1674,14 @@ PollPage = namedtuple("PollPage", "view zh expect note")
 # 也不是從上一輪的紀錄抄的（抄來的那一份正是這一輪推翻掉的東西）。
 POLL_PAGES = (
     PollPage("feat", "功能",
-             {"spec_reading": 1, "features": 1},
-             "切進去抓一次，之後四輪都從 featCache 重畫"),
+             {"spec_reading": LIVE, "features": LIVE},
+             "每次 repository event 都清快取並重抓"),
     PollPage("audit", "自我審計",
-             {"spec_reading": 1, "audit": 1},
-             "切進去抓一次，之後四輪都從 auditCache 重畫"),
+             {"spec_reading": LIVE, "audit": LIVE},
+             "每次 repository event 都清快取並重抓"),
     PollPage("machine", "這台機器",
-             {"spec_reading": 1, "machine": 1},
-             "切進去抓一次，之後四輪都從 machCache 重畫"),
+             {"spec_reading": LIVE, "machine": LIVE},
+             "每次 repository event 都清快取並重抓"),
     # **這一頁不是同一個形狀，而上一輪的紀錄說它是。**
     #
     # `spec_reading` 確實只抓兩次（載入那一次加切進去那一次，
@@ -1647,16 +1693,16 @@ POLL_PAGES = (
     #
     # 一頁兩種行為，而 B-16 的修法是按頁選的，所以這件事要有位置。
     PollPage("spec", "讀文件",
-             {"spec_reading": 2, "block_reading": LIVE, "sufficiency": LIVE},
-             "上半快取、下半每輪重抓，同一頁兩種行為"),
+             {"spec_reading": LIVE, "block_reading": LIVE, "sufficiency": LIVE},
+             "每次 repository event 都刷新閱讀與閘門資料"),
     # **這一頁一個專屬指令都不發**，連切進去那一次都沒有。
     # `syncView()` 的 `else renderList()`（`app.js:3076`）沒有
     # 對應的 `invoke`，`renderList` 讀的是 `tick` 已經抓回來的
     # `strands`。所以它是這六頁裡唯一真的即時的一頁 ——
     # 帳本更新，它下一輪就會變。這不是推論，是這張表量出來的。
     PollPage("list", "需要注意",
-             {"spec_reading": 1},
-             "沒有自己的指令，靠 strands 每輪重畫，唯一即時的一頁"),
+             {"spec_reading": LIVE},
+             "沒有自己的指令，靠每次 event 的 strands 重畫"),
 )
 
 
@@ -1722,9 +1768,10 @@ def check_poll_page_fetches(r: Render, pg: PollPage) -> list[Finding]:
             if n < POLL_MIN_LIVE:
                 out.append(Finding(
                     where=where,
-                    symptom=f"`{cmd}` 這條路本來每一輪都會重抓，現在沒有。"
+                    symptom=f"`{cmd}` 這條路本來每個 repository event "
+                            "都會重抓，現在沒有。"
                             "那一格會停在載入時那一刻，而且沒有錯誤訊息",
-                    expected=f"坐過 {POLL_SPY_AT_MS} 毫秒至少 "
+                    expected=f"POLL_PAGES：事件時窗內至少 "
                              f"{POLL_MIN_LIVE} 次（{pg.note}）",
                     actual=f"只發了 {n} 次（全部指令：{'、'.join(cmds)}）"))
         elif n != want:
@@ -1768,11 +1815,11 @@ REVISIT_B_VIEW = "list"
 #
 # **這一組刻意不坐久。** `POLL_PAGES` 那一組坐 10500 是要看
 # 「坐著不動那幾輪做了什麼」；這一組問的是「切回來那一下做了什麼」，
-# 坐久了只會讓每輪重發的那幾個指令堆更多次，把要看的事實淹掉。
+# 坐久了只會讓重複發送的指令堆更多次，把要看的事實淹掉。
 REVISIT_SPY_AT_MS = 6000
 REVISIT_BUDGET_MS = 6500
 
-# 這一組裡「每輪重抓」至少要看到幾次。
+# 這一組裡「重複抓取」至少要看到幾次。
 #
 # **不是 `POLL_MIN_LIVE` 的 3。** 這一組的時窗只有 1500 毫秒，
 # 跨不過三輪，拿那個門檻來套會因為時窗而紅，紅的原因跟這條在問的
@@ -1780,7 +1827,7 @@ REVISIT_BUDGET_MS = 6500
 # 分得出來的東西。
 #
 # 代價寫在 `check_revisit_refetches` 的說明裡：**這一組分不出
-# 「每輪重發」與「每次切入各發一次」**，那是 `POLL_PAGES` 的事。
+# 「背景事件」與「每次切入各發一次」**，那是 `POLL_PAGES` 的事。
 REVISIT_MIN_LIVE = 2
 
 
@@ -1810,14 +1857,14 @@ REVISIT_PAGES = (
                 "兩次切入各抓一次（`auditCache = null`）"),
     RevisitPage("machine", "這台機器", {"spec_reading": 1, "machine": 2},
                 "兩次切入各抓一次（`machCache = null`）"),
-    # 這一頁的 3 是載入那一次加兩次切入。下半那兩個本來就每輪重發
+    # 這一頁的 3 是載入那一次加兩次切入。下半那兩個會重複發送
     # （`POLL_PAGES` 量到的），所以它們在這一組證明不了清快取的效力，
     # 列進來只是為了讓「缺席也是斷言」對整份 `PAGE_CMDS` 成立。
     RevisitPage("spec", "讀文件",
                 {"spec_reading": 3, "block_reading": LIVE,
                  "sufficiency": LIVE},
                 "載入一次加兩次切入（`specCache = null`）；"
-                "下半那兩個本來就每輪重發"),
+                "下半那兩個會隨重複切入發送"),
 )
 
 
@@ -1912,7 +1959,7 @@ def check_revisit_refetches(r: Render, pg: RevisitPage) -> list[Finding]:
         漢堡哪天壞掉這一組仍然全綠。守那件事的是
         `check_burger_opens_picker`。
 
-    三，**分不出「每輪重發」與「每次切入各一次」。** 時窗只有
+    三，**分不出「背景事件重發」與「每次切入各一次」。** 時窗只有
         1500 毫秒，`LIVE` 在這一組只斷言到 `REVISIT_MIN_LIVE`。
         那個區別是 `check_poll_page_fetches` 的射程。
     """
@@ -1954,7 +2001,7 @@ def samepage_clicks(view: str) -> tuple[str, ...]:
     **下數、間隔、傾印時刻跟 `revisit_clicks()` 完全一樣**，
     差的只有中間那一下按的是哪一頁。控制變因只留一個，
     兩組的數字才能直接比 —— 下數不同的話，多出來的那幾百毫秒
-    會讓每輪重發的那些指令堆得不一樣多，而那跟要問的事無關。
+    會讓重複發送的指令堆得不一樣多，而那跟要問的事無關。
     """
     return ("#burgerBtn", '.vw[data-view="%s"]' % view) * 3
 
@@ -1978,12 +2025,12 @@ SAME_PAGES = (
              "三次切入各抓一次（`syncView()` 不看 `view` 有沒有變）"),
     SamePage("machine", "這台機器", {"spec_reading": 1, "machine": 3},
              "三次切入各抓一次（`syncView()` 不看 `view` 有沒有變）"),
-    # 這一頁的 4 是載入那一次加三次切入。下半那兩個本來就每輪重發。
+    # 這一頁的 4 是載入那一次加三次切入。下半那兩個會重複發送。
     SamePage("spec", "讀文件",
              {"spec_reading": 4, "block_reading": LIVE,
               "sufficiency": LIVE},
              "載入一次加三次切入（`syncView()` 不看 `view` 有沒有變）；"
-             "下半那兩個本來就每輪重發"),
+             "下半那兩個會隨重複切入發送"),
 )
 
 
@@ -2003,7 +2050,7 @@ def check_samepage_refetches(r: Render, pg: SamePage) -> list[Finding]:
     一，**驗不到漢堡**。`HTMLElement.click()` 對 `hidden` 底下的
         元素照樣派送事件，守那件事的是 `check_burger_opens_picker`。
 
-    二，**分不出「每輪重發」與「每次切入各一次」**。時窗一樣只有
+    二，**分不出「背景事件重發」與「每次切入各一次」**。時窗一樣只有
         1500 毫秒，`LIVE` 在這一組同樣只斷言到 `REVISIT_MIN_LIVE`。
 
     **還有一件是這一組自己的：它證明不了「使用者看得到新資料」。**
@@ -2155,7 +2202,9 @@ def main(argv: list[str]) -> int:
     # 理由寫在 `ACT_CLICKS` 上面：那一下會寫帳本。
     try:
         ra = render(session=session, clicks=ACT_CLICKS, spy=True,
-                    budget_ms=ACT_BUDGET_MS)
+                    budget_ms=ACT_BUDGET_MS,
+                    event_times_ms=ACT_EVENT_TIMES_MS,
+                    fixture_overrides={"work": ACTION_WORK_FIXTURE})
     except CannotRun as e:
         print(f"動作鈕那一下驗不了：{e}")
         print("這不是通過。")
@@ -2179,9 +2228,10 @@ def main(argv: list[str]) -> int:
     # 指令清單分得出來，所以這一次開觀察器，而且坐得比別組久。
     try:
         rp = render(session=session, clicks=POLL_CLICKS, spy=True,
-                    budget_ms=POLL_BUDGET_MS, spy_at_ms=POLL_SPY_AT_MS)
+                    budget_ms=POLL_BUDGET_MS, spy_at_ms=POLL_SPY_AT_MS,
+                    event_times_ms=POLL_EVENT_TIMES_MS)
     except CannotRun as e:
-        print(f"輪詢那一組驗不了：{e}")
+        print(f"repository event 那一組驗不了：{e}")
         print("這不是通過。")
         return 2
     pl = run_all(rp, POLL_CHECKS)
@@ -2189,7 +2239,7 @@ def main(argv: list[str]) -> int:
           f"console {len(rp.console)} 行，"
           f"指令 {_tag_text(rp.dom, SPY_ID) or '（觀察器沒回話）'}")
     if keep:
-        print(f"輪詢那一份留著：{rp.outdir}")
+        print(f"repository event 那一份留著：{rp.outdir}")
     else:
         shutil.rmtree(rp.outdir, ignore_errors=True)
     findings = findings + pl
@@ -2216,7 +2266,8 @@ def main(argv: list[str]) -> int:
             continue
         try:
             rq = render(session=session, clicks=tab_clicks(pg.view), spy=True,
-                        budget_ms=POLL_BUDGET_MS, spy_at_ms=POLL_SPY_AT_MS)
+                        budget_ms=POLL_BUDGET_MS, spy_at_ms=POLL_SPY_AT_MS,
+                        event_times_ms=POLL_EVENT_TIMES_MS)
         except CannotRun as e:
             print(f"分頁 {pg.zh} 那幾輪驗不了：{e}")
             print("這不是通過。")
@@ -2312,10 +2363,10 @@ def main(argv: list[str]) -> int:
         print("注意這句話的範圍：預設那一頁、展開那四格、漢堡、"
               f"{len(TABS)} 個分頁的表頭與列數，"
               "任務卡動作鈕的第一下，"
-              "輪詢那一條路在瀏覽器裡真的重跑，"
+              "repository event 路徑在瀏覽器裡真的重跑，"
               f"以及 {len(TABS)} 個分頁坐著不動的時候，"
               "那幾輪各自回頭問了後端幾次（哪幾個指令從快取重畫、"
-              "哪幾個每輪重抓，每一個都有數字）。"
+              "哪幾個每事件重抓，每一個都有數字）。"
               f"另外 {len(REVISIT_PAGES)} 頁切走再切回來，"
               "那一下有沒有真的回頭問後端（清快取那幾行的效力），"
               f"以及同樣 {len(SAME_PAGES)} 頁連按三次都不切走 —— "
