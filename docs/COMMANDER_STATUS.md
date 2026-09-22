@@ -15,7 +15,7 @@
 | 工作項 | 狀態 | 可做範圍 | 目前證據／阻塞 |
 | --- | --- | --- | --- |
 | `FOR-P0-001` 桌面卡死隔離與定位 | `VERIFIED_COMPLETE`（限縮範圍） | 僅靜態診斷與離線測試；禁止 UI 操作 | tooltip hover 的事件放大已改用 pointer event 並對相同 dot 去重。獨立離線驗證 `95 passed`，commit `5e78264`。此 Gate 只驗證該 hover 修補；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
-| `FOR-P1-001` 持久續作契約 | `RECEIPT_CORRECTION_REQUIRED` | Ledger / recovery contract / focused tests | Worker 已提交 receipt；獨立重跑 focused suite 為 `55 passed`，但 receipt 的 `changed_files` 漏列目前可觀測的 allowed-scope 檔案，無法確認 provenance。已發出單一 receipt 修正工作單；在修正前不得升為 verified。 |
+| `FOR-P1-001` 持久續作契約 | `RECEIPT_CORRECTION_REQUIRED` | Ledger / recovery contract / focused tests | Worker 已提交 receipt；獨立重跑 focused suite 為 `55 passed`，但 receipt 的 `changed_files` 漏列目前可觀測的 allowed-scope 檔案。R1 的第一次修正又與自己的 `git status` 證據矛盾，已依同一張精確工作單重派；在收據可追溯前不得升為 verified。 |
 | `FOR-P1-002` Host delivery adapter | `BLOCKED` | 精確目標、原始指令封包、fail-closed | 依賴 P0 和 P1。禁止前景視窗 fallback 與 timer 作為正常續作引擎。 |
 | `FOR-P2-001` 整合驗收 | `BLOCKED` | 一條完整恢復回路 | 必須由獨立 verifier 驗證；UI 沒有證據即維持未驗證。 |
 
@@ -28,6 +28,8 @@
 `FOR-P0-001` 的 hover event guard 已由 Commander 獨立重跑：`python3 -m pytest -q tests/test_hover_event_guard.py tests/test_ui_contract.py tests/test_poll_overlap.py`，結果 `95 passed`。它只支持「同一 dot 不再造成 hover 重建風暴」；不支持「桌面 app 已完全安全」的結論。
 
 `FOR-P1-001` 的 Worker receipt 宣稱修改 `ledger.py`、`test_f07.py`、`test_task_continue.py`。Commander 獨立重跑 `python3 -m pytest -q tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py`，結果 `55 passed`，且 scoped `git diff --check` 通過；但實際 allowed-scope 工作樹還可見 `recovery_contract.py`、`test_recovery_contract.py` 與 `test_f05.py`。這些檔案可能是本次工作或既有 dirty change，沒有 provenance 就不能猜。因此先要求 Worker 補正或明確排除，驗證 gate 保持關閉。
+
+R1 收據修正後仍不可採信：其文字稱 `recovery_contract.py`「未觀測為 dirty」，但 Commander 的獨立 `git status --short` 顯示它是 untracked；同一收據還把 `test_task_continue.py` 列為 P1 變更，卻未在 reconciliation 的 observed list 中一致處理。這是 receipt contract drift，不是程式測試失敗。Commander 已重派相同且唯一路徑限制為 receipt 的 R1，要求以完整、互不矛盾的路徑清單修正；沒有修正前不會進入 P1 verifier。
 
 ## 更新規則
 
