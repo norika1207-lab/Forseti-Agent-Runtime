@@ -1,6 +1,6 @@
 # Forseti 即時施工狀態
 
-最後依證據更新：2026-09-22 19:01 Asia/Taipei
+最後依證據更新：2026-09-22 19:13 Asia/Taipei
 
 這一頁是 Commander 的 Git 可追蹤狀態，不是 Worker 自述。每次狀態變更都必須能對應到 Git diff、測試輸出、Delivery Receipt 或明確的阻塞證據。
 
@@ -17,8 +17,8 @@
 | `FOR-P0-001` 桌面卡死隔離與定位 | `VERIFIED_COMPLETE`（限縮範圍） | 僅靜態診斷與離線測試；禁止 UI 操作 | tooltip hover 的事件放大已改用 pointer event 並對相同 dot 去重。獨立離線驗證 `95 passed`，commit `5e78264`。此 Gate 只驗證該 hover 修補；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
 | `FOR-P1-001` 持久續作契約 | `VERIFIED_COMPLETE`（限縮範圍） | Ledger / recovery contract / focused tests | Commander 獨立重跑 F05/F07/continuation/recovery suite，結果 `55 passed`；scoped diff check 與 Python compile 也通過。R2 收據逐檔如實標示 Git 狀態，作者 provenance 保留 `UNKNOWN`，不以猜測取代證據。此 Gate 只驗證持久續作政策，未驗證 host transport、桌面或部署。 |
 | `FOR-P1-002` Host delivery adapter | `VERIFIED_COMPLETE`（限縮範圍） | 精確目標、原始指令封包、fail-closed | Commander 獨立重跑 controller/adapter 離線 suite，結果 `10 passed`。controller 拒絕舊 polling 參數，且無前景視窗、AppleScript、點擊或 timer loop。這只驗證 packet production，不驗證任何實機 host transport 或桌面 delivery；UI safety lock 仍有效。 |
-| `FOR-P2-PLAN-001` UI 安全測試計畫 | `RECOVERY_ASSIGNED` | 僅 Delivery Receipt | 計畫文件存在且靜態條款檢查通過，但獨立 verifier 發現 Delivery Receipt 為 0 bytes，故不能驗收。`FOR-P2-PLAN-001-R1` 只允許恢復 receipt；仍禁止啟動、部署、AX 或整合 UI 測試。 |
-| `FOR-P2-001` 整合驗收 | `BLOCKED_UI_SAFETY_PLAN_REQUIRED` | 一條完整恢復回路 | 規格要求 Commander 驗證且 owner 刻意批准的 UI safety test plan 才可啟動。重開機不是解除安全鎖；安全鎖仍啟用。 |
+| `FOR-P2-PLAN-001` UI 安全測試計畫 | `VERIFIED_COMPLETE`（僅文件） | 文件與 Delivery Receipt | R1 獨立 verifier 確認恢復後 receipt 為 3033 bytes、JSON 與 delivered paths 正確、必要安全條款與限定 diff 檢查通過，且沒有 Forseti/Tauri process。這只驗證計畫文件；安全鎖仍啟用。 |
+| `FOR-P2-001` 整合驗收 | `BLOCKED_OWNER_APPROVAL_REQUIRED` | 一條完整恢復回路 | 尚缺 owner 對 exact Git SHA、單次受控測試的即時明確批准。文件驗證、重開機、舊批准都不是執行許可；不得自動啟動、部署、AX 或操作 UI。 |
 
 完整機器可讀 DAG：`.forseti/commander-state.json`。
 
@@ -37,6 +37,8 @@ R1 收據修正後仍不可採信：其文字稱 `recovery_contract.py`「未觀
 R2 已完成。Commander 獨立重跑 `python3 -m pytest -q tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py`，結果 `55 passed`；並以 scoped `git diff --check` 與 `py_compile` 檢查交付檔案。收據的 provenance 無法從 Git 工作樹推得，已明確維持 `UNKNOWN`，而非虛構作者。P1 的驗證範圍只涵蓋持久 decision/ledger 行為，下一張 `FOR-P1-002` 只能開發 fail-closed host adapter 的離線邏輯，絕不解除 UI safety lock。
 
 `FOR-P1-002` 已由 Commander 獨立重跑 `python3 -m pytest -q tests/test_controller_contract.py tests/test_desktop_adapter.py`，結果 `10 passed`。靜態掃描未發現 `frontmost`、`osascript`、`cliclick`、`setInterval` 或 `sleep 10`；controller 也會在執行 adapter 前拒絕 `--interval`、`--idle`、`--once`、`--dry-run`。這是離線 fail-closed 驗證，不是對任一桌面程式注入指令的成功聲明。
+
+`FOR-P2-PLAN-001-R1` 已完成獨立複驗：恢復後 Delivery Receipt 為非空有效 JSON，`task_id`／`SUBMITTED`／兩條 delivered paths 精確；必要條款掃描、tracked 與 untracked diff check 均無診斷，且未發現 Forseti/Tauri process。舊的失敗驗證收據保留不動。這項完成只代表安全測試計畫文件可供 owner 審閱，不代表 Forseti.app 安全，也不授權 `FOR-P2-001` 自動執行；任何未來 UI launch 前仍必須取得 owner 對 exact Git SHA 的當下明確批准。
 
 ## 更新規則
 

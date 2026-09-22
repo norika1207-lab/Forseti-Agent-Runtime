@@ -1,0 +1,47 @@
+{
+  "task_id": "FOR-P2-PLAN-001",
+  "state": "SUBMITTED",
+  "submitted_at": "2026-09-22T19:13:00+0800",
+  "recovery_work_order": "FOR-P2-PLAN-001-R1",
+  "recovery_key": "FOR-P2-PLAN-001:receipt-recovery-20260922T1901+0800",
+  "delivered_paths": [
+    "docs/UI_SAFETY_TEST_PLAN_2026-09-22.md",
+    ".forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json"
+  ],
+  "static_validation": [
+    {
+      "command": "rg -n '單一整合宣稱|離線 Preflight|一次一操作邊界|立即停止條件|非 UI Recovery|明確禁止|owner.*明確批准|ui_safety_lock.*ACTIVE|重新開機.*不.*批准' docs/UI_SAFETY_TEST_PLAN_2026-09-22.md",
+      "result": "passed: all required safety-plan clauses were found"
+    },
+    {
+      "command": "git diff --check -- docs/UI_SAFETY_TEST_PLAN_2026-09-22.md .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json",
+      "result": "passed"
+    },
+    {
+      "command": "python3 -m json.tool .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json",
+      "result": "passed after recovery write"
+    }
+  ],
+  "exact_scoped_git_status": {
+    "command": "git status --short -- docs/UI_SAFETY_TEST_PLAN_2026-09-22.md .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json",
+    "output": [
+      "?? .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json",
+      "?? docs/UI_SAFETY_TEST_PLAN_2026-09-22.md"
+    ],
+    "scope_note": "This records only the two allowed delivery paths; unrelated pre-existing worktree changes are outside this receipt."
+  },
+  "acceptance_evidence": [
+    "The plan defines exactly one controlled Source Tree hover integration claim and does not claim the desktop is safe.",
+    "The plan specifies offline preflight, sequential one-operation gates, fail-closed stop conditions, and a non-UI recovery path.",
+    "The plan requires owner explicit approval immediately before any future UI launch; reboot is not approval and ui_safety_lock remains ACTIVE.",
+    "The plan prohibits AX, Accessibility, scripted mouse or keyboard input, foreground-window automation, polling, deployment, Tauri integration, and automatic UI driving."
+  ],
+  "remaining_unknowns": [
+    "No real Forseti desktop integration behavior has been exercised by this document-only work order.",
+    "The Rust file-event path has not been proven to replace every high-cost refresh path.",
+    "The controlled UI test still requires a new independent document verification and immediate owner approval for the exact SHA before launch.",
+    "This receipt does not authorize deployment, UI launch, AX, Accessibility, mouse, keyboard, foreground-window automation, or polling."
+  ],
+  "no_ui_action_statement": "No Forseti.app, Tauri, deployment, AX, Accessibility, mouse, keyboard, foreground-window, polling, or other UI action was performed while producing or recovering this receipt.",
+  "verification_boundary": "SUBMITTED only; an independent verifier must recheck this receipt and the plan before FOR-P2-PLAN-001 can become VERIFIED_COMPLETE. ui_safety_lock remains ACTIVE."
+}
