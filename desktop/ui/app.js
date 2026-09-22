@@ -2922,9 +2922,15 @@ function jump(n) {
 /* ── 漢堡浮層 §3.4 ───────────────────────────── */
 
 const pop = $("pop");
-document.addEventListener("mouseover", (e) => {
+let tipDot = null;
+document.addEventListener("pointerover", (e) => {
   const d = e.target.closest(".d");
-  if (!d || !d.dataset.tip) { pop.hidden = true; return; }
+  if (!d || !d.dataset.tip) { tipDot = null; pop.hidden = true; return; }
+  // Pointer movement inside one dot produces many mouseover-equivalent
+  // events. Do not rebuild the tooltip or rescan siblings until the target
+  // actually changes; this keeps hover from becoming an event/render storm.
+  if (d === tipDot) return;
+  tipDot = d;
   const host = d.closest(".dots");
   const sibs = [...host.querySelectorAll(".d")].filter((x) => x.dataset.tip);
   // 同一時間點擠了很多工具 → 一列一列像漢堡疊起來
@@ -2937,8 +2943,11 @@ document.addEventListener("mouseover", (e) => {
   pop.style.left = Math.max(6, Math.min(window.innerWidth - 290, r.left - 8)) + "px";
   pop.style.top = (r.bottom + 6) + "px";
 });
-document.addEventListener("mouseout", (e) => {
-  if (!e.relatedTarget || !e.relatedTarget.closest(".pop, .d")) pop.hidden = true;
+document.addEventListener("pointerout", (e) => {
+  if (!e.relatedTarget || !e.relatedTarget.closest(".pop, .d")) {
+    tipDot = null;
+    pop.hidden = true;
+  }
 });
 
 

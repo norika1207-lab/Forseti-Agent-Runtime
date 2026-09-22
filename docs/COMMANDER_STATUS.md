@@ -14,7 +14,7 @@
 
 | 工作項 | 狀態 | 可做範圍 | 目前證據／阻塞 |
 | --- | --- | --- | --- |
-| `FOR-P0-001` 桌面卡死隔離與定位 | `STALLED` | 僅靜態診斷與離線測試；禁止 UI 操作 | 原指派 task 最後一輪為 `interrupted`，沒有新工具輸出或 Delivery Receipt。已確認前端未接 Rust `.forseti` 檔案事件，卻每 2 秒呼叫 Python `strands` 並重畫 Source Tree；這是待驗證的高成本刷新路徑，尚非唯一根因。 |
+| `FOR-P0-001` 桌面卡死隔離與定位 | `SUBMITTED` | 僅靜態診斷與離線測試；禁止 UI 操作 | 已修補 tooltip hover 的事件放大：改用 pointer event 並對相同 dot 去重，避免移動游標時反覆重建 tooltip、掃描 sibling 與讀取 computed style。獨立離線驗證 `95 passed`；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
 | `FOR-P1-001` 持久續作契約 | `BLOCKED` | Ledger / recovery contract / focused tests | 等待 P0 的桌面安全 Gate。已有局部測試，不可當完整交付。 |
 | `FOR-P1-002` Host delivery adapter | `BLOCKED` | 精確目標、原始指令封包、fail-closed | 依賴 P0 和 P1。禁止前景視窗 fallback 與 timer 作為正常續作引擎。 |
 | `FOR-P2-001` 整合驗收 | `BLOCKED` | 一條完整恢復回路 | 必須由獨立 verifier 驗證；UI 沒有證據即維持未驗證。 |
@@ -24,6 +24,8 @@
 ## 已驗證的小型修補
 
 `tests/test_f07.py` 新增案例：worker 仍執行時，即使已有舊 ResultReceipt，也必須回 `HOLD_RUNNING`，不得改走 synthesis 或 redispatch。針對 F05/F07/continuation 的 focused suite 已通過 `20 passed`；這只證明該案例，不代表桌面、adapter 或整個 Forseti 完成。
+
+`FOR-P0-001` 的 hover event guard 已由 Commander 獨立重跑：`python3 -m pytest -q tests/test_hover_event_guard.py tests/test_ui_contract.py tests/test_poll_overlap.py`，結果 `95 passed`。它只支持「同一 dot 不再造成 hover 重建風暴」；不支持「桌面 app 已完全安全」的結論。
 
 ## 更新規則
 

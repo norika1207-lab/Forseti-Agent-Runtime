@@ -8,7 +8,7 @@
   },
   "concurrency_limit": 1,
   "tasks": [
-    {"id": "FOR-P0-001", "state": "STALLED", "depends_on": [], "owner": "Commander recovery", "work_order": ".forseti/work-orders/FOR-P0-001.json", "stall_evidence": "The assigned Codex task is idle; its latest turn is interrupted and has produced no new tool output or Delivery Receipt."},
+    {"id": "FOR-P0-001", "state": "SUBMITTED", "depends_on": [], "owner": "Commander recovery", "work_order": ".forseti/work-orders/FOR-P0-001.json", "delivery_receipt": ".forseti/work-orders/FOR-P0-001.delivery-receipt.json", "verification": "Focused offline verifier passed 95 tests. Live desktop verification is intentionally absent while ui_safety_lock is ACTIVE."},
     {"id": "FOR-P1-001", "state": "BLOCKED", "depends_on": ["FOR-P0-001"], "owner": null, "work_order": ".forseti/work-orders/FOR-P1-001.json"},
     {"id": "FOR-P1-002", "state": "BLOCKED", "depends_on": ["FOR-P0-001", "FOR-P1-001"], "owner": null, "work_order": ".forseti/work-orders/FOR-P1-002.json"},
     {"id": "FOR-P2-001", "state": "BLOCKED", "depends_on": ["FOR-P1-002"], "owner": null, "work_order": ".forseti/work-orders/FOR-P2-001.json"}
