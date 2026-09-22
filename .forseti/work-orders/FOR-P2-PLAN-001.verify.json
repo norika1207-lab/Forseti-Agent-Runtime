@@ -1,0 +1,50 @@
+{
+  "task_id": "FOR-P2-PLAN-001",
+  "state": "VERIFICATION_FAILED",
+  "verified_at": "2026-09-22T19:01:32+0800",
+  "verifier": "independent-verifier-fork",
+  "recovery_key": "FOR-P2-PLAN-001:independent-verifier-fork-20260922T1900+0800",
+  "ui_safety_lock": "ACTIVE",
+  "checks": [
+    {
+      "name": "work_order_json",
+      "command": "python3 -m json.tool .forseti/work-orders/FOR-P2-PLAN-001.json",
+      "result": "passed"
+    },
+    {
+      "name": "commander_state_json",
+      "command": "python3 -m json.tool .forseti/commander-state.json",
+      "result": "passed"
+    },
+    {
+      "name": "delivery_receipt_json",
+      "command": "python3 -m json.tool .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json",
+      "result": "failed: file was 0 bytes at 2026-09-22 19:00:00; parser reported Expecting value at line 1 column 1"
+    },
+    {
+      "name": "required_plan_clauses",
+      "command": "rg -n '單一整合宣稱|離線 Preflight|一次一操作邊界|立即停止條件|非 UI Recovery|明確禁止|owner.*明確批准|ui_safety_lock.*ACTIVE|重新開機.*不.*批准' docs/UI_SAFETY_TEST_PLAN_2026-09-22.md",
+      "result": "passed"
+    },
+    {
+      "name": "scoped_diff_check",
+      "command": "git diff --check -- docs/UI_SAFETY_TEST_PLAN_2026-09-22.md .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json",
+      "result": "passed"
+    },
+    {
+      "name": "prohibited_process_check",
+      "command": "pgrep -fl 'forseti-desktop|Forseti.app|tauri'",
+      "result": "passed: no matching process"
+    }
+  ],
+  "failure": {
+    "classification": [
+      "RECEIPT_MISSING",
+      "CONTRACT_DRIFT"
+    ],
+    "evidence": "The submitted Delivery Receipt became an empty file during independent verification. Its claimed JSON validation is therefore not reproducible.",
+    "impact": "The Work Order cannot advance from READY/SUBMITTED to VERIFIED_COMPLETE. The document-only plan has not been accepted."
+  },
+  "next_action": "Restore and resubmit only .forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json as valid non-empty JSON, preserving SUBMITTED state and the existing no-UI boundary; then run a new independent verifier.",
+  "safety_statement": "No Forseti.app, Tauri, deployment, AX, Accessibility, mouse, keyboard, foreground-window, or UI action was performed. Reboot is not approval."
+}

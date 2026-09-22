@@ -1,0 +1,40 @@
+{
+  "task_id": "FOR-P2-PLAN-001-R1",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "kind": "receipt_recovery",
+  "goal": "Restore the empty FOR-P2-PLAN-001 Delivery Receipt without changing the approved plan, implementation, or safety state.",
+  "allowed_paths": [
+    ".forseti/work-orders/FOR-P2-PLAN-001.delivery-receipt.json"
+  ],
+  "forbidden_paths": [
+    "apps/**",
+    "desktop/**",
+    "tools/**",
+    "tests/**",
+    "test/**",
+    "docs/**",
+    ".forseti/commander-state.json",
+    ".forseti/work-orders/FOR-P2-PLAN-001.json",
+    ".forseti/work-orders/FOR-P2-PLAN-001.verify.json"
+  ],
+  "prohibited_actions": [
+    "launch Forseti.app",
+    "run deploy scripts",
+    "run Tauri or desktop integration tests",
+    "use Accessibility, osascript, cliclick, foreground-window automation, mouse, keyboard, or polling"
+  ],
+  "acceptance": [
+    "The Delivery Receipt is non-empty valid JSON with task_id FOR-P2-PLAN-001 and state SUBMITTED only.",
+    "It names docs/UI_SAFETY_TEST_PLAN_2026-09-22.md and this receipt as the only delivered paths.",
+    "It records git diff --check, static document validation, remaining unknowns, and an explicit no-UI-action statement.",
+    "No other path changes and the existing verification failure receipt remains untouched."
+  ],
+  "required_evidence": [
+    "non_empty_json_receipt",
+    "git_diff_check",
+    "exact_git_status"
+  ],
+  "done_definition": "SUBMITTED only; a new independent verifier must recheck the receipt and plan.",
+  "recovery_key": "FOR-P2-PLAN-001:receipt-recovery-20260922T1901+0800",
+  "timebox_minutes": 10
+}
