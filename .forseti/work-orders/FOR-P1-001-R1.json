@@ -1,0 +1,30 @@
+{
+  "task_id": "FOR-P1-001-R1",
+  "contract_version": "forseti-recovery-dag-0.1",
+  "kind": "receipt_reconciliation",
+  "goal": "Reconcile the submitted FOR-P1-001 delivery receipt with observable allowed-scope changes without altering product code.",
+  "allowed_paths": [
+    ".forseti/work-orders/FOR-P1-001.delivery-receipt.json"
+  ],
+  "forbidden_paths": [
+    "apps/**",
+    "desktop/**",
+    "tools/**",
+    "tests/**",
+    ".forseti/commander-state.json"
+  ],
+  "dependencies": ["FOR-P1-001"],
+  "acceptance": [
+    "The receipt distinguishes every observed allowed-scope file as either this work's change or an explicitly named pre-existing dirty change.",
+    "The receipt's changed_files list is complete for files claimed as FOR-P1-001 work.",
+    "No source, test, UI, deployment, or controller file is modified by this recovery work order.",
+    "The receipt continues to state SUBMITTED; it must not claim VERIFIED_COMPLETE."
+  ],
+  "required_evidence": [
+    "git status --short for the allowed-scope paths",
+    "git diff --name-only for the allowed-scope paths",
+    "amended_delivery_receipt"
+  ],
+  "done_definition": "SUBMITTED only; an independent verifier will decide whether P1-001 can proceed.",
+  "timebox_minutes": 20
+}
