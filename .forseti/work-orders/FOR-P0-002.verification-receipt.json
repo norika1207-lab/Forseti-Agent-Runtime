@@ -1,0 +1,104 @@
+{
+  "task_id": "FOR-P0-002",
+  "state": "VERIFIED_COMPLETE",
+  "verified_at": "2026-09-22T22:13:59+0800",
+  "verifier": "independent-codex-verifier",
+  "branch": "codex/event-driven-refresh",
+  "base_commit": "ef4a938f6420ef6170ba8fbdb3a56786b4c94da0",
+  "verified_commit": "45f9194d5cc21c45f51936748c13118418777dcf",
+  "worktree": "/Volumes/NewDrive/AI Project/Forseti-verifier-P0-002",
+  "scope_verification": {
+    "merge_base_matches_declared_base": true,
+    "changed_paths_within_work_order": true,
+    "changed_paths": [
+      ".forseti/work-orders/FOR-P0-002.delivery-receipt.json",
+      "desktop/ui/app.js",
+      "tests/test_poll_overlap.py",
+      "tests/test_ui_render.py",
+      "tools/ui-harness.py",
+      "tools/ui-render-check.py"
+    ],
+    "forbidden_paths_touched": []
+  },
+  "spec_evidence_verified": [
+    {
+      "id": "ARCH-EXEC-001",
+      "sha256": "4ca6689973e538f4235fcdf91747f1539a6f6cfb411711ad765930ee97fd654f"
+    },
+    {
+      "id": "F01-PEC-001",
+      "sha256": "fe86cb2a1ab7e9de3a8125dadf7c708587b8b498dac3570b194b486c6481fb7a"
+    },
+    {
+      "id": "F02-TSM-001",
+      "sha256": "99ec01294dde8c7f33088ed837b0cf2ec03ca66dca0ffc52a4fbf055fc2ccee4"
+    },
+    {
+      "id": "F04-EVT-001",
+      "sha256": "91dfb59b5dfae747776d10fd5599d710b30d2be14efef6f58de1c8174b0fb60d"
+    },
+    {
+      "id": "F05-WDG-001",
+      "sha256": "17ca3a6ee9c45ad6362cec304963668d3fac43eacc53e35ec31ab08c02e560a9"
+    },
+    {
+      "id": "F07-OUT-001",
+      "sha256": "c721da66a062474c5a342f83fccc2ede6870e6b7cd6f4d97c9a59fa1f0f49445"
+    }
+  ],
+  "independent_checks": [
+    {
+      "command": "python3 -m pytest -q tests/test_poll_overlap.py tests/test_ui_contract.py tests/test_hover_event_guard.py tests/test_ui_render.py",
+      "result": "238 passed in 203.93s"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_poll_overlap.py tests/test_ui_contract.py tests/test_ui_render.py",
+      "result": "236 passed in 294.28s"
+    },
+    {
+      "command": "python3 -m pytest -q tests/test_poll_overlap.py tests/test_ui_contract.py tests/test_hover_event_guard.py",
+      "result": "95 passed in 0.23s"
+    },
+    {
+      "command": "python3 -m py_compile tools/ui-harness.py tools/ui-render-check.py tests/test_poll_overlap.py tests/test_ui_render.py",
+      "result": "passed"
+    },
+    {
+      "command": "/Users/norikaoda/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node --check desktop/ui/app.js",
+      "result": "passed"
+    },
+    {
+      "command": "rg -n 'setInterval\\s*\\(' desktop/ui/app.js",
+      "result": "no matches (expected exit 1)"
+    },
+    {
+      "command": "git diff --check ef4a938f6420ef6170ba8fbdb3a56786b4c94da0..45f9194d5cc21c45f51936748c13118418777dcf",
+      "result": "passed"
+    },
+    {
+      "command": "pgrep -fal 'Forseti\\.app|forseti-desktop|tauri (dev|build)|cliclick|osascript'",
+      "result": "no prohibited process (exit 1)"
+    }
+  ],
+  "acceptance_verification": [
+    "The forseti://changed listener is installed before the initial refresh request.",
+    "Product code contains no setInterval polling loop.",
+    "Same-turn events coalesce through one microtask and an in-flight event schedules at most one trailing refresh.",
+    "Repository events invalidate all backend-derived view caches and request a foundation refresh.",
+    "Slow-read visibility uses a one-shot timer cleared in finally on both completion and failure.",
+    "The offline harness emits deterministic synthetic repository events and browser tests verify repeated refresh, cache refetch, and preservation of armed action state."
+  ],
+  "safety": {
+    "ui_safety_lock": "ACTIVE",
+    "forseti_app_launched": false,
+    "tauri_build_or_integration_run": false,
+    "deployment_run": false,
+    "accessibility_or_input_automation_used": false
+  },
+  "remaining_unknowns": [
+    "Real Tauri WebView event delivery remains intentionally unverified while ui_safety_lock is ACTIVE.",
+    "The underlying strands cold-read latency is outside this work order."
+  ],
+  "decision": "VERIFIED_COMPLETE",
+  "authorization_boundary": "This verification does not unlock or authorize FOR-P2-001."
+}
