@@ -154,5 +154,56 @@ class TestResultReceipt(F07Case):
         self.assertEqual(len(self.led.receipts_of(self.s1)), 1)
 
 
+class TestDurableRecovery(F07Case):
+    """F05/F07 的實際恢復路徑：觀測、保全、冪等重派。"""
+
+    def test_long_active_work_is_not_interrupted(self):
+        now = __import__("time").time()
+        self.led.worker_event("WORKER_PROGRESS", self.s1, "仍在編譯", worker="worker-a")
+        result = self.led.recover_stalled(
+            self.s1, worker_running=True, activity_since=now - 1)
+        self.assertEqual(result["action"], "HOLD_ACTIVE")
+        self.assertEqual(
+            self.led.con.execute(
+                "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='RECOVERY_DISPATCH'",
+                (self.s1,)).fetchone()[0], 0)
+
+    def test_blank_final_preserves_receipt_and_requests_synthesis_only(self):
+        self.led.receipt(self.s1, "build", "exit 0", artifacts=["app.bin"])
+        result = self.led.recover_stalled(self.s1, blank_run=1)
+        self.assertEqual(result["action"], "SYNTHESIS_ONLY")
+        self.assertEqual(len(self.led.receipts_of(self.s1)), 1)
+        self.assertEqual(
+            self.led.con.execute(
+                "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='RECOVERY_DISPATCH'",
+                (self.s1,)).fetchone()[0], 0)
+
+    def test_running_worker_with_old_receipt_is_never_interrupted(self):
+        """A receipt is not proof that the worker has stopped writing."""
+        self.led.receipt(self.s1, "build", "exit 0", artifacts=["app.bin"])
+        result = self.led.recover_stalled(
+            self.s1, worker="worker-a", worker_running=True, blank_run=1)
+        self.assertEqual(result["action"], "HOLD_RUNNING")
+        kinds = [e["kind"] for e in self.led.events_of(self.t)]
+        self.assertNotIn("RESULT_SYNTHESIS_REQUESTED", kinds)
+        self.assertNotIn("RECOVERY_DISPATCH", kinds)
+
+    def test_repeated_starvation_has_one_idempotent_redispatch(self):
+        a = self.led.recover_stalled(self.s1, worker="worker-a", blank_run=2)
+        b = self.led.recover_stalled(self.s1, worker="worker-a", blank_run=2)
+        self.assertEqual(a["action"], "REDISPATCH")
+        self.assertEqual(b["action"], "REDISPATCH")
+        self.assertTrue(a["fresh"])
+        self.assertFalse(b["fresh"])
+        self.assertEqual(
+            self.led.con.execute(
+                "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='RECOVERY_DISPATCH'",
+                (self.s1,)).fetchone()[0], 1)
+        self.assertEqual(
+            self.led.con.execute(
+                "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='DISPATCH'",
+                (self.s1,)).fetchone()[0], 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

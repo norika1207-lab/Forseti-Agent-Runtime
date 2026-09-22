@@ -1,0 +1,28 @@
+{
+  "task_id": "FOR-P1-001",
+  "state": "VERIFIED_COMPLETE",
+  "verifier": "Forseti Commander independent verifier",
+  "verification_scope": "Durable continuation decision and ledger policy only. Excludes host transport, desktop UI, AX, deployment, and any claim that Forseti.app is safe to launch.",
+  "commands": [
+    "python3 -m pytest -q tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py",
+    "git diff --check -- apps/forseti-cli/ledger.py tests/test_f05.py tests/test_f07.py",
+    "python3 -m py_compile apps/forseti-cli/recovery_contract.py tests/test_recovery_contract.py tests/test_task_continue.py"
+  ],
+  "results": [
+    "55 passed in 0.32s",
+    "scoped diff check passed",
+    "Python compilation passed"
+  ],
+  "acceptance_evidence": [
+    "A live command with an old ResultReceipt returns HOLD_RUNNING and does not request synthesis or redispatch.",
+    "A blank result with a durable receipt requests synthesis only and avoids rerunning work.",
+    "An inactive authorized step records exactly one durable original-input continuation packet.",
+    "The original input and idempotency key survive a ledger reopen."
+  ],
+  "receipt_provenance": "The delivery receipt now records exact path status. Authorship is UNKNOWN where Git worktree evidence cannot establish it; verification is based on observable code, scope, and independent tests rather than an authorship claim.",
+  "remaining_unknowns": [
+    "No host transport delivered a continuation packet in this scope.",
+    "No desktop, AX, Tauri, deployment, or live UI test was performed.",
+    "The UI safety lock remains ACTIVE."
+  ]
+}

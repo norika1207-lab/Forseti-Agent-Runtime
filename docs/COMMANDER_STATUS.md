@@ -1,6 +1,6 @@
 # Forseti 即時施工狀態
 
-最後依證據更新：2026-09-22 13:20 Asia/Taipei
+最後依證據更新：2026-09-22 13:47 Asia/Taipei
 
 這一頁是 Commander 的 Git 可追蹤狀態，不是 Worker 自述。每次狀態變更都必須能對應到 Git diff、測試輸出、Delivery Receipt 或明確的阻塞證據。
 
@@ -15,8 +15,8 @@
 | 工作項 | 狀態 | 可做範圍 | 目前證據／阻塞 |
 | --- | --- | --- | --- |
 | `FOR-P0-001` 桌面卡死隔離與定位 | `VERIFIED_COMPLETE`（限縮範圍） | 僅靜態診斷與離線測試；禁止 UI 操作 | tooltip hover 的事件放大已改用 pointer event 並對相同 dot 去重。獨立離線驗證 `95 passed`，commit `5e78264`。此 Gate 只驗證該 hover 修補；未進行真實桌面驗收，安全鎖仍維持。前端未接 Rust `.forseti` 檔案事件卻每 2 秒呼叫 Python `strands` 的高成本刷新路徑，仍是下一個待隔離項目。 |
-| `FOR-P1-001` 持久續作契約 | `STALLED_RECEIPT_CORRECTION` | Ledger / recovery contract / focused tests | Worker 已提交 receipt；獨立重跑 focused suite 為 `55 passed`，但 receipt 的 `changed_files` 漏列目前可觀測的 allowed-scope 檔案。R1 第一次修正與 `git status` 證據矛盾；重派 R1 的回合已結束但未改 receipt、未留下 Git artifact，也未保存完整回歸的最終結果。已發出最後一張 receipt-only R2；在收據可追溯前不得升為 verified。 |
-| `FOR-P1-002` Host delivery adapter | `BLOCKED` | 精確目標、原始指令封包、fail-closed | 依賴 P0 和 P1。禁止前景視窗 fallback 與 timer 作為正常續作引擎。 |
+| `FOR-P1-001` 持久續作契約 | `VERIFIED_COMPLETE`（限縮範圍） | Ledger / recovery contract / focused tests | Commander 獨立重跑 F05/F07/continuation/recovery suite，結果 `55 passed`；scoped diff check 與 Python compile 也通過。R2 收據逐檔如實標示 Git 狀態，作者 provenance 保留 `UNKNOWN`，不以猜測取代證據。此 Gate 只驗證持久續作政策，未驗證 host transport、桌面或部署。 |
+| `FOR-P1-002` Host delivery adapter | `READY` | 精確目標、原始指令封包、fail-closed | P0/P1 的限縮 Gate 已通過。禁止前景視窗 fallback 與 timer 作為正常續作引擎；UI safety lock 仍有效。 |
 | `FOR-P2-001` 整合驗收 | `BLOCKED` | 一條完整恢復回路 | 必須由獨立 verifier 驗證；UI 沒有證據即維持未驗證。 |
 
 完整機器可讀 DAG：`.forseti/commander-state.json`。
@@ -32,6 +32,8 @@
 R1 收據修正後仍不可採信：其文字稱 `recovery_contract.py`「未觀測為 dirty」，但 Commander 的獨立 `git status --short` 顯示它是 untracked；同一收據還把 `test_task_continue.py` 列為 P1 變更，卻未在 reconciliation 的 observed list 中一致處理。這是 receipt contract drift，不是程式測試失敗。Commander 已重派相同且唯一路徑限制為 receipt 的 R1，要求以完整、互不矛盾的路徑清單修正；沒有修正前不會進入 P1 verifier。
 
 重派的 R1 task 回合後來結束，沒有更新 receipt、沒有可觀測 Git artifact，先前執行中的完整 `pytest` process 也已離開而未留下可驗證的最終輸出。此處不把「session 曾 active」或「process 曾存在」當成功證據。Commander 依停滯規則建立 `FOR-P1-001-R2`：只允許把目前 receipt 改成能逐一路徑對應 `git status` 的可稽核版本；這是最後一次 receipt-only recovery，仍不允許任何產品程式、UI 或部署修改。
+
+R2 已完成。Commander 獨立重跑 `python3 -m pytest -q tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py`，結果 `55 passed`；並以 scoped `git diff --check` 與 `py_compile` 檢查交付檔案。收據的 provenance 無法從 Git 工作樹推得，已明確維持 `UNKNOWN`，而非虛構作者。P1 的驗證範圍只涵蓋持久 decision/ledger 行為，下一張 `FOR-P1-002` 只能開發 fail-closed host adapter 的離線邏輯，絕不解除 UI safety lock。
 
 ## 更新規則
 

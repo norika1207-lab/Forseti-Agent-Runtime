@@ -1,0 +1,60 @@
+{
+  "task_id": "FOR-P1-001",
+  "state": "SUBMITTED",
+  "changed_files": [
+    "apps/forseti-cli/ledger.py",
+    "apps/forseti-cli/recovery_contract.py",
+    "tests/test_f05.py",
+    "tests/test_f07.py",
+    "tests/test_recovery_contract.py",
+    "tests/test_task_continue.py"
+  ],
+  "scope_reconciliation": {
+    "commands": [
+      "git status --short -- apps/forseti-cli/ledger.py apps/forseti-cli/recovery_contract.py apps/forseti-cli/forseti.py tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py",
+      "git diff --name-only -- apps/forseti-cli/ledger.py apps/forseti-cli/recovery_contract.py apps/forseti-cli/forseti.py tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py"
+    ],
+    "git_status_output": [
+      " M apps/forseti-cli/ledger.py",
+      "?? apps/forseti-cli/recovery_contract.py",
+      " M tests/test_f05.py",
+      " M tests/test_f07.py",
+      "?? tests/test_recovery_contract.py",
+      "?? tests/test_task_continue.py"
+    ],
+    "git_diff_name_output": [
+      "apps/forseti-cli/ledger.py",
+      "tests/test_f05.py",
+      "tests/test_f07.py"
+    ],
+    "path_by_path": [
+      {"path": "apps/forseti-cli/ledger.py", "git_status": "modified", "provenance": "UNKNOWN", "basis": "The worktree proves modification but not author or work-order origin."},
+      {"path": "apps/forseti-cli/recovery_contract.py", "git_status": "untracked", "provenance": "UNKNOWN", "basis": "The worktree proves an untracked file; prior receipt text incorrectly called it unobserved."},
+      {"path": "tests/test_f05.py", "git_status": "modified", "provenance": "UNKNOWN", "basis": "The worktree proves modification but not author or work-order origin."},
+      {"path": "tests/test_f07.py", "git_status": "modified", "provenance": "UNKNOWN", "basis": "The worktree proves modification but not author or work-order origin."},
+      {"path": "tests/test_recovery_contract.py", "git_status": "untracked", "provenance": "UNKNOWN", "basis": "The worktree proves an untracked file but not its origin."},
+      {"path": "tests/test_task_continue.py", "git_status": "untracked", "provenance": "UNKNOWN", "basis": "The worktree proves an untracked file but not its origin."},
+      {"path": "apps/forseti-cli/forseti.py", "git_status": "clean", "provenance": "UNKNOWN", "basis": "No dirty entry was observed for this allowed path."}
+    ],
+    "basis": "Git supplies path state, not authorship. This reconciliation records every requested path exactly as observed and deliberately leaves origin UNKNOWN until an independent verifier can establish provenance."
+  },
+  "focused_regression_tests": {
+    "command": "python3 -m pytest -q tests/test_f05.py tests/test_f07.py tests/test_task_continue.py tests/test_recovery_contract.py",
+    "result": "55 passed in 0.32s"
+  },
+  "diff_check": {
+    "command": "git diff --check",
+    "result": "passed"
+  },
+  "acceptance_evidence": [
+    "worker_running=True is checked before stale ResultReceipt synthesis, returning HOLD_RUNNING",
+    "blank output with receipts emits synthesis-only recovery and does not dispatch",
+    "inactive authorized continuation uses a durable idempotency key and emits one CONTINUATION_REQUESTED",
+    "original_input and event_key are read back from the ledger after reopen"
+  ],
+  "remaining_unknowns": [
+    "Host transport delivery is outside this work order and was not exercised.",
+    "No desktop, AX, Tauri, or deployment operation was performed."
+  ],
+  "verification_boundary": "SUBMITTED only; independent verifier must rerun focused tests before VERIFIED_COMPLETE."
+}

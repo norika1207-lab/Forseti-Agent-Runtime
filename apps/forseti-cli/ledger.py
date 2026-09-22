@@ -598,7 +598,8 @@ class Ledger:
     # -- 派工與收件（F03-CSI-001、F04 §3）---------------------------------
 
     def dispatch(self, step_id: str, worker: str, cause: str = "", *,
-                 auto: bool = False, can_report: str = "") -> None:
+                 auto: bool = False, can_report: str = "",
+                 idem_key: str | None = None) -> None:
         """把一個步驟派給 worker。
 
         auto=True 代表這一次是系統自己接上的，沒有人開口叫它繼續。
@@ -627,7 +628,8 @@ class Ledger:
             self.step_transition(step_id, "RUNNING", cause or f"派給 {worker}", actor=worker)
         self._event("DISPATCH", cause or f"派給 {worker}", actor="controller",
                     task_id=task_id, step_id=step_id,
-                    payload={"worker": worker, "auto": bool(auto)})
+                    payload={"worker": worker, "auto": bool(auto)},
+                    idem_key=idem_key)
 
     def stash(self, step_id: str, text: str, label: str = "log") -> str:
         """把原始輸出落檔，回傳 packet 用的引用。細節見 worker.stash_raw。"""
@@ -1043,6 +1045,142 @@ class Ledger:
                     task_id=row[0] if row else "", step_id=step_id,
                     payload={"from": current_rung, "unresponsive": unresponsive_count})
         return rung
+
+    def continue_if_stalled(self, step_id: str, *, authorized_input: str = "",
+                            command_running: bool, activity_observed: bool,
+                            stall_suspect: bool, blank_run: int = 0) -> dict:
+        """Preserve a stalled step and emit one durable continuation request.
+
+        The host owns delivery of the returned packet to a worker.  This method
+        owns the policy boundary and the idempotent ledger event, so observing
+        the same stopped screen twice cannot run the work twice.
+        """
+        import recovery_contract as RC
+        row = self.con.execute(
+            "SELECT s.task_id,s.next_action,t.current_state FROM steps s "
+            "JOIN tasks t ON t.task_id=s.task_id WHERE s.step_id=?", (step_id,)
+        ).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{step_id}")
+        task_id, saved_input, task_state = row
+        text = authorized_input.strip() or (saved_input or "").strip()
+        receipts = self.receipts_of(step_id)
+        synthesized = self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='SYNTHESIZED'",
+            (step_id,)).fetchone()[0]
+        decision = RC.continue_decision(
+            task_id=task_id, step_id=step_id, task_state=task_state,
+            authorized_input=text, command_running=command_running,
+            activity_observed=activity_observed, stall_suspect=stall_suspect,
+            has_receipts=bool(receipts), has_final_output=bool(synthesized),
+            blank_run=blank_run)
+        action = decision["action"]
+        if action == "SYNTHESIS_ONLY":
+            self._event("SYNTHESIS_REQUESTED", decision["why"], actor="controller",
+                        task_id=task_id, step_id=step_id,
+                        payload={"receipts": len(receipts), "blank_run": blank_run},
+                        idem_key=f"synthesis:{step_id}:{blank_run}")
+        elif action == "RESEND_ORIGINAL_INPUT":
+            fresh = self._event("CONTINUATION_REQUESTED", decision["why"],
+                                actor="controller", task_id=task_id, step_id=step_id,
+                                payload={"original_input": decision["original_input"],
+                                         "event_key": decision["event_key"]},
+                                idem_key=decision["event_key"])
+            decision["already_requested"] = not fresh
+            if not fresh:
+                decision["action"] = "ALREADY_REQUESTED"
+        return decision
+
+    def recover_stalled(self, step_id: str, *, worker: str | None = None,
+                        blank_run: int = 0, worker_running: bool = False,
+                        final_output: bool = False, activity_since: float | None = None,
+                        unresponsive_count: int = 0) -> dict:
+        """執行一次可重放的停滯／空輸出恢復決策。
+
+        這是 F04/F05/F07 的交界，不是 timer callback：呼叫端必須帶入
+        可觀測的 worker 狀態與活動窗口。只要窗口內仍有事件或產物活動，
+        就回傳 ``HOLD_ACTIVE``，不會打斷長工作。
+
+        有 ResultReceipt 但沒有 final output 時，只記錄冪等的
+        ``RESULT_SYNTHESIS_REQUESTED``，保留既有結果，絕不重跑工具。
+        沒有收據且確認無活動時，才用原本的 ``next_action`` 做一次冪等
+        ``RECOVERY_DISPATCH``；重複觀測同一停滯不會產生第二次派工。
+        """
+        row = self.con.execute(
+            "SELECT task_id,state,assigned_worker,next_action FROM steps WHERE step_id=?",
+            (step_id,)).fetchone()
+        if row is None:
+            raise TransitionError(f"沒有這個步驟：{step_id}")
+        task_id, state, assigned, next_action = row
+        if state not in ACTIVE:
+            return {"action": "NOOP_TERMINAL", "step_id": step_id,
+                    "state": state, "event_idempotent": True}
+
+        # 這些事件是控制端可以觀測的活動，不採信模型自述。
+        since = time.time() if activity_since is None else activity_since
+        activity = self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE step_id=? AND at>? AND kind IN "
+            "('WORKER_PROGRESS','EVIDENCE_AVAILABLE','ARTIFACT_CHANGED',"
+            "'RESULT_RECEIPT','TOOL_RESULT','COMMAND_STARTED','COMMAND_FINISHED')",
+            (step_id, since)).fetchone()[0]
+        if activity:
+            self._event("RECOVERY_HELD_ACTIVE", f"{activity} 筆可觀測活動",
+                        actor="watchdog", task_id=task_id, step_id=step_id,
+                        payload={"activity": activity, "since": since},
+                        idem_key=f"recovery-held:{step_id}:{since}")
+            return {"action": "HOLD_ACTIVE", "step_id": step_id,
+                    "activity": activity, "event_idempotent": True}
+
+        # A live command always wins over a stale receipt.  A build may have
+        # produced a receipt and then continued with a long write/test phase;
+        # asking for synthesis at that point would interfere with real work.
+        if worker_running:
+            self._event("RECOVERY_HELD_RUNNING", "worker 仍在執行，保持不干擾",
+                        actor="watchdog", task_id=task_id, step_id=step_id,
+                        idem_key=f"recovery-running:{step_id}:{blank_run}")
+            return {"action": "HOLD_RUNNING", "step_id": step_id,
+                    "event_idempotent": True}
+
+        receipts = self.receipts_of(step_id)
+        synthesized = bool(final_output or self.con.execute(
+            "SELECT COUNT(*) FROM events WHERE step_id=? AND kind='SYNTHESIZED'",
+            (step_id,)).fetchone()[0])
+        if receipts and not synthesized:
+            key = f"synthesis:{step_id}:{blank_run}:{receipts[-1].get('digest', '')}"
+            fresh = self._event(
+                "RESULT_SYNTHESIS_REQUESTED",
+                "保留 ResultReceipt，只重做 final output 合成",
+                actor="watchdog", task_id=task_id, step_id=step_id,
+                payload={"receipt_digests": [r.get("digest", "") for r in receipts],
+                         "blank_run": blank_run, "avoid_rerun": True},
+                idem_key=key)
+            return {"action": "SYNTHESIS_ONLY", "step_id": step_id,
+                    "fresh": fresh, "receipts": len(receipts),
+                    "event_idempotent": True}
+
+        target_worker = worker or assigned
+        if not target_worker:
+            self._event("RECOVERY_BLOCKED", "沒有可用 worker，保留任務真相",
+                        actor="watchdog", task_id=task_id, step_id=step_id,
+                        payload={"next_action": next_action},
+                        idem_key=f"recovery-blocked:{step_id}:{blank_run}")
+            return {"action": "BLOCKED_NO_WORKER", "step_id": step_id,
+                    "next_action": next_action, "event_idempotent": True}
+
+        key = f"recovery-dispatch:{step_id}:{blank_run}:{unresponsive_count}"
+        fresh = self._event(
+            "RECOVERY_DISPATCH", "無活動且無可保全收據，重送已授權 next_action",
+            actor="watchdog", task_id=task_id, step_id=step_id,
+            payload={"worker": target_worker, "next_action": next_action,
+                     "blank_run": blank_run, "unresponsive_count": unresponsive_count},
+            idem_key=key)
+        if fresh:
+            self.dispatch(step_id, target_worker,
+                          "停滯恢復：重送原步驟 next_action",
+                          auto=True, idem_key=f"dispatch:{key}")
+        return {"action": "REDISPATCH", "step_id": step_id,
+                "worker": target_worker, "next_action": next_action,
+                "fresh": fresh, "event_idempotent": True}
 
     # -- 執行連續性（F06-EXC-001）-----------------------------------------
 
