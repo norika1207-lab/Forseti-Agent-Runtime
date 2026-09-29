@@ -9,6 +9,7 @@ or a propagation endpoint is absent, the contract preserves ``UNKNOWN_EDGE``.
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -61,8 +62,11 @@ def _unknown(*, source: str | None, target: str | None, why: str,
 
 def _edge_key(edge: dict) -> tuple:
     return (str(edge.get("from") or ""), str(edge.get("to") or ""),
-            str(edge.get("relation") or edge.get("type") or ""),
-            str(edge.get("state") or ""), str(edge.get("why") or ""))
+            str(edge.get("relation") or ""), str(edge.get("type") or ""),
+            str(edge.get("state") or ""), str(edge.get("basis") or ""),
+            str(edge.get("why") or ""),
+            json.dumps(edge, ensure_ascii=False, sort_keys=True,
+                       separators=(",", ":"), default=str))
 
 
 def _dedupe_edges(edges: list[dict]) -> list[dict]:
@@ -95,9 +99,12 @@ def build(rows: list[dict] | None, *, lineage_edges: list[dict] | None = None,
         if not isinstance(raw, dict) or raw.get("type") != "PROPAGATES_TO":
             continue
         propagation.append(dict(raw))
-    propagation.sort(key=lambda e: (str(e.get("from_id") or ""),
-                                    str(e.get("to_id") or ""),
-                                    str(e.get("id") or "")))
+    propagation.sort(key=lambda edge: (
+        str(edge.get("from_id") or ""), str(edge.get("to_id") or ""),
+        str(edge.get("basis") or ""), str(edge.get("to_kind") or ""),
+        str(edge.get("id") or ""),
+        json.dumps(edge, ensure_ascii=False, sort_keys=True,
+                   separators=(",", ":"), default=str)))
 
     for name, classification in _ANCHORS:
         point = finding.get(name)
@@ -136,6 +143,10 @@ def build(rows: list[dict] | None, *, lineage_edges: list[dict] | None = None,
             current = frontier.pop(0)
             outgoing = [edge for edge in propagation
                         if str(edge.get("from_id") or "") == current]
+            if current in roots and not outgoing:
+                edges.append(_unknown(
+                    source=current, target=None,
+                    why="incident has no observed PROPAGATES_TO lineage; downstream impact is unknown"))
             for raw in outgoing:
                 target = str(raw.get("to_id") or "").strip()
                 basis = str(raw.get("basis") or "").strip()

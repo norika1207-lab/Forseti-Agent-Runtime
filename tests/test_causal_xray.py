@@ -78,3 +78,29 @@ def test_json_contract_is_stable_for_reordered_input():
     left = X.build(rows, lineage_edges=edges)
     right = X.build(list(reversed(rows)), lineage_edges=list(reversed(edges)))
     assert json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+
+def test_edge_sort_uses_basis_and_full_canonical_tie_break():
+    rows = [row(1, distance=0.5, failed=1, corrected=True,
+                incident_id="inc-1")]
+    edges = [
+        {"type": "PROPAGATES_TO", "from_id": "inc-1", "to_id": "x",
+         "basis": "z-basis", "to_kind": "node", "id": "b"},
+        {"type": "PROPAGATES_TO", "from_id": "inc-1", "to_id": "x",
+         "basis": "a-basis", "to_kind": "artifact", "id": "a"},
+    ]
+    left = X.build(rows, lineage_edges=edges)
+    right = X.build(rows, lineage_edges=list(reversed(edges)))
+    assert json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+    known = [edge for edge in left["edges"]
+             if edge["type"] == "PROPAGATES_TO"]
+    assert [edge["basis"] for edge in known] == ["a-basis", "z-basis"]
+
+
+def test_incident_without_propagation_is_explicit_unknown():
+    result = X.build([row(1, distance=0.5, failed=1, corrected=True,
+                          incident_id="inc-1")])
+    assert result["status"] == "PARTIAL"
+    assert any(edge["type"] == "UNKNOWN_EDGE" and edge["from"] == "inc-1" and
+               "downstream impact is unknown" in edge["why"]
+               for edge in result["edges"])

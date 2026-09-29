@@ -101,3 +101,52 @@ def test_replayed_citation_does_not_duplicate_edge():
                      citations=[citation, dict(citation)])
     cited = [edge for edge in result["edges"] if edge["type"] == "CITES"]
     assert len(cited) == 1
+
+
+def test_conflicting_duplicate_claim_id_is_unknown_and_deterministic():
+    claims = [claim("cl-1", ["ev-1"]),
+              {**claim("cl-1", ["ev-2"]), "text": "different"}]
+    evidence_rows = [evidence("ev-1"), evidence("ev-2")]
+    left = V.build(claims=claims, evidence=evidence_rows)
+    right = V.build(claims=list(reversed(claims)),
+                    evidence=list(reversed(evidence_rows)))
+    assert json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+    node = next(node for node in left["nodes"] if node["id"] == "cl-1")
+    assert node["state"] == "UNKNOWN"
+    assert node["collision"] is True
+    assert left["status"] == "PARTIAL"
+    assert any(item["kind"] == "claim_id" for item in left["collisions"])
+
+
+def test_unknown_node_prevents_complete_even_when_claim_evidence_is_known():
+    result = V.build(
+        claims=[claim("cl-1", ["ev-1"])], evidence=[evidence("ev-1")],
+        entities=[{"id": "mystery", "kind": "node", "state": "UNKNOWN"}])
+    assert result["unknown_nodes"] == 1
+    assert result["status"] == "PARTIAL"
+
+
+def test_lineage_edge_without_type_or_relation_is_unknown():
+    result = V.build(
+        claims=[claim("cl-1", ["ev-1"])], evidence=[evidence("ev-1")],
+        lineage_edges=[{"from_id": "ev-1", "to_id": "cl-1",
+                        "basis": "receipt"}])
+    missing = [edge for edge in result["edges"]
+               if edge["relation"] == "UNKNOWN_RELATION"]
+    assert len(missing) == 1
+    assert missing[0]["type"] == "UNKNOWN_EDGE"
+    assert missing[0]["state"] == "UNKNOWN"
+    assert result["status"] == "PARTIAL"
+
+
+def test_citation_to_unknown_source_stays_unknown():
+    result = V.build(
+        claims=[claim("cl-1", ["ev-1"])], evidence=[evidence("ev-1")],
+        entities=[{"id": "doc:4", "kind": "source", "state": "UNKNOWN"}],
+        citations=[{"claim_id": "cl-1", "source_id": "doc:4",
+                    "basis": "explicit citation"}])
+    citation = next(edge for edge in result["edges"]
+                    if edge["relation"] == "CITES")
+    assert citation["type"] == "UNKNOWN_EDGE"
+    assert citation["state"] == "UNKNOWN"
+    assert result["status"] == "PARTIAL"

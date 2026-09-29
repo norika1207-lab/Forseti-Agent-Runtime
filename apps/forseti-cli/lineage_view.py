@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Deterministic Claim/Evidence lineage explorer contract.
 
-Persisted lineage, claim evidence references, citations, and rewrites are
-projected only when their endpoints are present.  Missing evidence and absent
-PROMOTES entities stay visible as ``UNKNOWN_EDGE``.
+Duplicate IDs are grouped before projection.  Identical records are replay
+duplicates; conflicting records become UNKNOWN collisions.  Missing relation
+types, evidence basis, endpoint entities, and UNKNOWN endpoint nodes can never
+produce a KNOWN edge or a COMPLETE contract.
 """
 
 from __future__ import annotations
@@ -17,6 +18,15 @@ UNKNOWN_EDGE = "UNKNOWN_EDGE"
 
 def _rows(values) -> list[dict]:
     return [dict(value) for value in (values or []) if isinstance(value, dict)]
+
+
+def _canonical(row: dict) -> str:
+    return json.dumps(row, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":"), default=str)
+
+
+def _fingerprint(row: dict) -> str:
+    return hashlib.sha256(_canonical(row).encode("utf-8")).hexdigest()[:12]
 
 
 def _list(value) -> list[str]:
@@ -34,22 +44,29 @@ def _unknown(source: str | None, target: str | None, why: str,
 
 def _edge_key(edge: dict) -> tuple:
     return (str(edge.get("from") or ""), str(edge.get("to") or ""),
-            str(edge.get("relation") or edge.get("type") or ""),
-            str(edge.get("state") or ""), str(edge.get("basis") or ""))
+            str(edge.get("relation") or ""), str(edge.get("type") or ""),
+            str(edge.get("state") or ""), str(edge.get("basis") or ""),
+            str(edge.get("why") or ""), _canonical(edge))
 
 
 def _dedupe_edges(edges: list[dict]) -> list[dict]:
-    unique: dict[tuple, dict] = {}
+    unique: dict[str, dict] = {}
     for edge in edges:
-        key = (_edge_key(edge), str(edge.get("why") or ""))
-        unique.setdefault(key, edge)
+        unique.setdefault(_canonical(edge), edge)
     return sorted(unique.values(), key=_edge_key)
 
 
 def _fallback_id(kind: str, row: dict) -> str:
-    raw = json.dumps(row, ensure_ascii=False, sort_keys=True,
-                     separators=(",", ":"), default=str)
-    return f"unknown-{kind}:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:12]
+    return f"unknown-{kind}:" + _fingerprint(row)
+
+
+def _group(rows: list[dict], kind: str) -> dict[str, list[dict]]:
+    grouped: dict[str, dict[str, dict]] = {}
+    for row in rows:
+        node_id = str(row.get("id") or "").strip() or _fallback_id(kind, row)
+        grouped.setdefault(node_id, {}).setdefault(_canonical(row), row)
+    return {node_id: [variants[key] for key in sorted(variants)]
+            for node_id, variants in sorted(grouped.items())}
 
 
 def build(*, claims: list[dict] | None = None,
@@ -60,51 +77,103 @@ def build(*, claims: list[dict] | None = None,
           entities: list[dict] | None = None) -> dict:
     nodes: dict[str, dict] = {}
     edges: list[dict] = []
-    claim_rows = sorted(_rows(claims), key=lambda row: str(row.get("id") or ""))
-    evidence_rows = sorted(_rows(evidence), key=lambda row: str(row.get("id") or ""))
+    collisions: list[dict] = []
+    claim_groups = _group(_rows(claims), "claim")
+    evidence_groups = _group(_rows(evidence), "evidence")
 
-    for row in claim_rows:
-        node_id = str(row.get("id") or "").strip()
-        observed = bool(node_id)
-        node_id = node_id or _fallback_id("claim", row)
-        nodes[node_id] = {"id": node_id, "kind": "claim",
-                          "state": (str(row.get("state") or "UNKNOWN")
-                                    if observed else "UNKNOWN"),
-                          "label": str(row.get("text") or ""),
-                          "source": "claims"}
-        if not observed:
+    for node_id, variants in claim_groups.items():
+        collision = len(variants) > 1
+        missing_identity = node_id.startswith("unknown-claim:")
+        states = {str(row.get("state") or "UNKNOWN") for row in variants}
+        state = next(iter(states)) if len(states) == 1 else "UNKNOWN"
+        if collision or missing_identity:
+            state = "UNKNOWN"
+        nodes[node_id] = {"id": node_id, "kind": "claim", "state": state,
+                          "label": (str(variants[0].get("text") or "")
+                                    if len({str(row.get("text") or "")
+                                            for row in variants}) == 1 else ""),
+                          "source": "claims", "collision": collision,
+                          "variant_fingerprints": [_fingerprint(row)
+                                                   for row in variants]}
+        if collision:
+            collisions.append({"kind": "claim_id", "key": node_id,
+                               "candidates": nodes[node_id]["variant_fingerprints"],
+                               "state": "UNKNOWN"})
+            edges.append(_unknown(node_id, None,
+                                  "conflicting claim records share one ID",
+                                  "IDENTITY_COLLISION"))
+        elif missing_identity:
             edges.append(_unknown(None, node_id,
                                   "claim has no stable source ID", "IDENTITY"))
-    for row in evidence_rows:
-        node_id = str(row.get("id") or "").strip()
-        observed = bool(node_id)
-        node_id = node_id or _fallback_id("evidence", row)
-        nodes[node_id] = {"id": node_id, "kind": "evidence",
-                          "state": "OBSERVED" if observed else "UNKNOWN",
-                          "label": str(row.get("about") or ""),
-                          "source": "evidence"}
-        if not observed:
+
+    for node_id, variants in evidence_groups.items():
+        collision = len(variants) > 1
+        missing_identity = node_id.startswith("unknown-evidence:")
+        state = "UNKNOWN" if collision or missing_identity else "OBSERVED"
+        nodes[node_id] = {"id": node_id, "kind": "evidence", "state": state,
+                          "label": (str(variants[0].get("about") or "")
+                                    if len({str(row.get("about") or "")
+                                            for row in variants}) == 1 else ""),
+                          "source": "evidence", "collision": collision,
+                          "variant_fingerprints": [_fingerprint(row)
+                                                   for row in variants]}
+        if collision:
+            collisions.append({"kind": "evidence_id", "key": node_id,
+                               "candidates": nodes[node_id]["variant_fingerprints"],
+                               "state": "UNKNOWN"})
+            edges.append(_unknown(node_id, None,
+                                  "conflicting evidence records share one ID",
+                                  "IDENTITY_COLLISION"))
+        elif missing_identity:
             edges.append(_unknown(None, node_id,
                                   "evidence has no stable source ID", "IDENTITY"))
-    for row in _rows(entities):
-        node_id = str(row.get("id") or "").strip()
-        if node_id:
-            nodes.setdefault(node_id, {"id": node_id,
-                                       "kind": str(row.get("kind") or "node"),
-                                       "state": str(row.get("state") or "OBSERVED"),
-                                       "label": str(row.get("label") or ""),
-                                       "source": str(row.get("source") or "entities")})
+
+    for node_id, variants in _group(_rows(entities), "entity").items():
+        collision = len(variants) > 1
+        states = {str(row.get("state") or "OBSERVED") for row in variants}
+        state = next(iter(states)) if len(states) == 1 else "UNKNOWN"
+        if collision or node_id.startswith("unknown-entity:"):
+            state = "UNKNOWN"
+        nodes.setdefault(node_id, {
+            "id": node_id,
+            "kind": (str(variants[0].get("kind") or "node")
+                     if len({str(row.get("kind") or "node")
+                             for row in variants}) == 1 else "node"),
+            "state": state,
+            "label": (str(variants[0].get("label") or "")
+                      if len({str(row.get("label") or "")
+                              for row in variants}) == 1 else ""),
+            "source": (str(variants[0].get("source") or "entities")
+                       if len({str(row.get("source") or "entities")
+                               for row in variants}) == 1 else "entities"),
+            "collision": collision,
+            "variant_fingerprints": [_fingerprint(row) for row in variants]})
+        if collision:
+            collisions.append({"kind": "entity_id", "key": node_id,
+                               "candidates": [_fingerprint(row) for row in variants],
+                               "state": "UNKNOWN"})
+            edges.append(_unknown(node_id, None,
+                                  "conflicting entity records share one ID",
+                                  "IDENTITY_COLLISION"))
 
     explicit_pairs: set[tuple[str, str, str]] = set()
-    for raw in sorted(_rows(lineage_edges),
-                      key=lambda row: (str(row.get("type") or ""),
-                                       str(row.get("from_id") or ""),
-                                       str(row.get("to_id") or ""))):
-        relation = str(raw.get("type") or "UNKNOWN").strip()
-        source = str(raw.get("from_id") or "").strip()
-        target = str(raw.get("to_id") or "").strip()
+    lineage_rows = sorted(_rows(lineage_edges), key=_canonical)
+    for raw in lineage_rows:
+        relation = str(raw.get("type") or raw.get("relation") or "").strip()
+        source = str(raw.get("from_id") or raw.get("from") or "").strip()
+        target = str(raw.get("to_id") or raw.get("to") or "").strip()
         basis = str(raw.get("basis") or "").strip()
-        if source in nodes and target in nodes and basis:
+        if not relation:
+            edges.append(_unknown(
+                source or None, target or None,
+                "lineage edge has neither type nor relation",
+                "UNKNOWN_RELATION"))
+            continue
+        source_node = nodes.get(source)
+        target_node = nodes.get(target)
+        if (source_node and target_node and basis and
+                source_node.get("state") != "UNKNOWN" and
+                target_node.get("state") != "UNKNOWN"):
             edges.append({"type": relation, "relation": relation,
                           "from": source, "to": target, "state": "KNOWN",
                           "basis": basis})
@@ -112,33 +181,31 @@ def build(*, claims: list[dict] | None = None,
         else:
             edges.append(_unknown(
                 source or None, target or None,
-                "lineage edge is missing an endpoint entity or evidence basis",
+                "lineage edge has an absent/UNKNOWN endpoint or no evidence basis",
                 relation))
 
-    for claim in claim_rows:
-        claim_id = str(claim.get("id") or "").strip()
-        if not claim_id:
-            continue
-        refs = _list(claim.get("evidence_refs"))
+    for claim_id, variants in claim_groups.items():
+        collision = len(variants) > 1 or nodes[claim_id].get("state") == "UNKNOWN"
+        refs = sorted({ref for row in variants
+                       for ref in _list(row.get("evidence_refs"))})
         for evidence_id in refs:
-            if ("VERIFIES", evidence_id, claim_id) in explicit_pairs or \
-                    ("REFUTES", evidence_id, claim_id) in explicit_pairs:
+            if (("VERIFIES", evidence_id, claim_id) in explicit_pairs or
+                    ("REFUTES", evidence_id, claim_id) in explicit_pairs):
                 continue
-            if evidence_id in nodes:
+            evidence_node = nodes.get(evidence_id)
+            if collision or not evidence_node or evidence_node.get("state") == "UNKNOWN":
+                edges.append(_unknown(
+                    evidence_id, claim_id,
+                    "claim or evidence identity is absent/ambiguous",
+                    "REFERENCES_EVIDENCE"))
+            else:
                 edges.append({"type": "REFERENCES_EVIDENCE",
                               "relation": "REFERENCES_EVIDENCE",
                               "from": evidence_id, "to": claim_id,
                               "state": "KNOWN",
                               "basis": "claim.evidence_refs; polarity is not recorded"})
-            else:
-                edges.append(_unknown(
-                    evidence_id, claim_id,
-                    "claim references evidence absent from the supplied evidence store",
-                    "REFERENCES_EVIDENCE"))
 
-    for raw in sorted(_rows(citations),
-                      key=lambda row: (str(row.get("claim_id") or ""),
-                                       str(row.get("source_id") or ""))):
+    for raw in sorted(_rows(citations), key=_canonical):
         claim_id = str(raw.get("claim_id") or "").strip()
         source_id = str(raw.get("source_id") or "").strip()
         basis = str(raw.get("basis") or "").strip()
@@ -146,66 +213,73 @@ def build(*, claims: list[dict] | None = None,
             nodes.setdefault(source_id, {"id": source_id, "kind": "source",
                                          "state": "OBSERVED", "label": "",
                                          "source": "citation record"})
-        if claim_id in nodes and source_id and basis:
+        claim_node = nodes.get(claim_id)
+        source_node = nodes.get(source_id)
+        if (claim_node and claim_node.get("state") != "UNKNOWN" and
+                source_node and source_node.get("state") != "UNKNOWN" and basis):
             edges.append({"type": "CITES", "relation": "CITES",
                           "from": claim_id, "to": source_id, "state": "KNOWN",
                           "basis": basis})
         else:
             edges.append(_unknown(
                 claim_id or None, source_id or None,
-                "citation is missing a claim endpoint, source endpoint, or basis",
-                "CITES"))
+                "citation has an absent/UNKNOWN claim, source, or basis", "CITES"))
 
-    for raw in sorted(_rows(rewrites),
-                      key=lambda row: (str(row.get("from_claim_id") or ""),
-                                       str(row.get("to_claim_id") or ""))):
+    for raw in sorted(_rows(rewrites), key=_canonical):
         source = str(raw.get("from_claim_id") or "").strip()
         target = str(raw.get("to_claim_id") or "").strip()
         basis = str(raw.get("basis") or "").strip()
-        if source in nodes and target in nodes and basis:
+        source_node, target_node = nodes.get(source), nodes.get(target)
+        if (source_node and target_node and basis and
+                source_node.get("state") != "UNKNOWN" and
+                target_node.get("state") != "UNKNOWN"):
             edges.append({"type": "REWRITES", "relation": "REWRITES",
                           "from": source, "to": target, "state": "KNOWN",
                           "basis": basis})
         else:
             edges.append(_unknown(
                 source or None, target or None,
-                "rewrite is missing a claim endpoint or basis",
+                "rewrite has an absent/UNKNOWN claim endpoint or no basis",
                 "REWRITES"))
 
     edges = _dedupe_edges(edges)
     traces = []
-    for claim_id in sorted(node_id for node_id, node in nodes.items()
-                           if node.get("kind") == "claim"):
+    for claim_id in sorted(claim_groups):
         evidence_ids = sorted({edge["from"] for edge in edges
                                if edge.get("to") == claim_id and
                                edge.get("relation") in ("VERIFIES", "REFUTES",
                                                         "REFERENCES_EVIDENCE") and
                                edge.get("state") == "KNOWN"})
-        citations_out = sorted({edge["to"] for edge in edges
-                                if edge.get("from") == claim_id and
-                                edge.get("relation") == "CITES" and
-                                edge.get("state") == "KNOWN"})
+        citation_ids = sorted({edge["to"] for edge in edges
+                               if edge.get("from") == claim_id and
+                               edge.get("relation") == "CITES" and
+                               edge.get("state") == "KNOWN"})
         rewritten_from = sorted({edge["from"] for edge in edges
                                  if edge.get("to") == claim_id and
                                  edge.get("relation") == "REWRITES" and
                                  edge.get("state") == "KNOWN"})
         if not evidence_ids:
-            edges.append(_unknown(
-                None, claim_id,
-                "claim has no observed evidence lineage",
-                "VERIFIES_OR_REFUTES"))
+            edges.append(_unknown(None, claim_id,
+                                  "claim has no observed evidence lineage",
+                                  "VERIFIES_OR_REFUTES"))
         traces.append({"claim_id": claim_id, "evidence_ids": evidence_ids,
-                       "citation_source_ids": citations_out,
+                       "citation_source_ids": citation_ids,
                        "rewritten_from_claim_ids": rewritten_from})
 
     edges = _dedupe_edges(edges)
     unknown_n = sum(edge.get("type") == UNKNOWN_EDGE for edge in edges)
-    status = "UNKNOWN" if not claim_rows else (
-        "PARTIAL" if unknown_n else "COMPLETE")
-    why = ("no claims were supplied" if not claim_rows else
-           "at least one claim lineage endpoint remains unknown" if unknown_n else
+    unknown_nodes = sum(node.get("state") == "UNKNOWN" for node in nodes.values())
+    claim_input_n = len(_rows(claims))
+    status = "UNKNOWN" if not claim_input_n else (
+        "PARTIAL" if unknown_n or unknown_nodes else "COMPLETE")
+    why = ("no claims were supplied" if not claim_input_n else
+           "at least one lineage endpoint, relation, or node remains unknown"
+           if status == "PARTIAL" else
            "all returned claim, evidence, citation, and rewrite links are explicit")
     return {"version": CONTRACT_VERSION, "status": status, "why": why,
             "nodes": sorted(nodes.values(), key=lambda node: node["id"]),
             "edges": edges, "unknown_edges": unknown_n,
+            "unknown_nodes": unknown_nodes,
+            "collisions": sorted(collisions,
+                                 key=lambda item: (item["kind"], item["key"])),
             "traces": traces}
