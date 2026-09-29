@@ -46,6 +46,44 @@ def test_scope_match一律回None因為規格沒定義():
         assert G.scope_match(acts)["value"] is None
 
 
+def test_scope_match只在明示owner_contract時委派給契約引擎():
+    anchor = {
+        "scope_contract_ref": "owner:scope:1",
+        "owner_provenance_ref": "event:owner:1",
+        "accepted_scope": ["forseti.goal"],
+        "rejected_scope": ["production.deploy"],
+    }
+    actions = [{
+        "action_id": "a1",
+        "scope_refs": ["forseti.goal"],
+        "evidence_refs": ["tool:a1"],
+    }]
+    result = G.scope_match(actions, anchor=anchor)
+    assert result["status"] == "MATCH"
+    assert result["value"] == 1.0
+
+    built = G.build_anchors(actions=actions, scope_anchor=anchor)
+    assert built["anchors"][0]["scopeMatch"] == 1.0
+
+
+def test_verifier_counterexample_越界action不會把GAC_scopeMatch歸零():
+    anchor = {
+        "scope_contract_ref": "owner:scope:1",
+        "owner_provenance_ref": "event:owner:1",
+        "accepted_scope": ["forseti.goal"],
+        "rejected_scope": ["production.deploy"],
+    }
+    actions = [{
+        "action_id": "a1",
+        "scope_refs": ["production.deploy"],
+        "evidence_refs": ["tool:a1"],
+    }]
+    built = G.build_anchors(actions=actions, scope_anchor=anchor)
+    assert built["anchors"][0]["scopeMatch"] == 1.0
+    assert built["action_scope"]["status"] == "OUT_OF_SCOPE"
+    assert built["action_scope"]["value"] == 0.0
+
+
 def test_提到非目標只算弱訊號不進分母():
     """「提到」跟「在做」是兩件事。
 

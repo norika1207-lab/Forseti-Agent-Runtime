@@ -56,6 +56,9 @@ import tempfile
 import time
 from pathlib import Path
 
+from goal_scope import action_scope_verdict
+from goal_scope import scope_match as contract_scope_match
+
 REPO = Path(__file__).resolve().parents[2]
 SRC = REPO / "src"
 NORTH_STAR = REPO / ".forseti" / "NORTH_STAR.md"
@@ -127,7 +130,8 @@ def non_goals(path: Path | None = None) -> list[str]:
     return out
 
 
-def scope_match(actions: list[str], goals: list[str] | None = None) -> dict:
+def scope_match(actions: list, goals: list[str] | None = None,
+                anchor: dict | None = None) -> dict:
     """§5.1 的 scope_match。**現在判不準，所以回 None。**
 
     【2026-09-15 同一天內兩種判法都誤判，第三次動手前停手】
@@ -153,6 +157,9 @@ def scope_match(actions: list[str], goals: list[str] | None = None) -> dict:
 
     要讓這一項能算，需要 owner 定義「什麼算離開範圍」。
     """
+    if anchor is not None:
+        return contract_scope_match(actions, anchor)
+
     import re as _re
     ng = goals if goals is not None else non_goals()
     blob = "\n".join(str(a) for a in actions or [])
@@ -266,11 +273,12 @@ def gac(anchors: list[dict]) -> dict:
     return out
 
 
-def build_anchors(*, actions: list[str] | None = None,
+def build_anchors(*, actions: list | None = None,
+                  scope_anchor: dict | None = None,
                   turns_since_owner: int | None = None,
                   enable_freshness_candidate: bool = False) -> dict:
     """組出要送進 goalanchor.js 的 anchor，每個因子都附理由。"""
-    sm = scope_match(actions or [])
+    sm = scope_match(actions or [], anchor=scope_anchor)
     pi = provenance_integrity()
     fr = freshness(turns_since_owner, enable_candidate=enable_freshness_candidate)
 
@@ -280,16 +288,20 @@ def build_anchors(*, actions: list[str] | None = None,
         "scopeMatch": sm["value"],
         "provenanceIntegrity": pi["value"],
     }
+    action_scope = (action_scope_verdict(actions or [], scope_anchor)
+                    if scope_anchor is not None else None)
     return {"anchors": [anchor],
             "factors": {"freshness": fr, "scope_match": sm,
-                        "provenance_integrity": pi}}
+                        "provenance_integrity": pi},
+            "action_scope": action_scope}
 
 
-def gate(*, actions: list[str] | None = None,
+def gate(*, actions: list | None = None,
+         scope_anchor: dict | None = None,
          turns_since_owner: int | None = None,
          enable_freshness_candidate: bool = False) -> dict:
     """紫點的閘門。回「能不能出 CONFIRMED」跟「不能的話缺什麼」。"""
-    built = build_anchors(actions=actions,
+    built = build_anchors(actions=actions, scope_anchor=scope_anchor,
                           turns_since_owner=turns_since_owner,
                           enable_freshness_candidate=enable_freshness_candidate)
     r = gac(built["anchors"])
@@ -309,6 +321,7 @@ def gate(*, actions: list[str] | None = None,
         "missing_factors": missing,
         "factors": built["factors"],
         "per_anchor": r.get("per_anchor"),
+        "action_scope": built["action_scope"],
         "note": r.get("note") or r.get("why", ""),
         "at": time.time(),
     }

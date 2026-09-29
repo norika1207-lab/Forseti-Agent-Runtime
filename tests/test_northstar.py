@@ -147,6 +147,98 @@ class TestBranches(unittest.TestCase):
         with self.assertRaises(N.NorthStarError):
             N.NorthStar(objective="x", branch="差不多是主線")
 
+    def test_adopting_after_cut_keeps_monotonic_versions(self):
+        c = N.Chain()
+        c.adopt("v1", authority="owner", why="start")
+        c.adopt("cut", authority="owner", why="bad branch", branch="CUT")
+        third = c.adopt("v3", authority="owner", why="resume")
+        self.assertEqual(third.version, 3)
+        self.assertEqual(third.supersedes, 2)
+
+
+class TestCrossSessionChain(unittest.TestCase):
+
+    def _chain(self):
+        c = N.Chain()
+        c.adopt_from_session(
+            "第一版", authority="Norika", why="start",
+            session_id="session-a", event_id="event-1", owner_confirmed=True,
+            at=100.0,
+        )
+        c.adopt_from_session(
+            "第二版", authority="Norika", why="owner changed goal",
+            session_id="session-b", event_id="event-2", owner_confirmed=True,
+            at=200.0,
+        )
+        return c
+
+    def test_replay_is_deterministic_across_session_arrival_order(self):
+        original = self._chain()
+        records = original.to_records()
+        replayed = N.Chain.from_records(list(reversed(records)))
+        self.assertEqual(original.to_canonical_json(),
+                         replayed.to_canonical_json())
+        self.assertEqual(replayed.current.objective, "第二版")
+
+    def test_owner_confirmed_supersession_is_goal_change_exclusion(self):
+        exclusion = self._chain().goal_change_exclusion(1, 2)
+        self.assertEqual(exclusion["kind"], "OWNER_GOAL_CHANGE")
+        self.assertTrue(exclusion["owner_confirmed"])
+        self.assertEqual(exclusion["evidence_refs"], ["event-2"])
+
+    def test_model_or_unknown_provenance_cannot_invent_owner_change(self):
+        c = N.Chain()
+        c.adopt_from_session(
+            "v1", authority="owner", why="start",
+            session_id="s1", event_id="e1", owner_confirmed=True, at=1.0,
+        )
+        c.adopt_from_session(
+            "v2", authority="agent", why="agent proposed",
+            session_id="s2", event_id="e2", owner_confirmed=False, at=2.0,
+        )
+        exclusion = c.goal_change_exclusion(1, 2)
+        self.assertEqual(exclusion["kind"], "UNKNOWN")
+        self.assertIsNone(exclusion["owner_confirmed"])
+
+    def test_broken_or_duplicate_cross_session_records_are_rejected(self):
+        records = self._chain().to_records()
+        broken = [dict(record) for record in records]
+        broken[1] = dict(broken[1], north_star=dict(
+            broken[1]["north_star"], supersedes=99))
+        with self.assertRaises(N.NorthStarError):
+            N.Chain.from_records(broken)
+
+        duplicate = [records[0], dict(records[1], event_id="event-1")]
+        with self.assertRaises(N.NorthStarError):
+            N.Chain.from_records(duplicate)
+
+    def test_missing_session_provenance_fails_closed(self):
+        c = N.Chain()
+        c.adopt("local only", authority="owner", why="not persisted")
+        with self.assertRaises(N.NorthStarError):
+            c.to_records()
+
+    def test_verifier_counterexample_bool_versions_are_not_integers(self):
+        with self.assertRaises(N.NorthStarError):
+            N.NorthStar(objective="bad", version=True)
+        with self.assertRaises(N.NorthStarError):
+            N.NorthStar(objective="bad", version=2, supersedes=True)
+        result = self._chain().goal_change_exclusion(True, 2)
+        self.assertEqual(result["kind"], "UNKNOWN")
+        self.assertIsNone(self._chain().at_version(True))
+
+    def test_verifier_counterexample_non_string_session_ids_are_rejected(self):
+        c = N.Chain()
+        with self.assertRaises(N.NorthStarError):
+            c.adopt_from_session(
+                "v1", authority="owner", why="start",
+                session_id=123, event_id="e1", owner_confirmed=True)
+
+        records = self._chain().to_records()
+        records[0] = dict(records[0], event_id=123)
+        with self.assertRaises(N.NorthStarError):
+            N.Chain.from_records(records)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
