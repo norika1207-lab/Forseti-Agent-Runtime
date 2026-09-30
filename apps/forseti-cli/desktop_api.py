@@ -3481,6 +3481,11 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     ]
     snap["authority"] = _safe(lambda: AU.summary(_claims),
                               {"has_collision": False}) or {}
+    import authority_map as AM
+    snap["authority_map"] = _safe(
+        lambda: AM.project([], claims=_claims),
+        {"version": AM.VERSION, "status": "UNKNOWN",
+         "why": "authority projection failed"})
 
     # 修正延遲。白皮書 §5.4 從偏離開始到被拉回來隔了多久。
     #
@@ -3508,6 +3513,29 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     import divergence as DV
     snap["divergence"] = _safe(lambda: DV.summary(_rows),
                                {"has": False}) or {"has": False}
+
+    # R1 diagnostic contracts remain visible when structured inputs are
+    # missing. UNKNOWN is a real state; an absent key would hide wiring gaps.
+    import causal_xray as CX
+    import context_mri as MRI
+    import lineage_view as LV
+    import execution_topology as ET
+    snap["causal_xray"] = _safe(
+        lambda: CX.build(_rows),
+        {"version": CX.CONTRACT_VERSION, "status": "UNKNOWN",
+         "why": "causal projection failed"})
+    snap["context_mri"] = _safe(
+        lambda: MRI.build(decisions=[], fragments=[], compactions=[]),
+        {"version": MRI.CONTRACT_VERSION, "status": "UNKNOWN",
+         "why": "context projection failed"})
+    snap["lineage_view"] = _safe(
+        lambda: LV.build(claims=[], evidence=[]),
+        {"version": LV.CONTRACT_VERSION, "status": "UNKNOWN",
+         "why": "lineage projection failed"})
+    snap["execution_topology"] = _safe(
+        lambda: ET.project([]),
+        {"version": ET.VERSION, "status": "UNKNOWN",
+         "why": "structured execution events are unavailable"})
 
     # Two-Phase Commit。§9.3 準備跟提交是兩個權限等級。
     #
