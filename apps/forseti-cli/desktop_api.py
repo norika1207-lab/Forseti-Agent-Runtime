@@ -672,7 +672,7 @@ def context_state(path: Path) -> dict:
     return out
 
 
-def audit() -> dict:
+def audit(strands_snapshot: dict | None = None, *, persist: bool = True) -> dict:
     """自我審計。§39
 
     owner 2026-09-14：
@@ -768,6 +768,13 @@ def audit() -> dict:
     except Exception as e:                                  # noqa: BLE001
         silence = {"error": f"算不出來：{e}"}
 
+    # Callers that already collected the strand snapshot must reuse it. The UI
+    # render harness is observational; recomputing here used to run the full
+    # contract recheck twice and write a handoff during every screenshot test.
+    strand_state = strands_snapshot
+    if strand_state is None:
+        strand_state = _safe(lambda: strands(persist=persist), {}) or {}
+
     return {
         "has": True,
         "faults": rows,
@@ -780,13 +787,13 @@ def audit() -> dict:
         "goal_gap": (_safe(north_star, {}) or {}).get("goal_gap"),
         # 權威衝突。§9.1 同一個資源上有兩個來源說自己說了算。
         # 這種東西平常不會報錯，所以只能靠主動列出來。
-        "authority": (_safe(strands, {}) or {}).get("authority"),
+        "authority": strand_state.get("authority"),
         # 誰把偏離拉回來的。她出手佔多數 = 她在當工人。
         #
         # 這一頁看的是「目前跟著的那條線」，剛開的線本來就沒有偏離可算。
         # 空的時候要說出為什麼是空的 —— 一個沒有解釋的空欄位，
         # 看的人分不出「沒問題」跟「算不出來」。
-        "latency": (_safe(strands, {}) or {}).get("latency")
+        "latency": strand_state.get("latency")
                    or {"has": False, "why": "目前跟著的這條線還沒有離開中軸過"},
         # 停在 commit 邊界前面等人按的東西。§9.3
         "commits": _safe(lambda: __import__("commit").summary(),
@@ -3108,7 +3115,8 @@ def timeline(session: str) -> dict:
 _TRACKERS: dict[str, object] = {}
 
 
-def strands(session: str = "", projects: Path | None = None) -> dict:
+def strands(session: str = "", projects: Path | None = None,
+            *, persist: bool = True) -> dict:
     """那條線。Widget 每 1 到 3 秒叫一次。
 
     規格 `.forseti/WIDGET_SPEC.md` §3、§4、§6。
@@ -3590,10 +3598,11 @@ def strands(session: str = "", projects: Path | None = None) -> dict:
     # 即使真的有人標過。症狀是兩個來源說法不一致:畫面上的救援那格
     # 說「你自己標的第 206 輪」，交接檔說沒有。
     # 這種 bug 不會報錯，只會在停機之後讓接手的人以為無處可退。
-    _safe(lambda: _write_handoff(snap), None)
+    if persist:
+        _safe(lambda: _write_handoff(snap), None)
 
     _sid = str(snap.get("session") or snap.get("ui_id") or "")
-    if _n_now is not None:
+    if persist and _n_now is not None:
         _safe(lambda: AT.record(_cards, n=_n_now, session=_sid), [])
     _now_ids = {AT.advice_id(c) for c in _cards}
     snap["advice_track"] = _safe(

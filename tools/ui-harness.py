@@ -60,13 +60,16 @@ window.__TAURI__ = { core: { invoke: async (cmd, args) => {
 <script src="app.js"></script>'''
 
 
-def build(out: Path, fake: bool, session: str = "") -> None:
+def build(out: Path, fake: bool, session: str = "",
+          *, include_blast_details: bool = True) -> None:
     import desktop_api as D
 
     for name in ("app.css", "app.js", "index.html"):
         shutil.copy2(UI / name, out / name)
 
-    data = D.strands(session)
+    # Rendering is observational. Do not let a screenshot fixture mutate the
+    # production advice ledger or handoff state on every test invocation.
+    data = D.strands(session, persist=False)
     if fake:
         row = _fake_betrayal()
         rows = data.get("rows") or []
@@ -120,8 +123,9 @@ def build(out: Path, fake: bool, session: str = "") -> None:
                     break
         except Exception:                     # 血脈算不出來不該擋住畫面
             pass
-        for tgt in want:
-            blast_rows["rows"][tgt] = D.blast_detail(tgt)
+        if include_blast_details:
+            for tgt in want:
+                blast_rows["rows"][tgt] = D.blast_detail(tgt)
     except Exception as e:  # harness 是開發工具，算不出來不該擋住整個畫面
         blast_rows["rows"] = {}
         print(f"  blast_detail 算不出來：{e}", file=sys.stderr)
@@ -130,7 +134,8 @@ def build(out: Path, fake: bool, session: str = "") -> None:
                "blast_detail": blast_rows,
                "sessions": D.sessions(), "work": D.work(),
                "machine": D.machine(), "features": D.features(),
-               "selftest": D.selftest(), "audit": D.audit(),
+               "selftest": D.selftest(),
+               "audit": D.audit(data, persist=False),
                "spec_reading": D.spec_reading(),
                "block_reading": D.block_reading(),
                "sufficiency": D.sufficiency_state()}

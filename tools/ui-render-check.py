@@ -383,7 +383,10 @@ def render(session: str = "", fake: bool = False,
     out = outdir or Path(tempfile.mkdtemp(prefix="forseti-render-"))
     try:
         try:
-            harness.build(out, fake, session)
+            # These checks never click a blast node. Computing up to eighteen
+            # Node-backed detail graphs adds minutes without changing the DOM
+            # under test; the interactive harness keeps them enabled by default.
+            harness.build(out, fake, session, include_blast_details=False)
         except Exception as e:
             raise CannotRun(f"harness 產不出頁面：{type(e).__name__}: {e}") from e
 
