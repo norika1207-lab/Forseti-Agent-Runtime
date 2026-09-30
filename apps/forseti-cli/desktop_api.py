@@ -3113,6 +3113,21 @@ def timeline(session: str) -> dict:
 # 所以同一個檔案要重用同一個 Tracker,不能每次呼叫都開新的 ——
 # 開新的等於每次重讀 24 MB。
 _TRACKERS: dict[str, object] = {}
+CODEX_SESSIONS = Path.home() / ".codex" / "sessions"
+
+
+def _latest_codex_session(base: Path | None = None) -> Path | None:
+    """Return the most recently written Codex rollout, when one exists."""
+    root = base or CODEX_SESSIONS
+    if not root.is_dir():
+        return None
+    candidates = []
+    for path in root.rglob("*.jsonl"):
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    return max(candidates, default=(0.0, None), key=lambda item: item[0])[1]
 
 
 def strands(session: str = "", projects: Path | None = None,
@@ -3130,6 +3145,8 @@ def strands(session: str = "", projects: Path | None = None,
     picked_by = "指定"
     if session:
         hits = sorted(base.glob(f"*/{session}*.jsonl"))
+        if not hits and projects is None and CODEX_SESSIONS.is_dir():
+            hits = sorted(CODEX_SESSIONS.rglob(f"*{session}*.jsonl"))
         target = hits[0] if hits else None
     else:
         # 三層，由準到粗:
@@ -3151,12 +3168,18 @@ def strands(session: str = "", projects: Path | None = None,
     key = str(target)
     tk = _TRACKERS.get(key)
     if tk is None:
-        tk = TK.Tracker(target)
+        tk = TK.tracker_for(target)
         _TRACKERS[key] = tk
     tk.poll()
     snap = tk.snapshot(tail=180)
-    snap["session"] = target.stem
+    codex_session_id = session if session and ".codex" in target.parts else target.stem
+    snap["session"] = codex_session_id
     snap["picked_by"] = picked_by
+    snap["provider"] = "codex" if ".codex" in target.parts else "claude"
+    if snap["provider"] == "codex":
+        from codex_session_inventory import title_for
+        snap["session_title"] = title_for(
+            codex_session_id, Path.home() / ".codex" / "session_index.jsonl")
     # 桌面版的 session id。前端拿它組 deep link 跳回去。
     #
     # 【2026-09-14 實測】`claude://code/continue?session=<ui_id>`
@@ -3167,7 +3190,10 @@ def strands(session: str = "", projects: Path | None = None,
     #
     # 還缺的是「跳到某一輪」—— deep link 只到 session 這一層，
     # 訊息層級的入口目前沒找到。不假裝有。
-    snap["ui_id"] = _safe(lambda: _ui_id_of(target.stem), "") or ""
+    snap["ui_id"] = (
+        _safe(lambda: _ui_id_of(target.stem), "") or ""
+        if snap["provider"] == "claude" else codex_session_id
+    )
 
     # 白點。§5.2
     #

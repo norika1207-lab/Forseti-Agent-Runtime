@@ -91,6 +91,12 @@ static RUNTIME_SCRIPT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 fn prepare_python_runtime(repo: &Path) -> Result<PathBuf, String> {
     RUNTIME_SCRIPT
         .get_or_init(|| {
+            let bundled_script = repo.join("apps/forseti-cli/desktop_api.py");
+            let is_bundled_runtime = repo.ends_with("Contents/Resources/runtime");
+            if is_bundled_runtime && bundled_script.is_file() {
+                return Ok(bundled_script);
+            }
+
             let home = std::env::var_os("HOME")
                 .map(PathBuf::from)
                 .ok_or_else(|| "找不到 HOME，無法建立 Python runtime cache".to_string())?;
