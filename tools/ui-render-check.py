@@ -386,7 +386,8 @@ def render(session: str = "", fake: bool = False,
             # These checks never click a blast node. Computing up to eighteen
             # Node-backed detail graphs adds minutes without changing the DOM
             # under test; the interactive harness keeps them enabled by default.
-            harness.build(out, fake, session, include_blast_details=False)
+            harness.build(out, fake, session, include_blast_details=False,
+                          stable_render_data=True)
         except Exception as e:
             raise CannotRun(f"harness 產不出頁面：{type(e).__name__}: {e}") from e
 

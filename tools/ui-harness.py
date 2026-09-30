@@ -60,8 +60,51 @@ window.__TAURI__ = { core: { invoke: async (cmd, args) => {
 <script src="app.js"></script>'''
 
 
+def _stabilize_render_fixture(data: dict, work: dict) -> None:
+    """Give render checks deterministic rows without touching live ledgers."""
+    workflow = data.get("workflow") or {}
+    if not (workflow.get("resumable") or []):
+        data["workflow"] = {
+            **workflow,
+            "has": True,
+            "live": 1,
+            "total": max(1, int(workflow.get("total") or 0)),
+            "resumable": [{
+                "workflow_id": "render-fixture-workflow",
+                "objective": "deterministic render fixture",
+                "state": "READY",
+                "counts": {"ready": 1, "blocked": 0, "done": 0,
+                           "total": 1, "dangling": 0},
+                "ready_ids": ["render-fixture-step"],
+                "blocked_ids": [],
+                "boundary": "UNDECLARED",
+            }],
+            "missing": workflow.get("missing") or [],
+            "wf_coverage": workflow.get("wf_coverage") or {},
+            "step_coverage": workflow.get("step_coverage") or {},
+        }
+
+    if not (work.get("tasks") or []):
+        work.update({
+            "ok": True,
+            "total": max(1, int(work.get("total") or 0)),
+            "active": max(1, int(work.get("active") or 0)),
+            "tasks": [{
+                "id": "render-fixture-task",
+                "state": "RUNNING",
+                "objective": "deterministic render fixture",
+                "events_total": 1,
+                "continuity": {"score": 1.0, "burden": 0},
+                "next_step": {"objective": "render the fixture"},
+                "events": [],
+            }],
+            "active_rows": work.get("active_rows") or [],
+        })
+
+
 def build(out: Path, fake: bool, session: str = "",
-          *, include_blast_details: bool = True) -> None:
+          *, include_blast_details: bool = True,
+          stable_render_data: bool = False) -> None:
     import desktop_api as D
 
     for name in ("app.css", "app.js", "index.html"):
@@ -130,9 +173,13 @@ def build(out: Path, fake: bool, session: str = "",
         blast_rows["rows"] = {}
         print(f"  blast_detail 算不出來：{e}", file=sys.stderr)
 
+    work_data = D.work()
+    if stable_render_data:
+        _stabilize_render_fixture(data, work_data)
+
     fixture = {"strands": data, "snapshot": D.snapshot(),
                "blast_detail": blast_rows,
-               "sessions": D.sessions(), "work": D.work(),
+               "sessions": D.sessions(), "work": work_data,
                "machine": D.machine(), "features": D.features(),
                "selftest": D.selftest(),
                "audit": D.audit(data, persist=False),
