@@ -14,11 +14,12 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use tauri::Manager;
-use std::sync::mpsc::channel;
+use std::sync::{mpsc::channel, OnceLock};
 use std::time::Duration;
+use tauri::Manager;
 
 use notify::{RecursiveMode, Watcher};
 use tauri::Emitter;
@@ -58,12 +59,81 @@ fn find_repo() -> Option<PathBuf> {
 ///
 /// 不假設 PATH 裡有。找不到要說出來,不是讓每個呼叫各自失敗一次。
 fn find_python() -> Option<String> {
-    for cand in ["python3", "/usr/bin/python3", "/opt/homebrew/bin/python3"] {
-        if Command::new(cand).arg("--version").output().is_ok() {
-            return Some(cand.to_string());
+    let mut candidates = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        candidates.push(
+            home.join(".cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3")
+                .display()
+                .to_string(),
+        );
+    }
+    candidates.extend([
+        "/opt/homebrew/bin/python3".to_string(),
+        "/usr/bin/python3".to_string(),
+        "python3".to_string(),
+    ]);
+    for cand in candidates {
+        if Command::new(&cand).arg("--version").output().is_ok() {
+            return Some(cand);
         }
     }
     None
+}
+
+static RUNTIME_SCRIPT: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+
+/// Copy executable Python modules to APFS once per app process.
+///
+/// The project and canonical state remain on NewDrive. Only the importable
+/// program files are mirrored because Python launched by a GUI app can block
+/// indefinitely while opening source modules directly from the exFAT volume.
+/// Data-bearing paths are symlinks back to the canonical repository.
+fn prepare_python_runtime(repo: &Path) -> Result<PathBuf, String> {
+    RUNTIME_SCRIPT
+        .get_or_init(|| {
+            let home = std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .ok_or_else(|| "找不到 HOME，無法建立 Python runtime cache".to_string())?;
+            let root = home.join(".forseti/runtime/forseti-repo-v2");
+            let cli = root.join("apps/forseti-cli");
+            std::fs::create_dir_all(&cli)
+                .map_err(|e| format!("無法建立 Python runtime cache:{e}"))?;
+
+            let source_cli = repo.join("apps/forseti-cli");
+            for entry in std::fs::read_dir(&source_cli)
+                .map_err(|e| format!("無法讀取 Python 原始碼目錄:{e}"))?
+            {
+                let entry = entry.map_err(|e| format!("無法列舉 Python 原始碼:{e}"))?;
+                let source = entry.path();
+                if source.is_file() && source.extension().and_then(|x| x.to_str()) == Some("py") {
+                    std::fs::copy(&source, cli.join(entry.file_name()))
+                        .map_err(|e| format!("無法複製 Python runtime 模組 {}:{e}", source.display()))?;
+                }
+            }
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+                for name in [
+                    ".forseti", "docs", "spec-v2.0", "src", "desktop",
+                    "hooks", "test", "tests", "tools", "README.md", "package.json",
+                ] {
+                    let source = repo.join(name);
+                    let link = root.join(name);
+                    if source.exists() && std::fs::symlink_metadata(&link).is_err() {
+                        symlink(&source, &link)
+                            .map_err(|e| format!("無法連結 runtime 資料 {name}:{e}"))?;
+                    }
+                }
+            }
+
+            let script = cli.join("desktop_api.py");
+            if !script.is_file() {
+                return Err(format!("runtime cache 找不到 {}", script.display()));
+            }
+            Ok(script)
+        })
+        .clone()
 }
 
 fn run_api(args: &[&str]) -> Result<String, String> {
@@ -71,31 +141,79 @@ fn run_api(args: &[&str]) -> Result<String, String> {
         "找不到 Forseti repo。往上走都看不到同時有 .forseti/ 與 apps/forseti-cli/ 的目錄"
             .to_string()
     })?;
-    let py = find_python().ok_or_else(|| {
-        "找不到 python3。試過 PATH、/usr/bin、/opt/homebrew/bin".to_string()
-    })?;
-    let script = repo.join("apps/forseti-cli/desktop_api.py");
-    if !script.is_file() {
-        return Err(format!("找不到 {}", script.display()));
-    }
+    let py = find_python()
+        .ok_or_else(|| "找不到 python3。試過 PATH、/usr/bin、/opt/homebrew/bin".to_string())?;
+    let script = prepare_python_runtime(&repo)?;
     let out = Command::new(&py)
+        // A child launched from a macOS app inherits the parent's bundle
+        // identity. /usr/bin/python3 then behaves like part of the GUI app and
+        // can stall while importing modules from the external exFAT volume.
+        // It is a CLI worker, so remove that identity and never write pyc files
+        // beside the source tree.
+        .arg("-B")
         .arg(&script)
         .args(args)
+        .env_remove("__CFBundleIdentifier")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .current_dir(&repo)
         .output()
         .map_err(|e| format!("跑不起來:{e}"))?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
-        let tail: String = err.chars().rev().take(600).collect::<Vec<_>>()
-            .into_iter().rev().collect();
+        let tail: String = err
+            .chars()
+            .rev()
+            .take(600)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         return Err(format!("desktop_api.py 失敗:{tail}"));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
+/// Python may wait on a slow or temporarily uninterruptible filesystem read.
+/// Never execute it on AppKit's event-loop thread: the window must remain
+/// draggable and closable even while a snapshot is still loading.
+async fn run_api_off_main<F>(job: F) -> Result<String, String>
+where
+    F: FnOnce() -> Result<String, String> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(job)
+        .await
+        .map_err(|e| format!("desktop API worker 無法完成:{e}"))?
+}
+
+fn run_session_surface(session: Option<String>) -> Result<String, String> {
+    let py = find_python()
+        .ok_or_else(|| "找不到可執行的 Python CLI".to_string())?;
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("找不到 Forseti 執行檔位置:{e}"))?;
+    let contents = exe.parent().and_then(Path::parent)
+        .ok_or_else(|| "Forseti.app bundle 結構不完整".to_string())?;
+    let script = contents.join("Resources/forseti-cli/session_surface.py");
+    if !script.is_file() {
+        return Err(format!("找不到已安裝的 Session runtime:{}", script.display()));
+    }
+    let mut cmd = Command::new(py);
+    cmd.arg("-B").arg(&script)
+        .env_remove("__CFBundleIdentifier")
+        .env("PYTHONDONTWRITEBYTECODE", "1");
+    if let Some(value) = session.filter(|s| !s.is_empty()) {
+        cmd.arg(value);
+    }
+    let out = cmd.output().map_err(|e| format!("Session runtime 跑不起來:{e}"))?;
+    if !out.status.success() {
+        return Err(format!("Session runtime 失敗:{}",
+                           String::from_utf8_lossy(&out.stderr)));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
 #[tauri::command]
-fn snapshot() -> Result<String, String> {
-    run_api(&["snapshot"])
+async fn snapshot() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["snapshot"])).await
 }
 
 /// 那條線。Widget 的主體。
@@ -103,21 +221,18 @@ fn snapshot() -> Result<String, String> {
 /// 每 1 到 3 秒被叫一次(WIDGET_SPEC §13),所以 Python 那邊只讀新增的
 /// 位元組,不重讀整份 —— 那份 jsonl 是 24 MB 而且一直在長。
 #[tauri::command]
-fn strands(session: Option<String>) -> Result<String, String> {
-    match session {
-        Some(s) if !s.is_empty() => run_api(&["strands", &s]),
-        _ => run_api(&["strands"]),
-    }
+async fn strands(session: Option<String>) -> Result<String, String> {
+    run_api_off_main(move || run_session_surface(session)).await
 }
 
 #[tauri::command]
-fn sessions() -> Result<String, String> {
-    run_api(&["sessions"])
+async fn sessions() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["sessions"])).await
 }
 
 #[tauri::command]
-fn timeline(session: String) -> Result<String, String> {
-    run_api(&["timeline", &session])
+async fn timeline(session: String) -> Result<String, String> {
+    run_api_off_main(move || run_api(&["timeline", &session])).await
 }
 
 #[tauri::command]
@@ -127,7 +242,7 @@ fn repo_path() -> Result<String, String> {
         .ok_or_else(|| "找不到 repo".to_string())
 }
 
-/// 監看 .forseti/。變了就推一個事件給前端。
+/// 監看產品狀態與 transcript。變了就推一個事件給前端。
 ///
 /// 為什麼監看而不是定時輪詢:輪詢會在什麼都沒發生的時候一直跑 Python,
 /// 而這個系統自己的規格(§24.2 GovernanceOverheadRatio)在量
@@ -136,31 +251,120 @@ fn repo_path() -> Result<String, String> {
 fn spawn_watcher(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let Some(repo) = find_repo() else { return };
-        let target = repo.join(".forseti");
-        if !target.is_dir() {
-            return;
+        let mut targets = vec![repo.join(".forseti")];
+        if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+            targets.push(home.join(".claude/projects"));
+            targets.push(home.join(".codex/sessions"));
+            // Codex records a task switch in its desktop log even when the
+            // selected transcript itself is idle.  Watching JSONL alone can
+            // refresh content, but it cannot follow the owner's selection.
+            targets.push(home.join("Library/Logs/com.openai.codex"));
         }
+        targets.retain(|target| target.is_dir());
+        if targets.is_empty() { return; }
         let (tx, rx) = channel();
         let mut watcher = match notify::recommended_watcher(tx) {
             Ok(w) => w,
             Err(_) => return,
         };
-        if watcher.watch(Path::new(&target), RecursiveMode::Recursive).is_err() {
-            return;
+        let mut watched = 0;
+        for target in &targets {
+            if watcher.watch(Path::new(target), RecursiveMode::Recursive).is_ok() {
+                watched += 1;
+            }
         }
-        // 合併短時間內的連續變化。一次寫檔可能觸發好幾個事件,
-        // 每一個都重算一次快照是浪費。
+        if watched == 0 { return; }
+        // 合併短時間內的連續變化，但不能等整棵 Session 目錄安靜。
+        // owner 同時跑多個 Session 時，總會有某一份 JSONL 在寫；舊版
+        // 只有 recv_timeout 才 emit，結果目前視窗可以數十分鐘收不到更新。
+        // 這裡同時保留 leading 與 trailing emit：連續寫入期間至多每
+        // 700ms 通知一次，停止寫入後也補最後一次。
         let mut pending = false;
+        let interval = Duration::from_millis(700);
+        let mut last_emit = std::time::Instant::now() - interval;
         loop {
-            match rx.recv_timeout(Duration::from_millis(700)) {
-                Ok(_) => pending = true,
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if pending {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(_) => {
+                    pending = true;
+                    if last_emit.elapsed() >= interval {
                         pending = false;
+                        last_emit = std::time::Instant::now();
+                        let _ = app.emit("forseti://changed", ());
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if pending && last_emit.elapsed() >= interval {
+                        pending = false;
+                        last_emit = std::time::Instant::now();
                         let _ = app.emit("forseti://changed", ());
                     }
                 }
                 Err(_) => break,
+            }
+        }
+    });
+}
+
+fn collect_recent_logs(root: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth == 0 { return; }
+    let Ok(entries) = std::fs::read_dir(root) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_recent_logs(&path, depth - 1, out);
+        } else if path.extension().and_then(|s| s.to_str()) == Some("log") {
+            out.push(path);
+        }
+    }
+}
+
+/// Detect a Codex task switch without treating every log append as a refresh.
+/// Python remains the source-of-truth selector after this event fires.
+fn latest_codex_focus_id(root: &Path) -> Option<String> {
+    let mut files = Vec::new();
+    collect_recent_logs(root, 4, &mut files);
+    files.sort_by_key(|path| {
+        std::cmp::Reverse(path.metadata().and_then(|m| m.modified()).ok())
+    });
+    let mut best: Option<(String, String)> = None;
+    for path in files.into_iter().take(12) {
+        let Ok(mut file) = std::fs::File::open(path) else { continue };
+        let Ok(size) = file.metadata().map(|m| m.len()) else { continue };
+        let start = size.saturating_sub(512 * 1024);
+        if file.seek(SeekFrom::Start(start)).is_err() { continue; }
+        let mut text = String::new();
+        if file.read_to_string(&mut text).is_err() { continue; }
+        for line in text.lines() {
+            if !line.contains("thread_stream_view_activity_changed active=true")
+                || !line.contains("rendererWindowAppearance=primary")
+                || !line.contains("rendererWindowFocused=true")
+                || !line.contains("rendererWindowVisible=true") {
+                continue;
+            }
+            let Some(stamp) = line.split_whitespace().next() else { continue };
+            let Some(rest) = line.split("conversationId=").nth(1) else { continue };
+            let Some(id) = rest.split_whitespace().next() else { continue };
+            if id.len() < 20 { continue; }
+            if best.as_ref().is_none_or(|(old, _)| stamp > old.as_str()) {
+                best = Some((stamp.to_string(), id.to_string()));
+            }
+        }
+    }
+    best.map(|(_, id)| id)
+}
+
+fn spawn_codex_focus_watcher(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else { return };
+        let root = home.join("Library/Logs/com.openai.codex");
+        if !root.is_dir() { return; }
+        let mut previous = latest_codex_focus_id(&root);
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let current = latest_codex_focus_id(&root);
+            if current.is_some() && current != previous {
+                previous = current;
+                let _ = app.emit("forseti://changed", ());
             }
         }
     });
@@ -171,8 +375,8 @@ fn spawn_watcher(app: tauri::AppHandle) {
 /// owner：「你自己審計都不做。」
 /// 帳本裡的 SELF_FAULT 事件 —— append-only，刪不掉也改不了。
 #[tauri::command]
-fn audit() -> Result<String, String> {
-    run_api(&["audit"])
+async fn audit() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["audit"])).await
 }
 
 /// 必讀文件讀完了沒。§40
@@ -181,14 +385,14 @@ fn audit() -> Result<String, String> {
 /// 這也是重大事件，也是標注紅色，一開始就是紅色，
 /// 後面不可能會出現綠色。」
 #[tauri::command]
-fn spec_reading() -> Result<String, String> {
-    run_api(&["spec_reading"])
+async fn spec_reading() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["spec_reading"])).await
 }
 
 /// 區塊閱讀與要拷問 owner 的清單。§41
 #[tauri::command]
-fn block_reading() -> Result<String, String> {
-    run_api(&["block_reading"])
+async fn block_reading() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["block_reading"])).await
 }
 
 /// 接管閘門現在擋不擋得住人。v5.0 §17.3 / §19.2 / §39
@@ -199,8 +403,8 @@ fn block_reading() -> Result<String, String> {
 /// **這裡只讀不出卷。** 出卷會寫進帳本，一個重新整理就多一筆考卷
 /// 的東西，帳本會被畫面的刷新次數填滿。出卷走 CLI。
 #[tauri::command]
-fn sufficiency() -> Result<String, String> {
-    run_api(&["sufficiency"])
+async fn sufficiency() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["sufficiency"])).await
 }
 
 /// 功能說明加當場驗證。§36
@@ -208,8 +412,8 @@ fn sufficiency() -> Result<String, String> {
 /// owner 的老闆明天要看。每一項:抓什麼、憑什麼規格、現在的真實數字。
 /// 沒接的照實列 —— 藏起來的那一項，正是會被問到的那一項。
 #[tauri::command]
-fn features() -> Result<String, String> {
-    run_api(&["features"])
+async fn features() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["features"])).await
 }
 
 /// 每一個功能，當場證明它是活的。§33
@@ -217,8 +421,8 @@ fn features() -> Result<String, String> {
 /// 每一項跑兩次:真實資料看現況，合成違規確認它會叫。
 /// 一個回 0 的偵測器，跟一個壞掉的偵測器，在真實資料上長得一模一樣。
 #[tauri::command]
-fn selftest() -> Result<String, String> {
-    run_api(&["selftest"])
+async fn selftest() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["selftest"])).await
 }
 
 /// 這台機器上該搬的東西現在是什麼數字。§31
@@ -226,8 +430,8 @@ fn selftest() -> Result<String, String> {
 /// owner 2026-09-14 換機器那一晚漏掉了 142 個工作目錄綁定檔，
 /// 而那件事沒有任何東西主動說出來。這個指令把它變成畫面上一列數字。
 #[tauri::command]
-fn machine() -> Result<String, String> {
-    run_api(&["machine"])
+async fn machine() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["machine"])).await
 }
 
 /// 執行層的現況:未完成的義務、進行中的步驟、卡住的。
@@ -235,8 +439,8 @@ fn machine() -> Result<String, String> {
 /// F02 §6 的 obligation ledger。CT-F02-02 要求未完成項目被**自動暴露**，
 /// 而「在終端下指令才看得到」就是一種盤問。
 #[tauri::command]
-fn work() -> Result<String, String> {
-    run_api(&["work"])
+async fn work() -> Result<String, String> {
+    run_api_off_main(|| run_api(&["work"])).await
 }
 
 /// 從某一輪 fork 出一個新 session。
@@ -247,13 +451,16 @@ fn work() -> Result<String, String> {
 ///
 /// 原始的 transcript 一個位元組都不動。
 #[tauri::command]
-fn fork(session: String, n: u32, go: bool) -> Result<String, String> {
+async fn fork(session: String, n: u32, go: bool) -> Result<String, String> {
     let n = n.to_string();
-    if go {
-        run_api(&["fork", &session, &n, "--go"])
-    } else {
-        run_api(&["fork", &session, &n])
-    }
+    run_api_off_main(move || {
+        if go {
+            run_api(&["fork", &session, &n, "--go"])
+        } else {
+            run_api(&["fork", &session, &n])
+        }
+    })
+    .await
 }
 
 /// 把桌面版切到某個 session。
@@ -272,7 +479,7 @@ fn fork(session: String, n: u32, go: bool) -> Result<String, String> {
 /// text 不做字元白名單（她要寫什麼是她的自由），但長度擋住 ——
 /// 那一層 Python 端也擋，這裡擋是為了不讓超長字串跑完整條管線。
 #[tauri::command]
-fn note_add(session: String, n: u32, text: String) -> Result<String, String> {
+async fn note_add(session: String, n: u32, text: String) -> Result<String, String> {
     if text.trim().is_empty() {
         return Err("空的注記不寫".to_string());
     }
@@ -280,12 +487,14 @@ fn note_add(session: String, n: u32, text: String) -> Result<String, String> {
         return Err("超過 1200 字".to_string());
     }
     if session.len() > 128
-        || !session.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        || !session
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err("session id 只接受英數與 - _".to_string());
     }
     let n = n.to_string();
-    run_api(&["note_add", &session, &n, &text])
+    run_api_off_main(move || run_api(&["note_add", &session, &n, &text])).await
 }
 
 /// 畫面上會改變狀態的動作。owner 2026-09-16:「接動作層」。
@@ -294,26 +503,84 @@ fn note_add(session: String, n: u32, text: String) -> Result<String, String> {
 /// 前端傳什麼就做什麼等於把帳本交給一段 JavaScript ——
 /// 跟 `open_session` 只收 `local_` 開頭是同一條理由。
 #[tauri::command]
-fn act(kind: String, target: String, worker: String) -> Result<String, String> {
+async fn act(kind: String, target: String, worker: String) -> Result<String, String> {
     const OK: [&str; 4] = ["finish", "verify", "dispatch", "drain"];
     if !OK.contains(&kind.as_str()) {
         return Err(format!("不認得的動作：{kind}"));
     }
-    if target.is_empty() || target.len() > 128
-        || !target.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    if target.is_empty()
+        || target.len() > 128
+        || !target
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
     {
         return Err("target 只接受英數與 - _，長度 128 以內".to_string());
     }
-    if worker.is_empty() {
-        run_api(&["act", &kind, &target])
-    } else {
-        if worker.len() > 64
-            || !worker.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-        {
-            return Err("worker 只接受英數與 - _".to_string());
+    run_api_off_main(move || {
+        if worker.is_empty() {
+            run_api(&["act", &kind, &target])
+        } else {
+            if worker.len() > 64
+                || !worker
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            {
+                return Err("worker 只接受英數與 - _".to_string());
+            }
+            run_api(&["act", &kind, &target, &worker])
         }
-        run_api(&["act", &kind, &target, &worker])
+    })
+    .await
+}
+
+/// 預覽或記錄 owner 對 North Star 候選的明確決策。
+/// confirm / explore / ignore 都必須由 owner 明確按下；偵測本身不會採納。
+#[tauri::command]
+async fn north_star_change(
+    action: String,
+    objective: String,
+    why: String,
+    candidate_n: Option<u32>,
+    session: String,
+    event_id: String,
+    accepted_scope: Vec<String>,
+    rejected_scope: Vec<String>,
+    success_criteria: Vec<String>,
+) -> Result<String, String> {
+    const OK: [&str; 7] = [
+        "preview",
+        "preview_confirm",
+        "preview_explore",
+        "preview_ignore",
+        "confirm",
+        "explore",
+        "ignore",
+    ];
+    if !OK.contains(&action.as_str()) {
+        return Err(format!("不認得的 North Star 動作：{action}"));
     }
+    if objective.chars().count() > 1000 || why.chars().count() > 1000 {
+        return Err("目標與理由各限 1000 字".to_string());
+    }
+    let n = candidate_n.map(|v| v.to_string()).unwrap_or_default();
+    let accepted = serde_json::to_string(&accepted_scope).map_err(|e| e.to_string())?;
+    let rejected = serde_json::to_string(&rejected_scope).map_err(|e| e.to_string())?;
+    let criteria = serde_json::to_string(&success_criteria).map_err(|e| e.to_string())?;
+    run_api_off_main(move || {
+        run_api(&[
+            "north_star_change",
+            &action,
+            &objective,
+            &why,
+            &n,
+            &session,
+            &event_id,
+            &accepted,
+            &rejected,
+            &criteria,
+        ])
+    })
+    .await
 }
 
 /// 點一個節點，看誰依賴它。§16.1 Blast Radius 的 files 那一種。
@@ -327,26 +594,29 @@ fn act(kind: String, target: String, worker: String) -> Result<String, String> {
 /// 開頭是同一條理由。真正「這個檔在不在圖裡」由 Python 端判，
 /// 這裡只擋形狀，不做第二套存在性判定（兩套會分歧）。
 #[tauri::command]
-fn blast_detail(target: String) -> Result<String, String> {
+async fn blast_detail(target: String) -> Result<String, String> {
     if target.is_empty() || target.len() > 256 {
         return Err("路徑長度要在 1 到 256 之間".to_string());
     }
     if target.contains("..") || target.starts_with('/') || target.starts_with('-') {
         return Err("不接受絕對路徑、上層路徑或 - 開頭".to_string());
     }
-    if !target.chars().all(|c| {
-        c.is_ascii_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-'
-    }) {
+    if !target
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '.' || c == '_' || c == '-')
+    {
         return Err("路徑只接受英數與 / . _ -".to_string());
     }
-    run_api(&["blast_detail", &target])
+    run_api_off_main(move || run_api(&["blast_detail", &target])).await
 }
 
 #[tauri::command]
 fn open_session(ui_id: String) -> Result<(), String> {
     let ok = ui_id.starts_with("local_")
         && ui_id.len() <= 64
-        && ui_id[6..].chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+        && ui_id[6..]
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || c == '-');
     if !ok {
         return Err(format!("不是合法的 session id：{ui_id}"));
     }
@@ -418,8 +688,7 @@ fn force_enable_javascript(w: &tauri::WebviewWindow) {
             eprintln!("[webview] prefs.javaScriptEnabled = {old_flag}");
             if !old_flag {
                 wp.setJavaScriptEnabled(true);
-                eprintln!("[webview] 已強制打開，現在 = {}",
-                          wp.javaScriptEnabled());
+                eprintln!("[webview] 已強制打開，現在 = {}", wp.javaScriptEnabled());
             }
         }
     });
@@ -474,30 +743,11 @@ fn hook_console(w: &tauri::WebviewWindow) {
         // macOS 要求 UI API 在主執行緒，所以它可能卡在第一次呼叫上。
         // **卡住跟沒跑完在輸出上長得一模一樣，所以先印一行。**
         eprintln!("[webview] 轉發 thread 起來了");
-        // 【先問它載入了什麼】
-        // 2026-09-18:eval 五次都送進去、title 五次都沒變,
-        // 所以 WebView 沒有在執行任何 JS。那不是時機問題也不是執行緒問題,
-        // 是它可能根本沒載入我們的頁面。
+        // 不可以在正式頁面載入後 navigate 到 data: 診斷頁。
+        // 那會把 Source Tree 換成「probe」，造成看似 WebView 空白的假成功。
+        // 頁面是否載入、JS 是否可執行，交給 on_page_load 與 console hook
+        // 觀察，不改變使用者目前正在看的 document。
         eprintln!("[webview] 目前 url = {:?}", w2.url());
-        // 【把「引擎不跑 JS」跟「我們的頁面有問題」分開】
-        // 2026-09-18:eval 在任何時機都改不到 title，連 on_page_load
-        // 的 Finished 那一刻也一樣。所以先問一個更基本的問題:
-        // 這個 WebView 執行得了 JavaScript 嗎。
-        //
-        // 載入一個自帶 <script> 的 data URL。它會把 title 改成 DATAURL_OK。
-        // 變了 = 引擎正常，問題在我們的頁面。
-        // 沒變 = 引擎層面的事，跟 app.js 無關。
-        //
-        // **這是診斷，跑完就把畫面換回去。**
-        std::thread::sleep(std::time::Duration::from_millis(1500));
-        let probe = "data:text/html,<html><body>probe</body>\
-<script>document.title='DATAURL_OK'</script></html>";
-        match w2.navigate(probe.parse().unwrap()) {
-            Ok(()) => eprintln!("[webview] 診斷頁送出去了"),
-            Err(e) => eprintln!("[webview] 診斷頁送不出去 {e}"),
-        }
-        std::thread::sleep(std::time::Duration::from_millis(2500));
-        eprintln!("[webview] 診斷頁之後的 title = {:?}", w2.title());
         // 【wry #1848 的 workaround:resize 強制重繪】
         // macOS 26 + Apple Silicon + wry 0.55.1 + tauri 2.11.5 上，
         // WKWebView 的 compositor 會停止呈現新 frame，
@@ -529,7 +779,9 @@ fn hook_console(w: &tauri::WebviewWindow) {
             std::thread::sleep(std::time::Duration::from_millis(300));
             eprintln!("[webview] 第 {} 圈:準備 eval", i + 1);
             if let Err(e) = w2.eval(JS) {
-                if i == 0 { eprintln!("[webview] eval 失敗 {e}"); }
+                if i == 0 {
+                    eprintln!("[webview] eval 失敗 {e}");
+                }
                 continue;
             }
             eprintln!("[webview] 第 {} 圈:eval 回來了", i + 1);
@@ -538,16 +790,21 @@ fn hook_console(w: &tauri::WebviewWindow) {
             if let Ok(t) = w2.title() {
                 eprintln!("[webview] 第 {} 圈:title = {:?}", i + 1, t);
                 if t.starts_with("FORSETI|") {
-                    eprintln!("[webview] console 轉發掛上了（第 {} 次，{:.1} 秒）",
-                              i + 1, (i as f64 + 1.0) * 0.42);
+                    eprintln!(
+                        "[webview] console 轉發掛上了（第 {} 次，{:.1} 秒）",
+                        i + 1,
+                        (i as f64 + 1.0) * 0.42
+                    );
                     hooked = true;
                     break;
                 }
             }
         }
         if !hooked {
-            eprintln!("[webview] console 轉發掛不上:送了四十次，title 一直是 {:?}",
-                      w2.title());
+            eprintln!(
+                "[webview] console 轉發掛不上:送了四十次，title 一直是 {:?}",
+                w2.title()
+            );
             eprintln!("[webview] 那代表注入的 JS 沒有執行。頁面本身可能也沒跑起來");
         }
         let mut last = String::new();
@@ -563,7 +820,7 @@ fn hook_console(w: &tauri::WebviewWindow) {
                         last = t;
                     }
                 }
-                Err(_) => break,   // 視窗關了
+                Err(_) => break, // 視窗關了
             }
         }
     });
@@ -610,6 +867,7 @@ fn main() {
         })
         .setup(|app| {
             spawn_watcher(app.handle().clone());
+            spawn_codex_focus_watcher(app.handle().clone());
 
             // 明確把視窗叫出來。
             //
@@ -681,7 +939,10 @@ fn main() {
                     let _ = w.set_size(tauri::LogicalSize::new(340.0, 860.0));
                     eprintln!("[forseti] 重設尺寸後 {:?}", w.outer_size());
                     eprintln!("[forseti] show 之後 visible={:?}", w.is_visible());
-                    hook_console(&w);
+                    // 正式啟動不掛入侵式 console hook。
+                    // hook 會在背景 thread 反覆 eval，某些 WebKit 狀態下
+                    // 會卡住 AX，讓產品視窗看起來像無法載入；診斷改由
+                    // 手動啟動與 log 觀察，不污染正常 UI。
                 }
                 None => {
                     eprintln!("[forseti] 設定檔沒生出視窗，改用程式建");
@@ -712,7 +973,7 @@ fn main() {
                             force_enable_javascript(&w);
                             // 手動這條路跟 config 那條走不同程式碼。
                             // 行為不同的話，範圍就縮到 config 上。
-                            hook_console(&w);
+                            // 同上：正式視窗不啟用會阻塞 AX 的診斷 hook。
                         }
                         Err(e) => eprintln!("[forseti] 視窗建不起來：{e}"),
                     }
@@ -721,7 +982,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            snapshot, strands, sessions, timeline, repo_path, open_session, fork, act, note_add, work, machine, selftest, features, audit, spec_reading, block_reading, sufficiency, blast_detail
+            snapshot, strands, sessions, timeline, repo_path, open_session, fork, act, north_star_change, note_add, work, machine, selftest, features, audit, spec_reading, block_reading, sufficiency, blast_detail
         ])
         .run(tauri::generate_context!())
         .expect("Forseti 啟動失敗");
