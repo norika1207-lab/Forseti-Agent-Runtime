@@ -1743,7 +1743,17 @@ function renderTree() {
     body.className = "body";
     body.title = "點一下看這一輪能做什麼";
     body.addEventListener("click", () => openNode(s));
-    body.innerHTML = `<div class="txt">${esc(flat(s.owner_text).slice(0, 110) || "(無)")}</div>`;
+    const semantic = s.path_semantics || {};
+    const requestText = flat(s.owner_text).slice(0, 180) || "(沒有使用者要求)";
+    const answerText = flat(s.ai_text).slice(0, 300) ||
+      (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
+    body.innerHTML =
+      `<div class="turnPart request"><span>你</span><div class="txt">${esc(requestText)}</div></div>` +
+      `<div class="turnPart answer"><span>AI</span><div class="txt">${esc(answerText)}</div></div>` +
+      `<div class="turnVerdict ${esc(semantic.state || "neutral")}">` +
+      `<b>${esc(semantic.label || "資料不足")}</b>` +
+      `<span>${esc(semantic.actor ? `責任：${semantic.actor} · ${semantic.why || ""}` : (semantic.why || ""))}</span>` +
+      `</div>`;
 
     const bts = s.betrayals || [];
     // 白點常常正好落在「那一輪一個工具都沒叫」的線上,
@@ -1999,6 +2009,15 @@ function openNode(s) {
   nodeN = s.n;
   $("nodeTitle").textContent = `第 ${s.n} 輪`;
   $("nodeSaid").textContent = flat(s.owner_text).slice(0, 160) || "(沒有文字)";
+  $("nodeAI").textContent = flat(s.ai_text).slice(0, 1200) ||
+    (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
+  const semantic = s.path_semantics || {};
+  const verdict = $("nodeVerdict");
+  verdict.className = `nodeVerdict ${semantic.state || "neutral"}`;
+  verdict.innerHTML = `<b>${esc(semantic.label || "資料不足")}</b>` +
+    `<span>${esc(semantic.actor ? `責任：${semantic.actor}` : "")}</span>` +
+    `<p>${esc(semantic.why || "尚無足夠證據")}</p>` +
+    (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "");
   $("forkOut").hidden = true;
   $("forkOut").textContent = "";
   $("actFork").disabled = false;

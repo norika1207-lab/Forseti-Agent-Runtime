@@ -41,6 +41,12 @@ _CORRECTION = re.compile(
     r"|為什麼(?:不|沒|要)")
 # 她只是叫我往下走,不是在糾正。F06 §5 的 HumanContinueBurden 算這個。
 _NUDGE = re.compile(r"^\s*(繼續|continue|go|下一步|嗯|好|ok|okay)\s*[。.!！]?\s*$", re.I)
+_OWNER_GOAL_CHANGE = re.compile(
+    r"改(?:成|為)|現在(?:的)?目標(?:是|改成)|不要(?:再)?做原本|"
+    r"原本(?:的)?目標(?:不要|改)|換(?:一個|個)?方向|新的方向|"
+    r"改走|轉向|接下來(?:改|換)做"
+)
+_EXPLORATORY = re.compile(r"探索|試做|先試|旁支|實驗")
 
 
 #: 她按下打斷的那一刻。**這是 OBSERVED，不是我猜的** ——
@@ -100,6 +106,27 @@ def is_correction(text: str) -> bool:
 
 def is_nudge(text: str) -> bool:
     return bool(_NUDGE.match((text or "").strip()))
+
+
+def owner_goal_change_candidates(rows: list) -> list[dict]:
+    """Return explicit owner goal-change candidates without adopting them."""
+    out = []
+    for row in rows or []:
+        text = (row.get("owner_text") or "").strip()
+        if not text or not _OWNER_GOAL_CHANGE.search(text):
+            continue
+        exploratory = bool(_EXPLORATORY.search(text))
+        out.append({
+            "n": row.get("n"),
+            "kind": "EXPLORATORY_BRANCH" if exploratory else "OWNER_GOAL_CHANGE",
+            "state": "CANDIDATE",
+            "confidence": "HIGH",
+            "evidence": text[:600],
+            "why": ("owner 同時說明這是探索，保留為橘色旁支候選"
+                    if exploratory else
+                    "owner 明確使用改目標句式，等待確認新的 North Star"),
+        })
+    return out
 
 
 # ── 目標支持度 ────────────────────────────────
