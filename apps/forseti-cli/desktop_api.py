@@ -3798,6 +3798,13 @@ def sessions() -> dict:
             "group": _project_label(disk["project"]), "named": False,
         })
 
+    # Codex sessions use their own transcript tree and title index.  Without
+    # these rows the picker can only lock Claude sessions, so referring to a
+    # named Codex task silently leaves Forseti on the current foreground task.
+    from codex_session_inventory import list_sessions as codex_sessions
+    out.extend(codex_sessions(
+        CODEX_SESSIONS, Path.home() / ".codex" / "session_index.jsonl"))
+
     # 看過的排前面（用 focused_at），沒看過的用檔案時間墊底。
     out.sort(key=lambda x: (x["focused_at"] or x["mtime"]), reverse=True)
     out = out[:80]
