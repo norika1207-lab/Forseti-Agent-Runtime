@@ -31,6 +31,17 @@
       "app",
       "dmg"
     ],
+    "resources": {
+      "../../apps/forseti-cli": "runtime/apps/forseti-cli",
+      "../../src": "runtime/src",
+      "../../tools": "runtime/tools",
+      "../../docs": "runtime/docs",
+      "../../.forseti": "runtime/.forseti",
+      "../../README.md": "runtime/README.md",
+      "../../bible.md": "runtime/bible.md",
+      "../../soul.md": "runtime/soul.md",
+      "../../package.json": "runtime/package.json"
+    },
     "icon": [
       "icons/icon.png"
     ]

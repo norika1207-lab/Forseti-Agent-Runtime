@@ -23,15 +23,22 @@ use std::time::Duration;
 use notify::{RecursiveMode, Watcher};
 use tauri::Emitter;
 
-/// 找 repo 根。往上走到看得見 .forseti 與 apps/forseti-cli 的那一層。
+/// 找 runtime 根。安裝版優先使用 bundle 自帶的 runtime，開發版才回退 repo。
 ///
 /// 找不到就回 None,不猜一個路徑 —— 猜錯的話後面每一個呼叫都會失敗,
 /// 而錯誤訊息會指向錯的地方。
 fn find_repo() -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from("/Volumes/NewDrive/AI Project/Forseti"),
-        std::env::current_dir().ok()?,
-    ];
+    let bundled = std::env::current_exe().ok()
+        .and_then(|p| p.parent().and_then(Path::parent).map(Path::to_path_buf))
+        .map(|contents| contents.join("Resources/runtime"));
+    let mut candidates = Vec::new();
+    if let Some(path) = bundled {
+        candidates.push(path);
+    }
+    candidates.push(PathBuf::from("/Volumes/NewDrive/AI Project/Forseti"));
+    if let Ok(path) = std::env::current_dir() {
+        candidates.push(path);
+    }
     for c in candidates.iter() {
         let mut p = c.clone();
         loop {
