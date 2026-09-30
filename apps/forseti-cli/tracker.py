@@ -179,7 +179,10 @@ class Strand:
             "duration": round(self.duration, 2),
             "owner_text": self.owner_text[:600],
             "owner_line": self.owner_line,
-            "ai_text": self.ai_text[:900],
+            # AI progress messages can accumulate for a long-running turn.
+            # Truncating here silently hid later receipts and claims from every
+            # downstream surface, so preserve the provider-native text.
+            "ai_text": self.ai_text,
             "dots": [d.to_dict() for d in self.dots],
             "read": sum(1 for d in self.dots if d.kind == KIND_READ),
             "write": sum(1 for d in self.dots if d.kind == KIND_WRITE),
