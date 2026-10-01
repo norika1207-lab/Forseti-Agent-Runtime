@@ -306,6 +306,8 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         block = CSS.split(".drift .laneHit{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:stroke", block)
         self.assertIn("stroke-width:12", block)
+        root = CSS.split(".drift{", 1)[1].split("}", 1)[0]
+        self.assertIn("pointer-events:auto", root)
 
 
 class NoShadowedDefinitions(unittest.TestCase):

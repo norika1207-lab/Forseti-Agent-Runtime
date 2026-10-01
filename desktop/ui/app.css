@@ -834,7 +834,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 
    線本身不吃滑鼠事件，點擊照舊落在卡片上。 */
 .drift{position:absolute;left:0;top:0;width:var(--lane-x);
-  height:100%;pointer-events:none;overflow:visible;z-index:1}
+  height:100%;pointer-events:auto;overflow:visible;z-index:1}
+.drift .main,.drift .node,.drift .halo,.drift .lane{pointer-events:none}
 .drift path{fill:none;stroke-width:2.5;stroke-linecap:round;
   stroke-linejoin:round}
 /* 回到中軸的那一輪。owner 要看的是「多久以後線才會又回到原本的路線上」，
