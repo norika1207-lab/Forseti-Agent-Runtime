@@ -785,7 +785,8 @@ class TabChecksThemselvesCatchThings(unittest.TestCase):
 
     def test_面板打開了不會紅(self):
         vws = "".join('<button class="vw"></button>'
-                      for _ in range(len(RC.TABS) + 1))
+                      for _ in range(len(RC.TABS) + 1 +
+                                     len(RC.PICKER_ONLY_VIEWS)))
         r = self._fake(f'<div class="picker" id="picker">{vws}</div>', {})
         self.assertEqual(RC.check_burger_opens_picker(r), [])
 

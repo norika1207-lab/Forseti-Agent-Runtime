@@ -1438,25 +1438,84 @@ function renderGate(d) {
 }
 
 /* 三張卡片。bible.md I-04。
-   點「用這句」把話放進剪貼簿 —— 她要做的事就只剩貼上去。 */
+   建議的「不用」不是一次 render 的暫態，而是使用者對這個建議的裁定。
+   fingerprint 只吃建議實質內容與 goal revision，不吃時間或輪詢順序。 */
 /* 展開過的卡片。renderCards 每次 tick 會重建 innerHTML，
    不記住的話她點開的東西兩秒後就自己關上。 */
 const cardsWhy = new Set();
+const DISMISSED_SUGGESTIONS_KEY = "forseti.dismissed-suggestions.v1";
+
+function loadDismissedSuggestions() {
+  try {
+    const raw = localStorage.getItem(DISMISSED_SUGGESTIONS_KEY);
+    const values = JSON.parse(raw || "[]");
+    return new Set(Array.isArray(values) ? values.filter((x) => typeof x === "string") : []);
+  } catch (e) { return new Set(); }
+}
+
+let dismissedSuggestionFingerprints = loadDismissedSuggestions();
+
+function saveDismissedSuggestions() {
+  try {
+    localStorage.setItem(DISMISSED_SUGGESTIONS_KEY,
+      JSON.stringify([...dismissedSuggestionFingerprints].sort()));
+  } catch (e) { /* 私密視窗或受限 WebView：本次仍維持抑制 */ }
+}
+
+function suggestionGoalRevision(d) {
+  const g = d?.goal_gate || {};
+  return g.goal_state || g.goal_revision || d?.goal_revision ||
+    d?.north_star_version || d?.north_star || "";
+}
+
+function suggestionFingerprint(c, d) {
+  const raw = [c?.key, c?.title, c?.say, c?.why_now, c?.evidence,
+    c?.confidence, c?.if_ignored, suggestionGoalRevision(d)]
+    .map((x) => flat(String(x ?? ""))).join("\u241f");
+  let hash = 2166136261;
+  for (let i = 0; i < raw.length; i++) {
+    hash ^= raw.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `v1-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+function resetDismissedSuggestions() {
+  dismissedSuggestionFingerprints.clear();
+  saveDismissedSuggestions();
+}
 
 function renderCards(d) {
   const box = $("cards");
   if (!box) return;
   const cs = d.cards || [];
   if (!cs.length) { box.innerHTML = ""; return; }
-  const show = cs.slice(0, 3);
-  box.innerHTML = show.map((c, i) => `
-    <div class="card2${i === 0 ? " hot" : ""}" data-k="${esc(c.key)}">
+  const candidates = cs.slice(0, 3).map((c) => ({
+    card: c, fingerprint: suggestionFingerprint(c, d),
+  }));
+  const hidden = candidates.filter((x) =>
+    dismissedSuggestionFingerprints.has(x.fingerprint));
+  const show = candidates.filter((x) =>
+    !dismissedSuggestionFingerprints.has(x.fingerprint));
+  const reset = hidden.length
+    ? `<button class="resetSuggestions" type="button">重設已略過的建議</button>` : "";
+  if (!show.length) {
+    box.innerHTML = `<div class="cardsNone">這些建議已依你的選擇略過。</div>${reset}`;
+    box.querySelector(".resetSuggestions")?.addEventListener("click", () => {
+      resetDismissedSuggestions();
+      renderCards(d);
+    });
+    return;
+  }
+  box.innerHTML = show.map(({card: c, fingerprint}, i) => `
+    <div class="card2${i === 0 ? " hot" : ""}" data-k="${esc(c.key)}" data-fp="${esc(fingerprint)}">
       <div class="t">${esc(c.title)}</div>
       ${c.say ? `<p class="say">${esc(c.say)}</p>` : ""}
       <div class="row">
         ${c.say ? '<button class="use" type="button">用這句</button>' : ""}
         <button class="why" type="button">為什麼是現在</button>
         ${c.n ? `<button class="goto2" type="button">看第 ${c.n} 輪</button>` : ""}
+        <button class="dismiss" type="button">不用</button>
       </div>
       <ul class="five${cardsWhy.has(c.key) ? " open" : ""}">
         <li><span class="k">為什麼現在</span><span>${esc(c.why_now || "")}</span></li>
@@ -1464,23 +1523,35 @@ function renderCards(d) {
         <li><span class="k">信心</span><span>${esc(c.confidence || "")}</span></li>
         <li><span class="k">不理會</span><span>${esc(c.if_ignored || "")}</span></li>
       </ul>
-    </div>`).join("");
+    </div>`).join("") + reset;
 
   box.querySelectorAll(".card2").forEach((el, i) => {
     const k = el.dataset.k;
+    const fp = el.dataset.fp;
     el.querySelector(".why")?.addEventListener("click", () => {
       if (cardsWhy.has(k)) cardsWhy.delete(k); else cardsWhy.add(k);
       el.querySelector(".five").classList.toggle("open");
     });
     el.querySelector(".goto2")?.addEventListener("click", () => {
-      view = "tree"; syncView(); jump(show[i].n);
+      view = "tree"; syncView(); jump(show[i].card.n);
+    });
+    el.querySelector(".dismiss")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      dismissedSuggestionFingerprints.add(fp);
+      saveDismissedSuggestions();
+      cardsWhy.delete(k);
+      renderCards(d);
     });
     el.querySelector(".use")?.addEventListener("click", async (e) => {
-      const txt = show[i].say || "";
+      const txt = show[i].card.say || "";
       try { await navigator.clipboard.writeText(txt); e.target.textContent = "複製好了"; }
       catch { e.target.textContent = "複製不了，請手動選取"; }
       setTimeout(() => { e.target.textContent = "用這句"; }, 1800);
     });
+  });
+  box.querySelector(".resetSuggestions")?.addEventListener("click", () => {
+    resetDismissedSuggestions();
+    renderCards(d);
   });
 }
 
@@ -1607,8 +1678,10 @@ function drawDrift() {
 
   /* 問題軌道。裁到可見範圍再配置，不然畫面外的長軌道會把
      所有短的擠到很右邊。 */
+  const gateUnavailable = driftGateUnavailable(lastSnap);
   const raw = (((lastSnap || {}).lanes || {}).lanes || [])
     .filter((x) => x.to_n >= lo && x.from_n <= hi)
+    .filter((x) => !(gateUnavailable && x.kind === "DRIFT"))
     .map((x) => Object.assign({}, x, {
       from_n: Math.max(x.from_n, lo), to_n: Math.min(x.to_n, hi),
     }))
@@ -1690,6 +1763,7 @@ function drawDrift() {
   /* 主線。一輪一段，顏色跟著那一輪走。 */
   const colorOf = (k, d) => {
     if (k === "CONFLICTING") return "var(--red)";
+    if (gateUnavailable && k === "DRIFT") return "var(--ink-3)";
     if (d >= 0.34) return "var(--amber)";
     if (d > 0.08) return `color-mix(in srgb, var(--amber) ${
       Math.round(d * 180)}%, var(--green))`;
@@ -1744,6 +1818,21 @@ function drawDrift() {
     });
     lane.appendChild(button);
   });
+}
+
+function driftGateUnavailable(snap) {
+  const gate = snap?.goal_gate || {};
+  const missing = (gate.missing_factors || [])
+    .map((x) => String(x?.factor || x || "").toLowerCase());
+  const factors = gate.factors || {};
+  const hasScope = Object.prototype.hasOwnProperty.call(factors, "scope_match");
+  const scope = factors.scope_match;
+  return gate.gac == null || missing.some((x) => x.includes("scope_match") || x.includes("gac")) ||
+    !hasScope || scope == null || (typeof scope === "object" && scope.value == null);
+}
+
+function driftEvidenceInsufficient(alert, snap) {
+  return alert?.state === "SUSPECTED_DRIFT" && driftGateUnavailable(snap);
 }
 
 function renderTree() {
@@ -1806,7 +1895,11 @@ function renderTree() {
 
     // 紫點的框。§5.4 三條件同時成立才跳，而且壓在線上不是躺在側邊，
     // 因為「你看到的位置就是它發生的位置」(§5.1)。
-    if (s.drift_alert) wrap.dataset.drift = "1";
+    if (s.drift_alert && !driftEvidenceInsufficient(s.drift_alert, lastSnap)) {
+      wrap.dataset.drift = "1";
+    } else if (s.drift_alert) {
+      wrap.dataset.driftInsufficient = "1";
+    }
 
     const h = laneHeight(s.duration, s.dots.length);
     const col = strandColor(s.tint);
@@ -2054,16 +2147,7 @@ function renderTree() {
       `你沒有出手，而它跟目標的距離從 ${a.from_distance} 升到 ${a.distance}。</p>` +
       `<p class="dW dim">${esc(a.state)}　信心 ${a.confidence}　` +
       `已排除：${esc((a.excluded || []).join("、"))}</p>` +
-      `<div class="dRow">` +
-      `<button class="dGo" type="button">複製這段給他</button>` +
-      `<button class="dNo" type="button">不用</button></div>`;
-    box.querySelector(".dGo").addEventListener("click", async (e) => {
-      e.stopPropagation();
-      try {
-        await navigator.clipboard.writeText(a.prompt || "");
-        e.target.textContent = "複製好了，貼給他";
-      } catch { e.target.textContent = "複製不了，請手動選取"; }
-    });
+      `<div class="dRow"><button class="dNo" type="button">不用</button></div>`;
     box.querySelector(".dNo").addEventListener("click", (e) => {
       e.stopPropagation();
       box.remove();
@@ -2075,6 +2159,19 @@ function renderTree() {
     // grid 的第二個 item，把時間戳那一欄擠到下一列，
     // 畫面上出現一張只有兩個字寬的卡片。
     // .st 是三欄 grid(線道 | 內容 | 時間)，多一個 item 就整列錯位。
+    st.parentNode.insertBefore(box, st);
+  });
+
+  lane.querySelectorAll('.st[data-drift-insufficient="1"]').forEach((st) => {
+    const s = rows.find((x) => String(x.n) === st.dataset.n);
+    const a = s && s.drift_alert;
+    if (!a || st.querySelector(".driftBox")) return;
+    const box = document.createElement("div");
+    box.className = "driftBox insufficient";
+    box.innerHTML =
+      `<div class="dT">證據不足／未判定</div>` +
+      `<p class="dW">目前只有 SUSPECTED_DRIFT 訊號，無法確認這是目標偏離。</p>` +
+      `<p class="dW dim">GAC 或 scope_match 尚未算出來；先補證據，不發校正提示。</p>`;
     st.parentNode.insertBefore(box, st);
   });
 

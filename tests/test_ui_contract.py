@@ -178,6 +178,52 @@ class DiagnosticViewContract(unittest.TestCase):
             self.assertIn(f".diagState.{status}", CSS)
 
 
+class SuggestionDismissalContract(unittest.TestCase):
+    """「不用」是持久裁定，不是下一次 poll 就失效的 DOM 狀態。"""
+
+    def test_suggestion_fingerprint_is_stable_and_includes_goal_revision(self):
+        self.assertIn('DISMISSED_SUGGESTIONS_KEY = "forseti.dismissed-suggestions.v1"', JS)
+        self.assertIn("function suggestionFingerprint(c, d)", JS)
+        for field in ("c?.title", "c?.say", "c?.why_now", "c?.evidence",
+                      "c?.confidence", "c?.if_ignored"):
+            self.assertIn(field, JS)
+        self.assertIn("suggestionGoalRevision(d)", JS)
+        self.assertIn("Math.imul(hash, 16777619)", JS)
+
+    def test_no_persists_dismissed_cards_and_has_explicit_reset(self):
+        self.assertIn("loadDismissedSuggestions()", JS)
+        self.assertIn("dismissedSuggestionFingerprints.has", JS)
+        self.assertIn("dismissedSuggestionFingerprints.add(fp)", JS)
+        self.assertIn("saveDismissedSuggestions()", JS)
+        self.assertIn('class=\"dismiss\"', JS)
+        self.assertIn(">不用</button>", JS)
+        self.assertIn("resetDismissedSuggestions()", JS)
+        self.assertIn('class=\"resetSuggestions\"', JS)
+
+    def test_drift_card_does_not_offer_unnecessary_copy_action(self):
+        self.assertNotIn("複製這段給他", JS)
+        self.assertNotIn("class=\"dGo\"", JS)
+
+
+class InsufficientDriftContract(unittest.TestCase):
+    """GAC/scope_match 不足時，SUSPECTED 只能呈現未判定。"""
+
+    def test_missing_gac_or_scope_is_explicitly_insufficient(self):
+        self.assertIn('function driftGateUnavailable(snap)', JS)
+        self.assertIn('gate.gac == null', JS)
+        self.assertIn('hasOwnProperty.call(factors, "scope_match")', JS)
+        self.assertIn('scope_match', JS)
+        self.assertIn('alert?.state === "SUSPECTED_DRIFT"', JS)
+        self.assertIn('證據不足／未判定', JS)
+        self.assertIn('先補證據，不發校正提示', JS)
+
+    def test_insufficient_drift_has_no_orange_lane_or_correction_card(self):
+        self.assertIn('x.kind === "DRIFT"', JS)
+        self.assertIn('data-drift-insufficient', JS)
+        self.assertIn('!driftEvidenceInsufficient(s.drift_alert, lastSnap)', JS)
+        self.assertIn('.driftBox.insufficient', CSS)
+
+
 class TauriWiring(unittest.TestCase):
     """前端連不連得上後端。
 
@@ -1327,7 +1373,8 @@ class KeyNodeRecommendationsAndCardTime(unittest.TestCase):
     """關鍵節點的三個方向與卡片時間位置不得再次退化。"""
 
     def test_key_node_shows_three_recommendations_without_collapsing(self):
-        self.assertIn("const show = cs.slice(0, 3);", JS)
+        self.assertIn("const candidates = cs.slice(0, 3).map", JS)
+        self.assertIn("const show = candidates.filter", JS)
         self.assertNotIn("cs.slice(0, 1)", JS)
         self.assertNotIn("cardsOpen", JS)
 

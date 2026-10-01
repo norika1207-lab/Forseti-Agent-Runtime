@@ -926,7 +926,13 @@ button{font:inherit;cursor:pointer;color:inherit}
 .card2 button{border:0;font-size:11.5px;padding:4px 11px;
   border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-2)}
 .card2 button.use{background:var(--blue);color:#fff;font-weight:510}
+.card2 button.dismiss{background:transparent;color:var(--ink-3)}
+.card2 button.dismiss:hover{background:var(--surface-3);color:var(--ink)}
 .card2 button:hover{filter:brightness(1.06)}
+.cardsNone{margin:10px 0 0;color:var(--ink-3);font-size:11px}
+.resetSuggestions{margin:8px 0 0;padding:3px 8px;border:0;border-radius:var(--r-pill);
+  background:var(--surface-3);color:var(--ink-3);font-size:10.5px;cursor:pointer}
+.resetSuggestions:hover{color:var(--ink);background:var(--hair)}
 .card2 .five{display:none;margin:9px 0 0;padding-top:9px;
   border-top:.5px solid var(--hair)}
 .card2 .five.open{display:block}
@@ -976,9 +982,11 @@ button{font:inherit;cursor:pointer;color:inherit}
 .driftBox .dRow{display:flex;gap:7px;margin-top:10px}
 .driftBox button{border:0;font-size:11.5px;padding:5px 12px;
   border-radius:var(--r-pill)}
-.driftBox .dGo{background:#fff;color:#1D1D1F;font-weight:510}
 .driftBox .dNo{background:rgba(255,255,255,.16);color:#fff}
 .driftBox button:hover{filter:brightness(.95)}
+.driftBox.insufficient{background:var(--surface-2);border-color:var(--hair)}
+.driftBox.insufficient .dT{color:var(--ink-2)}
+.driftBox.insufficient .dW{color:var(--ink-3)}
 
 
 /* 提早收工。§31

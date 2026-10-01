@@ -897,7 +897,7 @@ def _fam_count(fx: dict, fam: str) -> int:
 # 一個分頁：哪個 view、畫面上叫什麼、按哪一顆、驗哪幾格。
 Tab = namedtuple("Tab", "view zh probes")
 
-# **入口是漢堡，不是分頁列。** 七顆 `.vw` 全部住在 `#picker` 裡面，
+# **入口是漢堡，不是分頁列。** 八顆 `.vw` 全部住在 `#picker` 裡面，
 # 而 `#picker` 在 `index.html:106` 帶著 `hidden`。真人要先按左上角
 # 那顆漢堡（`#burgerBtn`，`app.js:2946` 掛 `openPicker`）才看得到它們。
 # 所以這一組每一次是**兩下**。
@@ -965,6 +965,12 @@ TABS = (
         Probe("nums", ("sevA",), lambda f: [str(_fam_count(f, "A"))], "講太滿"),
     )),
 )
+
+# 這些頁面有 picker 出口，但不屬於資料輪詢分頁表：它們讀的是
+# snapshot 上已接好的診斷契約，不需要 PAGE_CMDS 的重抓／快取探針。
+# 漢堡門的數量檢查仍要把它們算進去，否則新增一個合法出口會被誤報
+# 成 picker 回歸。真正的診斷內容由 tests/test_ui_contract.py 守住。
+PICKER_ONLY_VIEWS = ("diagnostics",)
 
 # **`tree` 不在這張表裡**，因為它是預設那一頁，`check_tree_drew_nodes`
 # 已經在第一張快照上驗過了。放進來會變成同一件事驗兩次，
@@ -1143,11 +1149,12 @@ def check_burger_opens_picker(r: Render) -> list[Finding]:
             expected="#picker 的 hidden 拿掉",
             actual="還是 hidden")]
     n = _count_class(_id_html(dom, "picker") or "", "vw")
-    if n != len(TABS) + 1:  # 七顆：六個分頁加 tree
+    expected = len(TABS) + 1 + len(PICKER_ONLY_VIEWS)
+    if n != expected:  # 資料分頁、tree，以及不走輪詢表的 picker-only views
         return [Finding(
             where="漢堡",
             symptom="選單打開了，但裡面的分頁數量不對",
-            expected=f"{len(TABS) + 1} 顆 .vw", actual=f"{n} 顆")]
+            expected=f"{expected} 顆 .vw", actual=f"{n} 顆")]
     return []
 
 
