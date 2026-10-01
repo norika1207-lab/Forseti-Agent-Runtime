@@ -286,6 +286,10 @@ button{font:inherit;cursor:pointer;color:inherit}
 .txt{font-size:13px;line-height:1.5;color:var(--ink);overflow:hidden;
   overflow-wrap:anywhere;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.turnPart + .turnPart{margin-top:8px}
+.turnPart>span{display:block;margin-bottom:2px;font-size:12px;font-weight:650}
+.turnPart.request>span{color:#FFC04D}
+.turnPart.answer>span{color:#C77DFF}
 .st[data-growing="1"] .body{background:var(--surface-2)}
 
 /* 一輪裡發生了什麼，用講的。

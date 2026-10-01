@@ -1303,6 +1303,12 @@ class KeyNodeRecommendationsAndCardTime(unittest.TestCase):
                       rule.group(1))
         self.assertNotIn("50px", rule.group(1))
 
+    def test_turn_speaker_labels_are_explicit_and_colored(self):
+        self.assertIn("<span>你說：</span>", JS)
+        self.assertIn("<span>AI說：</span>", JS)
+        self.assertIn(".turnPart.request>span{color:#FFC04D}", CSS)
+        self.assertIn(".turnPart.answer>span{color:#C77DFF}", CSS)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

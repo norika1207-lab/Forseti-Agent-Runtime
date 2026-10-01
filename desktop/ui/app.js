@@ -1830,8 +1830,8 @@ function renderTree() {
     const answerText = flat(s.ai_text).slice(0, 300) ||
       (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
     body.innerHTML =
-      `<div class="turnPart request"><span>你</span><div class="txt">${esc(requestText)}</div></div>` +
-      `<div class="turnPart answer"><span>AI</span><div class="txt">${esc(answerText)}</div></div>` +
+      `<div class="turnPart request"><span>你說：</span><div class="txt">${esc(requestText)}</div></div>` +
+      `<div class="turnPart answer"><span>AI說：</span><div class="txt">${esc(answerText)}</div></div>` +
       `<div class="turnVerdict ${esc(semantic.state || "neutral")}">` +
       `<b>${esc(semantic.label || "資料不足")}</b>` +
       `<span>${esc(semantic.actor ? `責任：${semantic.actor} · ${semantic.why || ""}` : (semantic.why || ""))}</span>` +
