@@ -40,6 +40,7 @@ Phase 8 的預設畫面是 `Forseti 37.2 C WATCH`。這個專案的設計規則
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import subprocess
 import sys
@@ -803,6 +804,248 @@ def audit(strands_snapshot: dict | None = None, *, persist: bool = True) -> dict
     }
 
 
+REQUIRED_DOCUMENT_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _required_reading_entries() -> list[dict]:
+    """Build the server-owned required-reading allowlist.
+
+    The returned paths are server metadata only.  Callers receive the stable
+    opaque id and a safe display path, never these filesystem paths.
+    """
+    spec_dir = (Path.home() / "Dropbox" / "My project" /
+                "Forseti Agent Runtime" / "forseti_20260909-2_Modular_Spec")
+    entries: list[dict] = []
+    seen: set[str] = set()
+
+    def add(path: Path, category: str, root: Path) -> None:
+        path = Path(path)
+        key = str(path)
+        if key in seen:
+            return
+        seen.add(key)
+        try:
+            relative = path.relative_to(root)
+        except ValueError:
+            relative = Path(path.name)
+        display_path = f"{category}/{relative.as_posix()}"
+        identity = f"{category}:{relative.as_posix()}"
+        document_id = "doc_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+        entries.append({
+            "document_id": document_id,
+            "path": path,
+            "root": root,
+            "display_name": path.name,
+            "display_path": display_path,
+            "source_category": category,
+        })
+
+    for path in (REPO / "soul.md", REPO / "bible.md",
+                 REPO / "docs" / "build-plan.md",
+                 REPO / "docs" / "spec-v2.0.md"):
+        add(path, "repo", REPO)
+    ctrl = REPO / ".forseti"
+    if ctrl.is_dir():
+        for path in sorted(ctrl.glob("*.md")):
+            if not path.name.startswith("._"):
+                add(path, "repo_control", REPO)
+
+    vnext = spec_dir.parent / "forseti 20260909-1"
+    if vnext.is_dir():
+        for path in sorted(vnext.glob("Forseti_vNext_*.md")):
+            if not path.name.startswith("._"):
+                add(path, "platform_vnext", vnext)
+
+    mf = spec_dir / "spec_manifest.json"
+    if mf.is_file():
+        try:
+            manifest = json.loads(mf.read_text(encoding="utf-8"))
+            arch = manifest.get("architecture")
+            if arch:
+                for path in sorted(spec_dir.glob("00_*.md")):
+                    if path.name.startswith("00_"):
+                        add(path, "modular_spec", spec_dir)
+                        break
+            for feature in manifest.get("features") or []:
+                filename = feature.get("file")
+                if filename:
+                    add(spec_dir / filename, "modular_spec", spec_dir)
+        except (ValueError, OSError):
+            pass
+    return entries
+
+
+def _path_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _reading_evidence(entry: dict, record: dict | None, state: str,
+                      current_hash: str = "") -> dict:
+    """Expose only truthful reading evidence, never infer worker ownership."""
+    record = record or {}
+    actor_type = record.get("actor_type") or record.get("owner_type")
+    worker_identity = record.get("worker_identity") or record.get("worker")
+    is_ai_worker = (actor_type == "AI_WORKER" and bool(worker_identity))
+    block_hashes = record.get("block_hashes")
+    if isinstance(block_hashes, list):
+        block_hash_status = "RECORDED" if block_hashes else "RECORDED_EMPTY"
+    else:
+        block_hashes = None
+        block_hash_status = "NOT_RECORDED"
+    if state == "讀過但檔案已經變了":
+        evidence_state = "STALE"
+        stale_reason = "content_hash_mismatch"
+    elif is_ai_worker:
+        evidence_state = "VALID" if state == "讀完" else "PARTIAL"
+        stale_reason = None
+    elif record:
+        evidence_state = "UNKNOWN"
+        stale_reason = "owner_not_verified_as_ai_worker"
+    else:
+        evidence_state = "UNKNOWN"
+        stale_reason = "no_completed_ai_reading_record"
+    return {
+        "owner_type": "AI_WORKER" if is_ai_worker else "UNKNOWN",
+        "evidence_eligibility": ("AI_WORKER_CONFIRMED" if is_ai_worker
+                                  else "OWNER_UNCONFIRMED"),
+        "worker_identity": worker_identity if is_ai_worker else None,
+        "session_id": record.get("session"),
+        "recorded_at": record.get("at"),
+        "document_hash": record.get("content_hash"),
+        "current_content_hash": current_hash or None,
+        "block_hashes": block_hashes,
+        "block_hashes_status": block_hash_status,
+        "covered_ranges": record.get("covered") or [],
+        "missing_ranges": record.get("gaps") or [],
+        "coverage_state": evidence_state,
+        "stale_reason": stale_reason,
+        "source_category": entry["source_category"],
+    }
+
+
+def _reading_state_by_id() -> dict[str, dict]:
+    result = spec_reading()
+    return {row.get("document_id"): row for row in result.get("rows") or []
+            if row.get("document_id")}
+
+
+def read_required_document(document_id: str) -> dict:
+    """Read exactly one server-allowlisted required document.
+
+    Fetching content is observational.  It never appends a coverage record or
+    promotes a document to FULL_READ; the response documents the existing
+    ``coverage.CoverageLog.append(ReadRecord)`` contract for truthful spans.
+    """
+    if not isinstance(document_id, str) or not document_id.strip():
+        return {"ok": False, "code": "INVALID_DOCUMENT_ID"}
+    document_id = document_id.strip()
+    if (document_id.startswith(("/", "~")) or "/" in document_id
+            or "\\" in document_id or ".." in document_id):
+        return {"ok": False, "code": "PATH_TRAVERSAL_REJECTED"}
+
+    entries = {row["document_id"]: row for row in _required_reading_entries()}
+    entry = entries.get(document_id)
+    if entry is None:
+        return {"ok": False, "code": "UNKNOWN_DOCUMENT_ID"}
+
+    path = entry["path"]
+    root = entry["root"]
+    try:
+        canonical = path.resolve(strict=False)
+        canonical_root = root.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return {"ok": False, "code": "SYMLINK_ESCAPE"}
+    if not _path_within(canonical, canonical_root):
+        return {"ok": False, "code": "SYMLINK_ESCAPE"}
+    if not path.exists():
+        return {"ok": False, "code": "MISSING_FILE",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"]}
+    if not path.is_file():
+        return {"ok": False, "code": "NON_REGULAR_FILE",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"]}
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return {"ok": False, "code": "STAT_FAILED",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"]}
+    if size > REQUIRED_DOCUMENT_MAX_BYTES:
+        return {"ok": False, "code": "OVERSIZED_FILE",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"],
+                "size": size}
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return {"ok": False, "code": "READ_FAILED",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"]}
+    if len(raw) > REQUIRED_DOCUMENT_MAX_BYTES:
+        return {"ok": False, "code": "OVERSIZED_FILE",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"],
+                "size": len(raw)}
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {"ok": False, "code": "NON_UTF8_FILE",
+                "document_id": document_id,
+                "canonical_display_path": entry["display_path"],
+                "size": len(raw)}
+
+    row = _reading_state_by_id().get(document_id) or {}
+    reading_state = row.get("state", "沒有閱讀紀錄")
+    evidence = row.get("evidence") or {}
+    return {
+        "ok": True,
+        "code": "OK",
+        "document_id": document_id,
+        "display_name": entry["display_name"],
+        "canonical_display_path": entry["display_path"],
+        "source_category": entry["source_category"],
+        "content": content,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "size": len(raw),
+        "reading_state": reading_state,
+        "evidence": evidence,
+        "evidence_contract": {
+            "records_on_fetch": False,
+            "actor_scope": "AI_WORKER_SESSION_ONLY",
+            "human_fetch_records": False,
+            "module": "coverage.CoverageLog.append",
+            "record_type": "coverage.ReadRecord",
+            "requires": [
+                "worker_identity",
+                "session_id",
+                "source_hash",
+                "block_hashes_or_explicit_not_recorded",
+                "covered_line_spans",
+                "observed_at",
+            ],
+            "block_hashes_supported": False,
+            "dispatch": {
+                "action": "AI_READ_REQUIRED_DOCUMENT",
+                "document_id": document_id,
+                "resume_missing_ranges": evidence.get("missing_ranges", []),
+                "source_sha256": hashlib.sha256(raw).hexdigest(),
+                "must_be_completed_by": "AI_WORKER_SESSION",
+                "no_ui_click_evidence": True,
+            },
+        },
+    }
+
+
+def read_document(document_id: str) -> dict:
+    """Stable short alias for the desktop command."""
+    return read_required_document(document_id)
+
+
 def spec_reading() -> dict:
     """必讀文件讀完了沒。這是 gate，不是分數。§40
 
@@ -833,44 +1076,7 @@ def spec_reading() -> dict:
     """
     import hashlib
 
-    spec_dir = (Path.home() / "Dropbox" / "My project" /
-                "Forseti Agent Runtime" / "forseti_20260909-2_Modular_Spec")
-
-    must: list[Path] = [REPO / "soul.md", REPO / "bible.md",
-                        REPO / "docs" / "build-plan.md",
-                        REPO / "docs" / "spec-v2.0.md"]
-    ctrl = REPO / ".forseti"
-    if ctrl.is_dir():
-        # exFAT 會生 ._ 開頭的 AppleDouble，那是中繼資料不是文件。
-        must += sorted(f for f in ctrl.glob("*.md")
-                       if not f.name.startswith("._"))
-    # 平台願景五份。`REQUIRED_READING.md` 第 134 節列的,但它寫的路徑
-    # (`platform/`)在這台機器上不存在 —— 實際結構是按日期分的資料夾,
-    # 而那個結構本身就是 owner 說的演進過程:06 概念、07 工程書、
-    # 08 形式規格、09-1 平台願景、09-2 模組化執行規格。
-    #
-    # 【2026-09-14】第一版算必讀的時候我漏了這五份,分母少算,
-    # 於是 11/21 這個數字比真實情況樂觀。
-    vnext = spec_dir.parent / "forseti 20260909-1"
-    if vnext.is_dir():
-        must += sorted(f for f in vnext.glob("Forseti_vNext_*.md")
-                       if not f.name.startswith("._"))
-
-    mf = spec_dir / "spec_manifest.json"
-    if mf.is_file():
-        try:
-            m = json.loads(mf.read_text(encoding="utf-8"))
-            arch = m.get("architecture")
-            for f in spec_dir.glob("*.md"):
-                if arch and f.name.startswith("00_"):
-                    must.append(f)
-                    break
-            for feat in (m.get("features") or []):
-                fn = feat.get("file")
-                if fn:
-                    must.append(spec_dir / fn)
-        except (ValueError, OSError):
-            pass
+    entries = _required_reading_entries()
 
     log = REPO / ".forseti" / "reading_coverage.jsonl"
     best: dict = {}
@@ -903,23 +1109,46 @@ def spec_reading() -> dict:
                           and (r.get("at") or 0) >= (old.get("at") or 0)):
                         best[path] = r
         except OSError as e:                                # noqa: BLE001
-            return {"has": False, "why": f"讀不到閱讀紀錄：{e}"}
+            return {"has": False, "available": False, "outcome": "FAIL",
+                    "outcome_provenance": "reading_coverage.jsonl",
+                    "why": f"讀不到閱讀紀錄：{e}"}
 
     rows, full, partial, missing, stale = [], 0, 0, 0, 0
-    for f in must:
-        name = f.name
+    for entry in entries:
+        f = entry["path"]
+        name = entry["display_name"]
         rec = best.get(str(f))
+        current_hash = ""
+        if f.is_file():
+            try:
+                current_hash = hashlib.sha256(f.read_bytes()).hexdigest()
+            except OSError:
+                current_hash = ""
         if not f.is_file():
-            rows.append({"name": name, "state": "檔案不在", "ratio": 0.0})
+            state = "檔案不在"
+            rows.append({"document_id": entry["document_id"], "name": name,
+                         "source_category": entry["source_category"],
+                         "state": state, "ratio": 0.0,
+                         "evidence": _reading_evidence(entry, rec, state)})
             missing += 1
             continue
         if rec is None:
-            rows.append({"name": name, "state": "沒有閱讀紀錄", "ratio": 0.0})
+            state = "沒有閱讀紀錄"
+            rows.append({"document_id": entry["document_id"], "name": name,
+                         "source_category": entry["source_category"],
+                         "state": state, "ratio": 0.0,
+                         "evidence": _reading_evidence(entry, rec, state,
+                                                        current_hash)})
             missing += 1
             continue
         ratio = float(rec.get("ratio") or 0.0)
         if rec.get("level") != "FULL_READ":
-            rows.append({"name": name, "state": "只讀一部分", "ratio": ratio})
+            state = "只讀一部分"
+            rows.append({"document_id": entry["document_id"], "name": name,
+                         "source_category": entry["source_category"],
+                         "state": state, "ratio": ratio,
+                         "evidence": _reading_evidence(entry, rec, state,
+                                                        current_hash)})
             partial += 1
             continue
         try:
@@ -927,18 +1156,31 @@ def spec_reading() -> dict:
         except OSError:
             h = ""
         if rec.get("content_hash") and h and rec["content_hash"] != h:
-            rows.append({"name": name, "state": "讀過但檔案已經變了",
-                         "ratio": ratio})
+            state = "讀過但檔案已經變了"
+            rows.append({"document_id": entry["document_id"], "name": name,
+                         "source_category": entry["source_category"],
+                         "state": state, "ratio": ratio,
+                         "evidence": _reading_evidence(entry, rec, state,
+                                                        current_hash)})
             stale += 1
             continue
-        rows.append({"name": name, "state": "讀完", "ratio": ratio})
+        state = "讀完"
+        rows.append({"document_id": entry["document_id"], "name": name,
+                     "source_category": entry["source_category"],
+                     "state": state, "ratio": ratio,
+                     "evidence": _reading_evidence(entry, rec, state,
+                                                    current_hash)})
         full += 1
 
     bad = partial + missing + stale
     rows.sort(key=lambda r: (r["state"] == "讀完", r["ratio"]))
+    outcome = "COMPLETE" if entries and bad == 0 else "INCOMPLETE"
     return {
         "has": True,
-        "total": len(must),
+        "available": True,
+        "outcome": outcome,
+        "outcome_provenance": "required-reading allowlist + reading_coverage.jsonl",
+        "total": len(entries),
         "full": full,
         "partial": partial,
         "missing": missing,
@@ -969,11 +1211,15 @@ def block_reading() -> dict:
     try:
         import blockread as BR
     except ImportError as e:                                # noqa: BLE001
-        return {"has": False, "why": f"讀不到模組：{e}"}
+        return {"has": False, "available": False, "outcome": "FAIL",
+                "outcome_provenance": "blockread.BlockLog",
+                "why": f"讀不到模組：{e}"}
 
     spec = _safe(spec_reading, {}) or {}
     if not spec.get("has"):
-        return {"has": False, "why": spec.get("why", "算不出必讀清單")}
+        return {"has": False, "available": False, "outcome": "FAIL",
+                "outcome_provenance": "required-reading allowlist",
+                "why": spec.get("why", "算不出必讀清單")}
 
     log = BR.BlockLog(REPO)
     done_all = log.all()
@@ -1007,8 +1253,13 @@ def block_reading() -> dict:
     files.sort(key=lambda f: (f["done"] / f["blocks"] if f["blocks"] else 1,
                               -f["lines"]))
     qs = log.questions()
+    outcome = ("COMPLETE" if blocks_total > 0 and blocks_done == blocks_total
+               else "INCOMPLETE")
     return {
         "has": True,
+        "available": True,
+        "outcome": outcome,
+        "outcome_provenance": "blockread.BlockLog + required-reading allowlist",
         "files": files,
         "blocks": blocks_total,
         "done": blocks_done,
@@ -2765,15 +3016,53 @@ def features() -> dict:
             "alive": bool(a and a.get("alive")),
             "live": (a or {}).get("live", ""),
         })
+    scale = _safe(scale_now, {}) or {}
+    raw_test_count = scale.get("tests")
+    try:
+        test_count = int(raw_test_count)
+    except (TypeError, ValueError):
+        test_count = None
+    if test_count == 0:
+        test_status = ("VERIFIED_ZERO" if scale.get("tests_verified_zero") is True
+                       else "UNKNOWN")
+    elif test_count is None:
+        test_status = "UNKNOWN"
+    else:
+        test_status = "AVAILABLE"
+    selftest_available = bool(st and not st.get("error")
+                              and isinstance(st.get("items"), list))
+    completion_state = ("COMPLETE" if selftest_available and not missing
+                        else "INCOMPLETE" if selftest_available else "FAIL")
+    detector_availability = {
+        "label": "detector availability",
+        "available": sum(1 for r in rows if r["alive"]),
+        "total": len(rows),
+        "provenance": "selftest synthetic violation probes",
+    }
+    completion = {
+        "outcome": completion_state,
+        "available": selftest_available,
+        "completed_functions": len(completed),
+        "remaining": len(missing),
+        "provenance": "feature ledger + explicit remaining blockers",
+    }
     return {
         "items": rows,
         "alive": sum(1 for r in rows if r["alive"]),
         "total": len(rows),
+        "available": selftest_available,
+        "outcome": completion_state,
+        "outcome_provenance": "feature ledger + selftest",
+        "detector_availability": detector_availability,
+        "completion": completion,
         # R1 contract completion is a separate axis from App view completion.
         # A contract that is present must not be shown as a missing function;
         # its remaining product-surface gate stays visible in this row.
         "completed_functions": completed,
-        "scale": _safe(scale_now, {}) or {},
+        "scale": scale,
+        "test_count": test_count,
+        "test_status": test_status,
+        "test_provenance": "scale_now.tests; zero requires explicit tests_verified_zero",
         # 沒接的照實列。owner 2026-09-14：
         # 「明天是赤裸裸的給人看」——
         # 藏起來的那一項，正是會被問到的那一項。
@@ -3108,6 +3397,19 @@ def selftest() -> dict:
     })
 
     dead = [r["name"] for r in rows if not r["alive"]]
+    scale = _safe(scale_now, {}) or {}
+    raw_test_count = scale.get("tests")
+    try:
+        test_count = int(raw_test_count)
+    except (TypeError, ValueError):
+        test_count = None
+    if test_count == 0:
+        test_status = ("VERIFIED_ZERO" if scale.get("tests_verified_zero") is True
+                       else "UNKNOWN")
+    elif test_count is None:
+        test_status = "UNKNOWN"
+    else:
+        test_status = "AVAILABLE"
     return {
         "at": time.time(),
         "session": target.stem if target else "",
@@ -3115,6 +3417,18 @@ def selftest() -> dict:
         "alive": sum(1 for r in rows if r["alive"]),
         "total": len(rows),
         "dead": dead,
+        "available": True,
+        "outcome": "COMPLETE" if rows and not dead else "INCOMPLETE",
+        "outcome_provenance": "selftest synthetic violation probes",
+        "detector_availability": {
+            "label": "detector availability",
+            "available": sum(1 for r in rows if r["alive"]),
+            "total": len(rows),
+            "provenance": "selftest synthetic violation probes",
+        },
+        "test_count": test_count,
+        "test_status": test_status,
+        "test_provenance": "scale_now.tests; zero requires explicit tests_verified_zero",
     }
 
 
@@ -3926,6 +4240,14 @@ def main(argv: list[str]) -> int:
         print(json.dumps(audit(), ensure_ascii=False))
     elif cmd == "spec_reading":
         print(json.dumps(spec_reading(), ensure_ascii=False))
+    elif cmd in ("read_required_document", "read_document"):
+        if len(argv) < 3:
+            print(json.dumps({"ok": False, "code": "MISSING_DOCUMENT_ID"},
+                             ensure_ascii=False))
+            return 2
+        result = read_required_document(argv[2])
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("ok") else 2
     elif cmd == "block_reading":
         print(json.dumps(block_reading(), ensure_ascii=False))
     elif cmd == "sufficiency":
