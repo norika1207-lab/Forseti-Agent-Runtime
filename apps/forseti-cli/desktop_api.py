@@ -2689,11 +2689,46 @@ def work() -> dict:
     而「在終端下指令才看得到」就是一種盤問。
     """
     import ledger as L
+    import work_topology as WT
+
+    topology = _safe(WT.topology, {
+        "available": False,
+        "state": "UNKNOWN",
+        "reason": "work topology connector failed",
+        "items": [],
+        "counts": {k: None for k in
+                    ("total", "active", "verifying", "completed", "failed",
+                     "blocked", "unknown")},
+    }) or {}
 
     db = L.default_db()
     if not db.exists() or db.stat().st_size == 0:
+        if topology.get("available"):
+            counts = topology.get("counts") or {}
+            return {
+                "ok": True,
+                "total": counts.get("total", 0),
+                "tasks": [],
+                "steps": [],
+                "steps_more": 0,
+                "blocked": [],
+                "active": ((counts.get("active") or 0)
+                           + (counts.get("verifying") or 0)
+                           + (counts.get("blocked") or 0)),
+                "active_rows": [],
+                "topology": topology,
+                "task_ledger": {
+                    "available": False,
+                    "state": "UNKNOWN",
+                    "reason": "Task Ledger database is absent; Codex topology is authoritative",
+                },
+                "db": str(db),
+            }
         return {"ok": False,
-                "why": "還沒有任務帳本。義務只活在模型記憶裡的話，回合結束就散了",
+                "why": "Task Ledger 與 Commander/Codex topology 都沒有可用來源",
+                "topology": topology,
+                "total": None,
+                "active": None,
                 "db": str(db)}
     try:
         led = L.Ledger()
@@ -2761,15 +2796,29 @@ def work() -> dict:
             }
         tasks.append(row)
 
+    topology_items = (topology.get("items") or []
+                      if topology.get("available") else [])
+    ledger_ids = {row.get("id") for row in tasks if row.get("id")}
+    distinct_topology = [row for row in topology_items
+                         if (row.get("work_order_id") or row.get("thread_id"))
+                         not in ledger_ids]
+    topology_counts = topology.get("counts") or {}
+    topology_active = ((topology_counts.get("active") or 0)
+                       + (topology_counts.get("verifying") or 0)
+                       + (topology_counts.get("blocked") or 0))
+    total_value = (total + len(distinct_topology)
+                   if topology.get("available") else total)
+    active_value = (len(active) + topology_active
+                    if topology.get("available") else len(active))
     return {
         "ok": True,
-        "total": total,
+        "total": total_value,
         "tasks": tasks,
         "steps": [{"state": x.get("state", ""), "objective": x.get("objective", "")}
                   for x in (o.get("unfinished_steps") or [])[:20]],
         "steps_more": max(0, len(o.get("unfinished_steps") or []) - 20),
         "blocked": [x.get("objective", "") for x in (o.get("blocked") or [])],
-        "active": len(active),
+        "active": active_value,
         # active_steps() 的排序本身就是資訊:最久沒動靜的排前面。
         # 只顯示一個數字等於把那個排序丟掉。
         "active_rows": [{
@@ -2778,6 +2827,13 @@ def work() -> dict:
             "worker": x.get("worker", ""),
             "idle_s": x.get("idle_s") or x.get("since"),
         } for x in active[:12]],
+        "topology": topology,
+        "task_ledger": {
+            "available": True,
+            "state": "AVAILABLE",
+            "source": "Task Ledger sqlite",
+            "unfinished": total,
+        },
         "db": str(db),
     }
 
@@ -4261,6 +4317,9 @@ def main(argv: list[str]) -> int:
         print(json.dumps(machine(), ensure_ascii=False))
     elif cmd == "work":
         print(json.dumps(work(), ensure_ascii=False))
+    elif cmd == "work_topology":
+        import work_topology as WT
+        print(json.dumps(WT.topology(), ensure_ascii=False))
     elif cmd == "blast_detail":
         # blast_detail <檔案路徑>　點一個節點看誰依賴它。
         if len(argv) < 3:
