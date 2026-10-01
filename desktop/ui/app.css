@@ -1201,6 +1201,9 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .laneHit{fill:none;stroke:transparent;stroke-width:12;
   pointer-events:stroke;cursor:help}
 .drift .laneHit:focus{outline:none;stroke:color-mix(in srgb,var(--blue) 18%,transparent)}
+.laneButton{position:absolute;z-index:2;width:14px;min-height:14px;padding:0;
+  border:0;background:transparent;cursor:help}
+.laneButton:focus-visible{outline:2px solid var(--blue);outline-offset:1px;border-radius:4px}
 
 /* 動作按鈕。會改帳本的東西，樣式要克制但按得到。 */
 .wk .acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;

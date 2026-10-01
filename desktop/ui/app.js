@@ -1585,6 +1585,7 @@ function drawDrift() {
   const lane = $("lane");
   if (!lane) return;
   lane.querySelector(".drift")?.remove();
+  lane.querySelectorAll(".laneButton").forEach((el) => el.remove());
   const guts = [...lane.querySelectorAll(".st .gut")];
   if (guts.length < 2) return;
 
@@ -1731,6 +1732,26 @@ function drawDrift() {
   });
 
   lane.appendChild(svg);
+  laneRegions.forEach(({it, x, y0, y1}) => {
+    const button = document.createElement("button");
+    button.className = "laneButton";
+    button.type = "button";
+    button.setAttribute("aria-label", `${it.label || "分岔"}，第 ${it.from_n} 至 ${it.to_n} 輪，點擊查看原因`);
+    button.title = "點擊查看這條分岔線的原因";
+    button.style.left = `${x - 7}px`;
+    button.style.top = `${y0}px`;
+    button.style.height = `${Math.max(14, y1 - y0)}px`;
+    button.addEventListener("pointerenter", (e) => showLaneReason(e, it));
+    button.addEventListener("pointerleave", () => {
+      const pop = $("pop");
+      if (pop?.dataset.lane === "1" && pop.dataset.pinned !== "1") pop.hidden = true;
+    });
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showLaneReason(e, it, true);
+    });
+    lane.appendChild(button);
+  });
 }
 
 function renderTree() {
