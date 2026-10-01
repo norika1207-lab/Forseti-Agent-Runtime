@@ -1622,6 +1622,7 @@ function drawDrift() {
     }))
     .sort((p, q) => p.from_n - q.from_n);
   const packed = packLanes(raw);
+  const laneRegions = [];
 
   packed.forEach((it) => {
     const A = yOf.get(it.from_n), B = yOf.get(it.to_n);
@@ -1629,6 +1630,7 @@ function drawDrift() {
     const x = MAIN + GAP * (it.lane + 1);
     const cls = "lane " + (LANE_CLS[it.kind] || "ld") + (it.open ? " open" : "");
     const bend = 14;
+    laneRegions.push({it, x, y0: A.y0, y1: B.y1});
 
     const paths = [];
     const out = document.createElementNS(NS, "path");
@@ -1677,6 +1679,20 @@ function drawDrift() {
       });
       svg.appendChild(hit);
     });
+  });
+
+  // WKWebView 有時把透明 SVG stroke 的點擊回報給根 <svg>，不是 path。
+  // 以座標找最近軌道作為保底，讓真正的滑鼠點擊在每個 WebView 都可靠。
+  svg.addEventListener("click", (e) => {
+    if (e.target.closest?.(".laneHit")) return;
+    const box = svg.getBoundingClientRect();
+    const px = e.clientX - box.left, py = e.clientY - box.top;
+    const nearest = laneRegions
+      .filter((r) => py >= r.y0 - 8 && py <= r.y1 + 8)
+      .sort((a, b) => Math.abs(a.x - px) - Math.abs(b.x - px))[0];
+    if (!nearest || Math.abs(nearest.x - px) > 9) return;
+    e.stopPropagation();
+    showLaneReason(e, nearest.it, true);
   });
 
   /* 主線。一輪一段，顏色跟著那一輪走。 */

@@ -301,6 +301,8 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         self.assertIn('setAttribute("class", "laneHit")', JS)
         self.assertIn('hit.addEventListener("click"', JS)
         self.assertIn('hit.addEventListener("pointerenter"', JS)
+        self.assertIn('svg.addEventListener("click"', JS)
+        self.assertIn("laneRegions", JS)
         self.assertIn("LANE_REASON", JS)
         self.assertIn("laneTipWhy", JS)
         block = CSS.split(".drift .laneHit{", 1)[1].split("}", 1)[0]
