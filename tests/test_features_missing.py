@@ -101,11 +101,40 @@ class 每一筆都說得出被什麼擋住(unittest.TestCase):
             with self.subTest(name=m["name"]):
                 self.assertIn(m["barrier"], D.BARRIER_LABEL)
 
-    def test_四種都有東西不然分類是裝飾(self):
-        """只剩一種的時候，分類就沒有意義了。"""
+    def test_仍保留資料與_owner兩種可行動分類(self):
+        """已交付的 contract 不應靠舊分類佔位，剩餘 gate 仍須可行動。"""
         kinds = {m["barrier"] for m in self.miss}
-        self.assertGreaterEqual(len(kinds), 3,
-                                f"只用到 {kinds}，分類等於裝飾")
+        self.assertEqual(kinds, {"NO_DATA", "OWNER"})
+
+
+class 已交付函式不再是缺漏(unittest.TestCase):
+
+    def setUp(self):
+        self.f = D.features()
+
+    def test_r1_contracts_are_reported_as_completed_functions(self):
+        completed = {x["name"]: x for x in self.f["completed_functions"]}
+        expected = {
+            "因果 X 光", "脈絡 MRI", "系譜瀏覽", "權限地圖", "執行拓樸",
+        }
+        self.assertTrue(expected <= completed.keys())
+        for name in expected:
+            with self.subTest(name=name):
+                self.assertTrue(completed[name]["implemented"])
+                self.assertEqual(completed[name]["status"],
+                                 "CONTRACT_IMPLEMENTED")
+                self.assertTrue(completed[name]["remaining"])
+
+    def test_completed_contracts_are_not_in_missing(self):
+        completed = {x["name"] for x in self.f["completed_functions"]}
+        missing = {x["name"] for x in self.f["missing"]}
+        self.assertTrue(completed.isdisjoint(missing))
+
+    def test_feature_ledger_does_not_repeat_stale_no_code_claims(self):
+        missing = {x["name"]: x for x in self.f["missing"]}
+        for name in ("因果 X 光", "脈絡 MRI", "系譜瀏覽", "權限地圖",
+                     "執行拓樸"):
+            self.assertNotIn(name, missing)
 
 
 class 畫面真的畫得出來(unittest.TestCase):

@@ -2619,7 +2619,74 @@ FEATURES = [
 ]
 
 
-#: 還沒做的。**這一份跟上面那份一樣要指得回證據**,
+#: R1 已交付的 deterministic contract。這些不是「整個 App 視圖已完成」；
+#: 它們是已存在、可測試的 function contract，剩下的 product-surface gate
+#: 另列在每一筆的 `remaining`。把它們留在 MISSING 會把「已有程式」誤報成
+#: 「一行都沒有」，也會讓下一輪 worker 重做已交付的路徑。
+COMPLETED_FUNCTIONS: tuple[dict, ...] = (
+    {"name": "因果 X 光", "module": "causal_xray.py",
+     "callables": ("build",), "spec": "v5.0 §16.1 八視圖之一",
+     "status": "CONTRACT_IMPLEMENTED",
+     "remaining": "下游 PROPAGATES_TO 與獨立 App 視圖仍待 product-surface 接線"},
+    {"name": "脈絡 MRI", "module": "context_mri.py",
+     "callables": ("build",), "spec": "v5.0 §16.1 八視圖之一",
+     "status": "CONTRACT_IMPLEMENTED",
+     "remaining": "fragment 來源、壓縮差集與決策依存仍待獨立 MRI 視圖接線"},
+    {"name": "系譜瀏覽", "module": "lineage_view.py",
+     "callables": ("build",), "spec": "v5.0 §16.1 八視圖之一",
+     "status": "CONTRACT_IMPLEMENTED",
+     "remaining": "PROMOTES 完整鏈與獨立 App 視圖仍待 product-surface 接線"},
+    {"name": "權限地圖", "module": "authority_map.py",
+     "callables": ("project", "from_events"),
+     "spec": "v5.0 §16.1 八視圖之一", "status": "CONTRACT_IMPLEMENTED",
+     "remaining": "runtime event source 與權限衝突整張圖仍待 App 接線"},
+    {"name": "執行拓樸", "module": "execution_topology.py",
+     "callables": ("project", "from_events"),
+     "spec": "v5.0 §16.1 八視圖之一", "status": "CONTRACT_IMPLEMENTED",
+     "remaining": "live event 接線與 App 視圖仍待 product-surface 驗收"},
+)
+
+
+def _contract_implemented(entry: dict) -> bool:
+    """確認 ledger 的完成宣稱有對應檔案與 callable，避免再度寫死狀態。"""
+    import ast
+
+    path = REPO / "apps" / "forseti-cli" / entry["module"]
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, UnicodeDecodeError, SyntaxError):
+        return False
+    names = {n.name for n in ast.walk(tree)
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+    return all(name in names for name in entry["callables"])
+
+
+def _completed_functions() -> list[dict]:
+    """Return only contracts that are present in this checkout."""
+    return [dict(entry, implemented=True)
+            for entry in COMPLETED_FUNCTIONS if _contract_implemented(entry)]
+
+
+def _missing_contracts() -> list[dict]:
+    """Keep a deleted/invalid contract visible instead of silently losing it."""
+    out = []
+    for entry in COMPLETED_FUNCTIONS:
+        if _contract_implemented(entry):
+            continue
+        out.append({
+            "name": entry["name"],
+            "spec": entry["spec"],
+            "what": (f"{entry['name']} 的 deterministic contract，需提供 "
+                     f"{', '.join(entry['callables'])} callable"),
+            "barrier": "NO_CODE",
+            "blocked": (f"{entry['module']} 不存在或缺少 "
+                        f"{', '.join(entry['callables'])}；不能把未驗證的完成"
+                        "狀態留在 completed_functions"),
+        })
+    return out
+
+
+#: 還沒完成的 product surface。**這一份跟上面那份一樣要指得回證據**,
 #: 每一筆的 `blocked` 講的是「被什麼擋住」,不是「還沒排到」。
 #:
 #: 四種擋法分開,因為處理方式完全不同:
@@ -2631,38 +2698,6 @@ FEATURES = [
 #:
 #: **把這四種混成一句「還沒做」,會讓人以為它們可以用同一種方式推進。**
 MISSING: tuple[dict, ...] = (
-    {"name": "因果 X 光", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "一個壞掉的結果,往回追出是哪一個決定、哪一份證據、"
-             "哪一次 context 變動造成的。不是看那一輪做了什麼,"
-             "是看那一輪為什麼會那樣做",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。§16.4 要求因果歸因除非有決定性連結"
-                "否則一律標成機率性,那需要一個 lineage 圖,現在沒有"},
-    {"name": "脈絡 MRI", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "這個決定是被哪些脈絡、記憶、快取、證據促成的。"
-             "壓縮之後最該問的就是這個:它現在憑什麼還這樣想",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。需要 ContextFragment 這個物件,Vol2 十五個"
-                "核心物件裡缺的那十個之一"},
-    {"name": "系譜瀏覽", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "一個宣稱從哪裡來、被誰引用過、中途有沒有被改寫。"
-             "白點抓的是單點對不上,這個看的是一條鏈",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。evidence lineage 是 v5.0 副標新增的兩個"
-                "概念之一,目前只有單點的 E0 到 E4,沒有鏈"},
-    {"name": "權限地圖", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "誰有權改什麼、誰批准過什麼、哪兩個東西在爭同一個權威。"
-             "authority.py 算得出單次判定,這個要的是整張圖",
-     "barrier": "NO_CODE",
-     "blocked": "沒有模組。authority.py 有八級信任階層與衝突偵測,"
-                "但沒有把它畫成圖的那一層"},
-    {"name": "執行拓樸", "spec": "v5.0 §16.1 八視圖之一",
-     "what": "有幾個 agent 在跑、它們各自看到什麼版本的真實、"
-             "哪一個的世界觀跟別人不一樣",
-     "barrier": "JS_ONLY",
-     "blocked": "src/topology.js 203 行有實作,Python 這邊沒接。"
-                "它吃的是結構化事件不是 transcript,硬接會得到"
-                "一排 NOT_APPLICABLE,那比不接更糟"},
     {"name": "金點", "spec": "WIDGET_SPEC §5.3",
      "what": "你這次的決策跟過去不一樣,語氣是供你參考不是警告。"
              "它不判對錯,只指出差異",
@@ -2717,6 +2752,9 @@ def features() -> dict:
     """功能說明加當場驗證。§36"""
     st = _safe(selftest, {}) or {}
     alive = {x["name"]: x for x in (st.get("items") or [])}
+    completed = _completed_functions()
+    missing = [dict(m, barrier_label=BARRIER_LABEL.get(m["barrier"], m["barrier"]))
+               for m in (*MISSING, *_missing_contracts())]
     rows = []
     for name, _key, what, spec in FEATURES:
         a = alive.get(name)
@@ -2729,6 +2767,10 @@ def features() -> dict:
         "items": rows,
         "alive": sum(1 for r in rows if r["alive"]),
         "total": len(rows),
+        # R1 contract completion is a separate axis from App view completion.
+        # A contract that is present must not be shown as a missing function;
+        # its remaining product-surface gate stays visible in this row.
+        "completed_functions": completed,
         "scale": _safe(scale_now, {}) or {},
         # 沒接的照實列。owner 2026-09-14：
         # 「明天是赤裸裸的給人看」——
@@ -2741,10 +2783,9 @@ def features() -> dict:
         # **兩份一起出才誠實。** 只列做好的那一份，21/21 全綠，
         # 看起來像做完了 —— 而實際上八個 X-Ray 視圖只有三個、
         # 紫點下不了判決、換模型會不會變差一次都還沒量過。
-        "missing": [dict(m, barrier_label=BARRIER_LABEL.get(m["barrier"], m["barrier"]))
-                    for m in MISSING],
+        "missing": missing,
         "missing_by_barrier": {
-            BARRIER_LABEL[k]: sum(1 for m in MISSING if m["barrier"] == k)
+            BARRIER_LABEL[k]: sum(1 for m in missing if m["barrier"] == k)
             for k in ("NO_CODE", "JS_ONLY", "NO_DATA", "OWNER")
         },
     }
