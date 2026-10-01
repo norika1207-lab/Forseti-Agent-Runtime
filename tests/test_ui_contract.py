@@ -138,6 +138,46 @@ class DomContract(unittest.TestCase):
         self.assertIn("tick()", handler)
 
 
+class DiagnosticViewContract(unittest.TestCase):
+    """R1 診斷契約必須真的有 UI 出口，而且 UNKNOWN 不可被吞掉。"""
+
+    CONTRACTS = (
+        "causal_xray", "context_mri", "lineage_view",
+        "execution_topology", "authority_map",
+    )
+
+    def test_diagnostic_view_is_reachable_from_the_picker(self):
+        self.assertIn(
+            '<button class="vw" data-view="diagnostics"', HTML)
+        self.assertIn(">診斷</button>", HTML)
+        self.assertIn('view === "diagnostics"', JS)
+        self.assertIn("renderDiagnostics()", JS)
+
+    def test_every_r1_contract_is_read_and_rendered(self):
+        for key in self.CONTRACTS:
+            self.assertIn(f"d.{key}", JS, f"前端沒有讀取 {key}")
+            self.assertIn(f'data-contract=\"${{esc(key)}}\"', JS)
+        self.assertIn("DIAG_LABEL", JS)
+        self.assertIn("goal_gate", JS)
+        self.assertIn("rescue", JS)
+
+    def test_unknown_state_keeps_reason_and_unknown_edges_visible(self):
+        self.assertIn('value?.status || ""', JS)
+        self.assertIn('return "UNKNOWN"', JS)
+        self.assertIn('const why = p.why ||', JS)
+        self.assertIn('unknown_edges', JS)
+        self.assertIn('p.unknown_n', JS)
+        self.assertIn('class="diagWarn"', JS)
+        self.assertIn('沒有可計數的觀測資料', JS)
+
+    def test_each_diagnostic_contract_has_a_styled_card(self):
+        self.assertIn(".diagCard", CSS)
+        for key in self.CONTRACTS:
+            self.assertIn(f'"{key}"', JS)
+        for status in ("complete", "partial", "blocked", "unknown"):
+            self.assertIn(f".diagState.{status}", CSS)
+
+
 class TauriWiring(unittest.TestCase):
     """前端連不連得上後端。
 
@@ -502,7 +542,7 @@ class RenderersAreActuallyCalled(unittest.TestCase):
 
 
 class ViewRenderersAreActuallyCalled(unittest.TestCase):
-    """七個分頁的渲染函式，兩條分派路徑都要有人叫。
+    """八個分頁的渲染函式，兩條分派路徑都要有人叫。
 
     `RenderersAreActuallyCalled` 守的是 `.dims` 開關底下那九格，
     走的是完全不同的一段程式碼。分頁這一批走 `view === "..."` 的
@@ -527,20 +567,20 @@ class ViewRenderersAreActuallyCalled(unittest.TestCase):
     沒定義）。整行刪掉之後函式還在、沒有人叫它，那條不會紅。
     """
 
-    #: 七個分頁各自的渲染函式。**這份清單是寫死的，不從程式碼推導。**
+    #: 八個分頁各自的渲染函式。**這份清單是寫死的，不從程式碼推導。**
     #: 從程式碼推導的話，刪掉一行的同時清單也跟著縮小，
     #: 那條檢查會永遠綠（`RenderersAreActuallyCalled` 付過這個代價）。
     #:
     #: `renderList` 是 else 那一支，對應 `index.html` 的
     #: `data-view="list"`（需要注意）。
     VIEW_RENDERERS = ("renderTree", "renderWork", "renderMachine",
-                      "renderFeat", "renderAudit", "renderSpec",
+                      "renderFeat", "renderAudit", "renderDiagnostics", "renderSpec",
                       "renderList")
 
     #: `index.html` 底下那排按鈕的 `data-view`。用來確認分派鏈
     #: 沒有漏掉任何一個按鈕得到的頁 —— 漏掉的那一頁按下去會掉進
     #: else，畫出來的是別頁的內容，而且不會有錯誤訊息。
-    VIEW_NAMES = ("tree", "work", "machine", "feat", "audit", "spec")
+    VIEW_NAMES = ("tree", "work", "machine", "feat", "audit", "diagnostics", "spec")
 
     #: 切分頁的時候要清掉的那五個模組層快取。`tree` 與 `list`
     #: 不在這裡，它們沒有快取變數 —— 照實際程式碼寫，

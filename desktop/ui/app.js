@@ -2957,6 +2957,153 @@ async function renderAudit() {
   }
 }
 
+/* ── 診斷契約 ───────────────────────────────────
+   R1 把 Goal/GAC、因果 X-Ray、脈絡 MRI、血脈、執行拓撲與權威地圖
+   接到 desktop_api。這一頁只呈現契約，不重新判斷因果或補出未知的邊。
+
+   「沒有資料」和「資料證明沒有」必須分開。每張卡都把 status 與 why
+   放在同一個可見區域，UNKNOWN 也要有出口，不能因為陣列是空的就看起來
+   像一張健康的空白報告。 */
+const DIAG_LABEL = {
+  causal_xray: "因果 X-Ray",
+  context_mri: "脈絡 MRI",
+  lineage_view: "證據血脈",
+  execution_topology: "執行拓撲",
+  authority_map: "權威地圖",
+};
+
+function diagStatus(value, key = "") {
+  const explicit = String(value?.status || "").trim().toUpperCase();
+  if (explicit) return explicit;
+  const unknown = Array.isArray(value?.unknown_edges)
+    ? value.unknown_edges.length : Number(value?.unknown_n) ||
+      (Array.isArray(value?.unknown_sources) ? value.unknown_sources.length : 0);
+  const collisions = Array.isArray(value?.collisions) ? value.collisions.length :
+    (Array.isArray(value?.conflicts) ? value.conflicts.length : 0);
+  if (key === "authority_map") {
+    return unknown || collisions ? "PARTIAL" :
+      (diagCount(value, "claims") || diagCount(value, "principals") ? "COMPLETE" : "UNKNOWN");
+  }
+  if (key === "execution_topology") {
+    return unknown || diagCount(value, "diagnostics") ? "PARTIAL" :
+      (diagCount(value, "nodes") ? "COMPLETE" : "UNKNOWN");
+  }
+  return "UNKNOWN";
+}
+
+function diagCount(value, key, fallback = 0) {
+  const item = value?.[key];
+  if (Array.isArray(item)) return item.length;
+  if (typeof item === "number" && Number.isFinite(item)) return item;
+  return fallback;
+}
+
+function diagList(value, key) {
+  return Array.isArray(value?.[key]) ? value[key] : [];
+}
+
+function diagValue(value, key) {
+  const item = value?.[key];
+  return item === null || item === undefined || item === "" ? "—" : item;
+}
+
+function renderDiagnosticCard(title, key, value, extra = "") {
+  const p = value && typeof value === "object" ? value : {};
+  const status = diagStatus(p, key);
+  const stateClass = status.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
+  const nodes = diagCount(p, "nodes", diagCount(p, "principals"));
+  const edges = diagCount(p, "known_edges", diagCount(p, "edges"));
+  const unknown = diagCount(p, "unknown_edges", Number(p.unknown_n) ||
+    diagCount(p, "unknown_sources"));
+  const collisions = diagCount(p, "collisions", diagCount(p, "conflicts"));
+  const diagnostics = diagCount(p, "diagnostics");
+  const why = p.why || p.unknown_policy ||
+    (p.has_conflict ? "存在未解決的權威衝突" : "這份契約沒有提供理由");
+  const details = [];
+
+  if (key === "causal_xray") {
+    diagList(p, "anchors").forEach((a) => details.push(
+      `<li><span class="diagCode">${esc(a.name || "anchor")}</span>` +
+      `<span>${esc(a.state || "UNKNOWN")}</span>` +
+      `<span class="diagTail">${esc(a.range ? a.range.join("–") : "未知範圍")}</span></li>`));
+    diagList(p, "edges").slice(0, 8).forEach((e) => details.push(
+      `<li><span class="diagCode">${esc(e.type || e.relation || "EDGE")}</span>` +
+      `<span>${esc(e.state || "UNKNOWN")}</span>` +
+      `<span class="diagTail">${esc(e.from || "?")} → ${esc(e.to || "?")}</span></li>`));
+  } else if (key === "execution_topology") {
+    diagList(p, "edges").slice(0, 8).forEach((e) => details.push(
+      `<li><span class="diagCode">${esc(e.type || "EDGE")}</span>` +
+      `<span>${esc(e.state || "UNKNOWN")}</span>` +
+      `<span class="diagTail">${esc(e.source_event_id || (e.source_event_ids || []).join(", ") || "無事件")}</span></li>`));
+  } else if (key === "lineage_view" || key === "context_mri") {
+    diagList(p, "collisions").slice(0, 5).forEach((c) => details.push(
+      `<li><span class="diagCode">${esc(c.kind || "collision")}</span>` +
+      `<span>UNKNOWN</span><span class="diagTail">${esc(c.key || c.why || "身份衝突")}</span></li>`));
+  } else if (key === "authority_map") {
+    const conflicts = diagList(p, "collisions").length
+      ? diagList(p, "collisions") : diagList(p, "conflicts");
+    conflicts.slice(0, 5).forEach((c) => details.push(
+      `<li><span class="diagCode">${esc(c.resource || c.kind || "authority")}</span>` +
+      `<span>${esc(c.state || "UNKNOWN")}</span>` +
+      `<span class="diagTail">${esc(c.winner || c.why || "需要裁決")}</span></li>`));
+    if (!conflicts.length) diagList(p, "unknown_sources").slice(0, 5).forEach((c) => details.push(
+      `<li><span class="diagCode">UNKNOWN_SOURCE</span><span>UNKNOWN</span>` +
+      `<span class="diagTail">${esc(c.why || c.source_event_id || "缺少權威來源")}</span></li>`));
+  }
+
+  const metrics = [
+    nodes ? `<span>節點 <b>${nodes}</b></span>` : "",
+    edges ? `<span>已知邊 <b>${edges}</b></span>` : "",
+    unknown ? `<span class="diagWarn">未知邊 <b>${unknown}</b></span>` : "",
+    collisions ? `<span class="diagWarn">衝突 <b>${collisions}</b></span>` : "",
+    diagnostics ? `<span>診斷 <b>${diagnostics}</b></span>` : "",
+  ].filter(Boolean).join("");
+
+  return `<section class="diagCard" data-contract="${esc(key)}">` +
+    `<div class="diagTop"><span class="diagTitle">${esc(title)}</span>` +
+    `<span class="diagState ${stateClass}">${esc(status)}</span></div>` +
+    `<p class="diagWhy">${esc(why)}</p>` +
+    (metrics ? `<div class="diagMetrics">${metrics}</div>` :
+      `<div class="diagMetrics"><span>沒有可計數的觀測資料</span></div>`) +
+    (details.length ? `<ul class="diagRows">${details.join("")}</ul>` : "") +
+    extra +
+    `</section>`;
+}
+
+function renderDiagnostics(d = lastSnap || {}) {
+  const lane = $("lane");
+  if (!lane) return;
+  const goal = d.goal_gate || {};
+  const gateStatus = goal.gac == null ? "UNKNOWN" :
+    (goal.ok ? "OK" : "BLOCKED");
+  const gateExtra =
+    `<div class="diagGate"><span>GAC <b>${esc(diagValue(goal, "gac"))}</b></span>` +
+    `<span>可確認偏離 <b>${goal.may_confirm_drift ? "是" : "否"}</b></span>` +
+    `${(goal.missing_factors || []).length
+      ? `<span>缺少 ${esc(goal.missing_factors.map((x) => x.factor).join("、"))}</span>` : ""}</div>`;
+  const rescue = d.rescue || {};
+  const recoveryExtra =
+    `<div class="diagGate"><span>可回復 <b>${rescue.has ? "有" : "未知"}</b></span>` +
+    `${rescue.why ? `<span>${esc(rescue.why)}</span>` : ""}</div>`;
+
+  lane.innerHTML =
+    `<div class="diagHead"><span class="diagBig">診斷</span>` +
+    `<span>只顯示已接上的 R1 契約；未知狀態保留理由，不把缺資料畫成正常。</span></div>` +
+    renderDiagnosticCard(DIAG_LABEL.causal_xray, "causal_xray", d.causal_xray) +
+    renderDiagnosticCard(DIAG_LABEL.context_mri, "context_mri", d.context_mri) +
+    renderDiagnosticCard(DIAG_LABEL.lineage_view, "lineage_view", d.lineage_view) +
+    renderDiagnosticCard(DIAG_LABEL.execution_topology, "execution_topology", d.execution_topology) +
+    renderDiagnosticCard(DIAG_LABEL.authority_map, "authority_map", d.authority_map) +
+    renderDiagnosticCard("目標閘門", "goal_gate", {
+      status: gateStatus,
+      why: goal.note || goal.why || "GAC 尚未提供足夠證據",
+    }, gateExtra) +
+    renderDiagnosticCard("恢復出口", "recovery", {
+      status: rescue.has ? "AVAILABLE" : "UNKNOWN",
+      why: rescue.why || "沒有可驗證的恢復出口",
+    }, recoveryExtra);
+}
+
 /* ── 這台機器 §31 ─────────────────────────────
    換機器該搬什麼、現在有幾個。
    2026-09-14 漏掉的是「工作目錄綁定」那 142 個檔，
@@ -3382,6 +3529,7 @@ async function tick() {
     else if (view === "machine") renderMachine();
     else if (view === "feat") renderFeat();
     else if (view === "audit") renderAudit();
+    else if (view === "diagnostics") renderDiagnostics();
     else if (view === "spec") renderSpec();
     else renderList();
     if (follow && view === "tree")
@@ -3416,6 +3564,7 @@ function syncView() {
   else if (view === "machine") { machCache = null; renderMachine(); }
   else if (view === "feat") { featCache = null; renderFeat(); }
   else if (view === "audit") { auditCache = null; renderAudit(); }
+  else if (view === "diagnostics") renderDiagnostics();
   else if (view === "spec") { specCache = null; renderSpec(); }
   else renderList();
 }

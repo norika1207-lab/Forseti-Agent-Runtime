@@ -1187,6 +1187,40 @@ button{font:inherit;cursor:pointer;color:inherit}
 .wk .evs li.hot .c{color:var(--ink-2)}
 .wk .evs li.warn .k{color:var(--blue)}
 
+/* ── 診斷契約 ───────────────────────────────────
+   這頁是可稽核資料的 drill-down，不和時間軸搶主角。
+   UNKNOWN 用中性色但保留字樣；缺證據不能靠綠色空白偽裝成健康。 */
+.diagHead{display:flex;align-items:baseline;gap:9px;margin:12px 14px 0;
+  padding:0 1px;color:var(--ink-3);font-size:10.5px;line-height:1.5}
+.diagBig{flex:0 0 auto;color:var(--ink);font:590 18px/1.2 var(--display)}
+.diagCard{margin:10px 14px 0;padding:12px 13px 11px;border-radius:var(--r-lg);
+  background:var(--surface-2);border:.5px solid var(--hair)}
+.diagTop{display:flex;align-items:center;gap:8px}
+.diagTitle{color:var(--ink);font:590 13px/1.4 var(--sans)}
+.diagState{margin-left:auto;padding:1px 7px;border-radius:var(--r-pill);
+  background:var(--surface-3);color:var(--ink-3);font:600 9.5px/1.6 var(--mono);
+  letter-spacing:.03em}
+.diagState.complete,.diagState.ok,.diagState.available{color:var(--green)}
+.diagState.partial,.diagState.blocked{color:var(--amber)}
+.diagState.unknown{color:var(--ink-3)}
+.diagWhy{margin:5px 0 0;color:var(--ink-3);font:400 10.5px/1.5 var(--sans);
+  overflow-wrap:anywhere}
+.diagMetrics{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}
+.diagMetrics span,.diagGate span{padding:2px 7px;border-radius:var(--r-sm);
+  background:var(--surface-3);color:var(--ink-3);font:400 10px/1.5 var(--sans)}
+.diagMetrics b,.diagGate b{color:var(--ink-2);font-weight:600;font-variant-numeric:tabular-nums}
+.diagMetrics .diagWarn{color:var(--amber)}
+.diagMetrics .diagWarn b{color:var(--amber)}
+.diagRows{list-style:none;margin:9px 0 0;padding:0;border-top:.5px solid var(--hair)}
+.diagRows li{display:flex;align-items:baseline;gap:7px;padding:4px 0;
+  border-bottom:.5px solid var(--hair-2);color:var(--ink-3);font-size:10px}
+.diagCode{flex:0 0 96px;color:var(--ink-4);font:500 9px/1.5 var(--mono);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.diagTail{margin-left:auto;min-width:0;color:var(--ink-4);font:400 9px/1.5 var(--mono);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
+.diagGate{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px;padding-top:8px;
+  border-top:.5px dashed var(--hair)}
+
 /* 問題軌道。一條線 = 一個沒被解決的問題。
    顏色給語意不給隨機:工具失敗是誠實的失敗，跟「說了沒做」不是
    同一件事（§4.1），所以它們不共用顏色。 */
