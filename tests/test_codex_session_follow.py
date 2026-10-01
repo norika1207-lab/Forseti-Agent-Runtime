@@ -193,6 +193,25 @@ def test_codex_sidebar_owner_sync_beats_previous_activity_event(tmp_path):
     assert session_surface.latest_codex_focused_session(logs) == selected
 
 
+def test_codex_sidebar_route_wins_when_conversation_id_is_temporary(tmp_path):
+    previous = "01a0c213-35e3-7053-95fc-36a449c5d676"
+    selected = "01a0c714-dc99-7a81-ac98-01be9468df50"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "codex.log").write_text(
+        "2026-10-01T07:50:21.169Z info [electron-message-handler] "
+        "IAB_LIFECYCLE received browser sidebar owner sync browserTabId=null "
+        f"conversationId={previous} originWebContentsId=1 "
+        f"ownerRoutePath=/local/{previous} windowId=1\n"
+        "2026-10-01T07:50:42.783Z info [electron-message-handler] "
+        "IAB_LIFECYCLE received browser sidebar owner sync browserTabId=null "
+        "conversationId=client-new-thread:66ef7b0f-388a-4344-a55e-144e059ab817 "
+        f"originWebContentsId=1 ownerRoutePath=/local/{selected} windowId=1\n",
+        encoding="utf-8")
+
+    assert session_surface.latest_codex_focused_session(logs) == selected
+
+
 def test_fast_surface_preserves_every_turn_and_full_owner_text(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))

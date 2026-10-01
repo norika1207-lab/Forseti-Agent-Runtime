@@ -44,8 +44,9 @@ _CODEX_FOCUS_RE = re.compile(
 )
 _CODEX_OWNER_ROUTE_RE = re.compile(
     r"^(\S+).*IAB_LIFECYCLE received browser sidebar owner sync "
-    r".*conversationId=([0-9a-fA-F-]{20,}) "
-    r".*ownerRoutePath=/local/\2(?:\s|$)"
+    r".*ownerRoutePath=/local/"
+    r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:\s|$)"
 )
 _SESSION_ID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
