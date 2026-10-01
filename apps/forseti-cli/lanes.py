@@ -122,8 +122,30 @@ def lanes(rows: list) -> list[dict]:
         x["turns"] = max(1, x["to_n"] - x["from_n"] + 1)
         x["label"] = _LABEL.get(x["kind"], x["kind"])
     out = [x for x in out if x["turns"] >= MIN_SPAN]
-    out.sort(key=lambda x: (x["from_n"], x["kind"]))
-    return out
+    out.sort(key=lambda x: (x["kind"], x["from_n"], x["to_n"]))
+
+    # Several unresolved findings of the same kind often overlap all the way
+    # to the current turn.  Drawing each as a full-height SVG lane creates a
+    # fence of parallel lines that hides the timeline.  Preserve the finding
+    # count, but render one evidence track for each overlapping same-kind span.
+    merged: list[dict] = []
+    for item in out:
+        current = merged[-1] if merged else None
+        if (current and current["kind"] == item["kind"]
+                and item["from_n"] <= current["to_n"] + 1):
+            current["to_n"] = max(current["to_n"], item["to_n"])
+            current["open"] = current["open"] or item["open"]
+            current["issues"] += item.get("issues", 1)
+            current["turns"] = current["to_n"] - current["from_n"] + 1
+            current["label"] = (
+                f"{_LABEL.get(current['kind'], current['kind'])} "
+                f"x{current['issues']}")
+            continue
+        copy = dict(item)
+        copy["issues"] = 1
+        merged.append(copy)
+    merged.sort(key=lambda x: (x["from_n"], x["kind"]))
+    return merged
 
 
 def summary(rows: list) -> dict:

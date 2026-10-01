@@ -282,6 +282,20 @@ def test_fast_surface_keeps_problem_branch_lanes(
     assert "checkpoints" in data
 
 
+def test_overlapping_same_kind_findings_share_one_visual_lane():
+    rows = [
+        {"n": 1, "betrayals": [{"why": "first"}], "write": 0},
+        {"n": 2, "betrayals": [{"why": "second"}], "write": 0},
+        {"n": 3, "betrayals": [], "write": 0},
+    ]
+    merged = session_surface.lanes.lanes(rows)
+    betrayal_lanes = [x for x in merged if x["kind"] == "BETRAYAL"]
+    assert len(betrayal_lanes) == 1
+    assert betrayal_lanes[0]["from_n"] == 1
+    assert betrayal_lanes[0]["to_n"] == 3
+    assert betrayal_lanes[0]["issues"] == 2
+
+
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
