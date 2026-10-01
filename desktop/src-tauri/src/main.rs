@@ -194,18 +194,19 @@ where
 fn run_session_surface(session: Option<String>) -> Result<String, String> {
     let py = find_python()
         .ok_or_else(|| "找不到可執行的 Python CLI".to_string())?;
-    let exe = std::env::current_exe()
-        .map_err(|e| format!("找不到 Forseti 執行檔位置:{e}"))?;
-    let contents = exe.parent().and_then(Path::parent)
-        .ok_or_else(|| "Forseti.app bundle 結構不完整".to_string())?;
-    let script = contents.join("Resources/forseti-cli/session_surface.py");
+    let repo = find_repo().ok_or_else(|| {
+        "找不到 Forseti runtime。往上走都看不到同時有 .forseti/ 與 apps/forseti-cli/ 的目錄"
+            .to_string()
+    })?;
+    let script = repo.join("apps/forseti-cli/session_surface.py");
     if !script.is_file() {
         return Err(format!("找不到已安裝的 Session runtime:{}", script.display()));
     }
     let mut cmd = Command::new(py);
     cmd.arg("-B").arg(&script)
         .env_remove("__CFBundleIdentifier")
-        .env("PYTHONDONTWRITEBYTECODE", "1");
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .current_dir(&repo);
     if let Some(value) = session.filter(|s| !s.is_empty()) {
         cmd.arg(value);
     }
