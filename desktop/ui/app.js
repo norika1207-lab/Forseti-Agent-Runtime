@@ -3154,6 +3154,10 @@ function choose(id) {
     if (id) localStorage.setItem(PICK_KEY, id);
     else localStorage.removeItem(PICK_KEY);
   } catch (e) { /* 無痕視窗之類，選擇只在這次有效 */ }
+  // 手動選一條線就是鎖定；不要讓底部仍亮著「跟隨」，造成使用者
+  // 以為它正在追 Codex 前景。選自動項目則同時恢復捲動跟隨。
+  follow = !id;
+  $("followBtn").setAttribute("aria-pressed", String(follow));
   closePicker();
   rows = [];
   lastCount = 0;
@@ -3361,9 +3365,16 @@ $("scroll").addEventListener("scroll", () => {
   if (atBottom && !follow) { follow = true; $("followBtn").setAttribute("aria-pressed", "true"); }
 });
 $("followBtn").addEventListener("click", () => {
-  follow = !follow;
-  $("followBtn").setAttribute("aria-pressed", String(follow));
-  if (follow) $("scroll").scrollTop = $("scroll").scrollHeight;
+  // 「跟隨」是一個明確命令：解除手動 Session 鎖定、追蹤 Codex
+  // 前景，並把時間線帶到最新。停止捲動仍由使用者往上捲觸發。
+  picked = null;
+  try { localStorage.removeItem(PICK_KEY); } catch (e) { /* 本次仍可跟隨 */ }
+  follow = true;
+  $("followBtn").setAttribute("aria-pressed", "true");
+  rows = [];
+  lastCount = 0;
+  $("scroll").scrollTop = $("scroll").scrollHeight;
+  tick();
 });
 
 // 根基先算。線色要用它,所以要在第一次畫線之前拿到。§40

@@ -127,6 +127,16 @@ class DomContract(unittest.TestCase):
         missing = sorted(ids - have)
         self.assertEqual(missing, [], f"app.js 找的 id 不在 index.html 裡：{missing}")
 
+    def test_follow_button_unlocks_manual_session_and_tracks_foreground(self):
+        start = JS.index('$("followBtn").addEventListener("click"')
+        end = JS.index("\n});", start) + len("\n});")
+        handler = JS[start:end]
+
+        self.assertIn("picked = null", handler)
+        self.assertIn("localStorage.removeItem(PICK_KEY)", handler)
+        self.assertIn("follow = true", handler)
+        self.assertIn("tick()", handler)
+
 
 class TauriWiring(unittest.TestCase):
     """前端連不連得上後端。
