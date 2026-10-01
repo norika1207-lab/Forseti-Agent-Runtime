@@ -247,6 +247,35 @@ def test_fast_surface_preserves_every_turn_and_full_owner_text(
     assert data["rows"][-1]["owner_text"] == "使用者訊息 194"
 
 
+def test_fast_surface_keeps_problem_branch_lanes(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "01a0-branch-lanes"
+    transcript = (tmp_path / ".codex" / "sessions" / "2026" / "10"
+                  / f"rollout-{sid}.jsonl")
+    records = []
+    for n in range(3):
+        records.extend([
+            {"timestamp": f"2026-10-01T00:00:0{n}Z",
+             "type": "response_item",
+             "payload": {"type": "message", "id": f"u{n}", "role": "user",
+                         "content": [{"type": "input_text",
+                                      "text": f"請先檢查資料 {n}"}]}},
+            {"timestamp": f"2026-10-01T00:00:0{n}Z",
+             "type": "response_item",
+             "payload": {"type": "custom_tool_call", "id": f"t{n}",
+                         "call_id": f"t{n}", "name": "Read",
+                         "input": {"path": f"file-{n}"}}},
+        ])
+    _write(transcript, records)
+
+    assert session_surface.main(["session_surface.py", sid]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["lanes"]["total"] >= 1
+    assert any(item["kind"] == "BLIND_WRITE"
+               for item in data["lanes"]["lanes"])
+
+
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))

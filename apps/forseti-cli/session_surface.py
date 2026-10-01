@@ -17,6 +17,7 @@ from pathlib import Path
 
 import owner as owner_classifier
 import betrayal
+import lanes
 import source_tree_schema
 import vitals
 from tracker import tracker_for
@@ -161,6 +162,10 @@ def main(argv: list[str]) -> int:
             row["owner_goal_change_state"] = candidate.get("kind")
     for row, goal in zip(rows, vitals.goal_support(rows)):
         row["goal"] = goal
+    # Keep the fast foreground-follow path visually equivalent to the full
+    # surface.  The SVG renderer can only draw branch tracks when this contract
+    # is present; omitting it reduced every session to a straight main line.
+    snap["lanes"] = lanes.summary(rows)
     source_tree_schema.annotate_rows(rows)
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)
