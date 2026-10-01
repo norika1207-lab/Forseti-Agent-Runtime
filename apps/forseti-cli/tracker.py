@@ -204,7 +204,10 @@ class Strand:
             "ended_at": self.ended_at,
             "growing": self.growing,
             "duration": round(self.duration, 2),
-            "owner_text": self.owner_text[:600],
+            # This is the transcript surface, not a summary field.  Truncating
+            # here silently deletes the owner's instructions before the UI can
+            # render or verify them.
+            "owner_text": self.owner_text,
             "owner_line": self.owner_line,
             # AI progress messages can accumulate for a long-running turn.
             # Truncating here silently hid later receipts and claims from every

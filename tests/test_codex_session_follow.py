@@ -193,6 +193,41 @@ def test_codex_sidebar_owner_sync_beats_previous_activity_event(tmp_path):
     assert session_surface.latest_codex_focused_session(logs) == selected
 
 
+def test_fast_surface_preserves_every_turn_and_full_owner_text(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "01a0-full-transcript"
+    transcript = (tmp_path / ".codex" / "sessions" / "2026" / "10"
+                  / f"rollout-{sid}.jsonl")
+    long_text = "完整內容" * 250
+    records = []
+    for n in range(195):
+        text = long_text if n == 0 else f"使用者訊息 {n}"
+        records.append({
+            "timestamp": f"2026-10-01T00:{n // 60:02d}:{n % 60:02d}Z",
+            "type": "response_item",
+            "payload": {"type": "message", "id": f"u{n}", "role": "user",
+                        "content": [{"type": "input_text", "text": text}]},
+        })
+        records.append({
+            "timestamp": f"2026-10-01T00:{n // 60:02d}:{n % 60:02d}Z",
+            "type": "response_item",
+            "payload": {"type": "message", "id": f"a{n}",
+                        "role": "assistant",
+                        "content": [{"type": "output_text",
+                                     "text": f"AI 回覆 {n}"}]},
+        })
+    _write(transcript, records)
+
+    assert session_surface.main(["session_surface.py", sid]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["strands"] == 195
+    assert data["shown"] == data["strands"]
+    assert len(data["rows"]) == 195
+    assert data["rows"][0]["owner_text"] == long_text
+    assert data["rows"][-1]["owner_text"] == "使用者訊息 194"
+
+
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))

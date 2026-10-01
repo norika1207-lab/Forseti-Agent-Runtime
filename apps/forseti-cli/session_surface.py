@@ -134,7 +134,10 @@ def main(argv: list[str]) -> int:
 
     parser = tracker_for(target)
     parser.poll()
-    snap = parser.snapshot(tail=180)
+    # The primary transcript is an evidence surface.  A fixed tail silently
+    # omitted early turns in long sessions (195 real turns became 180), which
+    # made the visible conversation impossible to audit end to end.
+    snap = parser.snapshot(tail=len(parser.strands))
     rows = snap.get("rows") or []
     betrayals_by_n: dict[int, list[dict]] = {}
     for finding in betrayal.scan(parser.strands):
