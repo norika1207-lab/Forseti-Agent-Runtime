@@ -77,7 +77,11 @@ def test_active_completed_and_verifier_states_are_mapped(tmp_path):
         {"thread_id": "worker-active", "turn_id": "t1", "item_id": "i1",
          "ordinal": 1, "item": {"text": "FOR-R3-A\nCommit: `abcdef1`"}},
         {"thread_id": "verifier-pass", "turn_id": "t4", "item_id": "i2",
-         "ordinal": 1, "item": {"text": "Candidate: `abcdef1`\nPASS"}},
+         "ordinal": 1, "item": {
+             "type": "agentMessage", "phase": "final_answer",
+             "delivery": {"candidate_commit": "abcdef1", "verdict": "PASS"},
+             "text": "Candidate receipt delivered",
+         }},
     ]
     index, history = _make_source(tmp_path, rows, turns, items)
 
@@ -116,7 +120,11 @@ def test_failed_and_blocked_are_not_counted_as_active(tmp_path):
     ]
     index, history = _make_source(tmp_path, rows, turns, [
         {"thread_id": "verifier-fail", "turn_id": "t3", "item_id": "i3",
-         "ordinal": 1, "item": {"text": "Candidate: `abcdef1`\nFAIL"}},
+         "ordinal": 1, "item": {
+             "type": "agentMessage", "phase": "final_answer",
+             "delivery": {"candidate_commit": "abcdef1", "verdict": "FAIL"},
+             "text": "Candidate receipt delivered",
+         }},
     ])
     result = WT.topology(index_path=index, history_path=history, now=1000)
     assert result["counts"]["active"] == 0
@@ -157,21 +165,85 @@ def test_missing_connector_is_unavailable_not_zero(tmp_path):
 
 def test_malformed_connector_is_unavailable_not_authoritative_zero(tmp_path):
     index = tmp_path / "session_index.jsonl"
-    index.write_text("not-json\n", encoding="utf-8")
+    index.write_text(json.dumps({
+        "id": "valid", "thread_name": "Forseti Worker R3: valid",
+        "updated_at": _iso(1000),
+    }) + "\nnot-json\n", encoding="utf-8")
     history = tmp_path / "thread_history.sqlite"
     result = WT.topology(index_path=index, history_path=history)
     assert result["available"] is False
     assert result["counts"]["total"] is None
     assert result["authoritative_empty"] is False
+    assert "mixed malformed" in result["reason"]
+
+
+def test_malformed_thread_item_is_unknown_not_silently_skipped(tmp_path):
+    rows = [{"id": "worker", "thread_name": "Forseti Worker R3: worker",
+             "updated_at": _iso(1000)}]
+    index, history = _make_source(tmp_path, rows, [
+        {"thread_id": "worker", "turn_id": "t1", "ordinal": 1,
+         "status": "completed", "completed_at": 1000},
+    ], [])
+    con = sqlite3.connect(history)
+    con.execute("INSERT INTO thread_items VALUES (?,?,?,?,?,?)",
+                ("worker", "t1", "bad", 2, 2, "not-json"))
+    con.commit()
+    con.close()
+    result = WT.topology(index_path=index, history_path=history, now=1000)
+    assert result["available"] is False
+    assert result["state"] == "UNKNOWN"
+    assert "malformed" in result["reason"]
+
+
+def test_verdict_text_without_structured_final_receipt_stays_unknown(tmp_path):
+    rows = [{"id": "verifier", "thread_name": "Forseti Verifier R3: text",
+             "updated_at": _iso(1000)}]
+    turns = [{"thread_id": "verifier", "turn_id": "t1", "ordinal": 1,
+              "status": "completed", "completed_at": 1000}]
+    index, history = _make_source(tmp_path, rows, turns, [
+        {"thread_id": "verifier", "turn_id": "t1", "item_id": "i1",
+         "ordinal": 1, "item": {
+             "type": "agentMessage", "phase": "final_answer",
+             "text": "The instructions mention PASS and FAIL, but no receipt was emitted.",
+             "delivery": None,
+         }},
+    ])
+    result = WT.topology(index_path=index, history_path=history, now=1000)
+    item = result["items"][0]
+    assert item["verifier_verdict"] is None
+    assert item["verifier_verdict_reason"] == "no structured final receipt"
+
+
+def test_empty_index_is_ambiguous_not_authoritative_zero(tmp_path):
+    index = tmp_path / "session_index.jsonl"
+    index.write_text("\n", encoding="utf-8")
+    history = tmp_path / "thread_history.sqlite"
+    result = WT.topology(index_path=index, history_path=history)
+    assert result["available"] is False
+    assert result["state"] == "UNKNOWN"
+    assert result["counts"]["total"] is None
 
 
 def test_authoritative_empty_source_is_the_only_zero(tmp_path):
-    index, history = _make_source(tmp_path, [], [], [])
+    index, history = _make_source(tmp_path, [{"authoritative_empty": True}], [], [])
     result = WT.topology(index_path=index, history_path=history)
     assert result["available"] is True
     assert result["authoritative_empty"] is True
     assert result["counts"]["total"] == 0
     assert result["counts"]["active"] == 0
+
+
+def test_provenance_uses_actual_configured_paths(tmp_path):
+    rows = [{"id": "same", "thread_name": "Forseti Worker R3: same",
+             "updated_at": _iso(1000)}]
+    turns = [{"thread_id": "same", "turn_id": "t1", "ordinal": 1,
+              "status": "completed", "completed_at": 1000}]
+    index, history = _make_source(tmp_path, rows, turns, [])
+    result = WT.topology(index_path=index, history_path=history, now=1000)
+    source = result["items"][0]["source"]
+    assert source["index"] == str(index)
+    assert source["history"] == str(history)
+    assert "~/.codex" not in json.dumps(source)
 
 
 def test_duplicate_index_events_are_idempotent(tmp_path):
