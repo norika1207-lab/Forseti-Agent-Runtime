@@ -24,6 +24,20 @@ NO_EXCLUSION = "NO_EXCLUSION"
 OWNER_GOAL_CHANGE = "OWNER_GOAL_CHANGE"
 EXPLORATORY_BRANCH = "EXPLORATORY_BRANCH"
 
+# Drift is about an incompatible change in the canonical outcome contract,
+# not about the route taken to reach the same outcome.
+DRIFT = "DRIFT"
+EXECUTION_EVOLUTION = "EXECUTION_EVOLUTION"
+INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
+
+DRIFT_DIMENSIONS = frozenset({
+    "goal_outcome", "north_star_outcome", "scope_boundary", "invariant",
+})
+EXECUTION_EVOLUTION_KINDS = frozenset({
+    "IMPLEMENTATION_STRATEGY", "BUG_FIX", "FAILED_PLAN_FALLBACK",
+    "ALTERNATIVE_TECH_PATH", "UI_INCREMENT",
+})
+
 GAC_SUSPECTED_MIN = 0.60
 GAC_CONFIRMED_MIN = 0.80
 GAR_CONFIRMED_MIN = 0.70
@@ -153,6 +167,56 @@ def action_scope_verdict(actions: Iterable[Mapping[str, Any]] | None,
                 "why": "所有 action 均命中 owner 明示的 accepted_scope",
                 **observed}
     return _unknown("沒有 action 命中 owner 定義的 scope", **observed)
+
+
+def drift_contract(change: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Classify an explicitly evidenced change without reading free text.
+
+    Only an incompatible ``goal_outcome``/``north_star_outcome``,
+    ``scope_boundary`` or ``invariant`` may be drift.  A strategy change,
+    bug fix, failed-plan fallback, alternative technical path, or incremental
+    UI change is execution evolution unless it explicitly carries an
+    incompatible canonical dimension.  Missing or malformed evidence stays
+    ``INSUFFICIENT_EVIDENCE`` and never becomes a drift candidate.
+    """
+    if not isinstance(change, Mapping):
+        return {"state": INSUFFICIENT_EVIDENCE, "drift": False,
+                "why": "缺少結構化 change contract", "missing": ["change_contract"]}
+
+    kind = _strict_text(change.get("kind"))
+    kind = kind.upper() if kind else None
+    dimensions = _strings(change.get("incompatible_dimensions"))
+    refs = _strings(change.get("evidence_refs"))
+    unsupported = sorted(set(dimensions) - DRIFT_DIMENSIONS)
+    incompatible = change.get("incompatible")
+
+    if unsupported:
+        return {"state": INSUFFICIENT_EVIDENCE, "drift": False,
+                "why": "incompatible_dimensions 含未定義維度",
+                "missing": ["drift_dimension_contract"],
+                "incompatible_dimensions": list(dimensions),
+                "evidence_refs": list(refs)}
+
+    if kind in EXECUTION_EVOLUTION_KINDS and incompatible is not True:
+        return {"state": EXECUTION_EVOLUTION, "drift": False,
+                "why": "實作路徑演化不改變 canonical goal/scope/invariant",
+                "kind": kind, "incompatible_dimensions": list(dimensions),
+                "evidence_refs": list(refs), "missing": []}
+
+    if incompatible is True and dimensions and refs:
+        return {"state": DRIFT, "drift": True,
+                "why": "明示 canonical goal/scope/invariant 不相容變更",
+                "kind": kind, "incompatible_dimensions": list(dimensions),
+                "evidence_refs": list(refs), "missing": []}
+
+    return {"state": INSUFFICIENT_EVIDENCE, "drift": False,
+            "why": "沒有足夠證據證明 canonical contract 不相容",
+            "kind": kind, "incompatible_dimensions": list(dimensions),
+            "evidence_refs": list(refs),
+            "missing": sorted(set((
+                ["incompatible"] if incompatible is not True else []
+            ) + (["incompatible_dimensions"] if not dimensions else [])
+            + (["evidence_refs"] if not refs else [])))}
 
 
 def drift_exclusion(*, goal_change: Mapping[str, Any] | None = None,

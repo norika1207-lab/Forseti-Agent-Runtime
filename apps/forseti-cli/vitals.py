@@ -407,7 +407,10 @@ def cards(snap: dict, advice: dict | None = None) -> list:
     #     平台要提示而不是直接判 drift。
     g = (rows[-1].get("goal") if rows else None) or {}
     trend = snap.get("goal_trend") or 0
-    if g.get("support") is not None and (g["support"] < 0.85 or trend > 0.005):
+    drift_status = snap.get("drift_contract") or {}
+    if (drift_status.get("state") == "DRIFT_CANDIDATE"
+            and g.get("support") is not None
+            and (g["support"] < 0.85 or trend > 0.005)):
         card("goal",
              "問他現在做的事跟你的目標還有沒有交集",
              "停一下，用一句話說出你現在的目標是什麼、這一步怎麼推進它、"
@@ -511,6 +514,53 @@ def _exclusions(gate: dict | None) -> list:
     return out
 
 
+def drift_contract_status(rows: list, gate: dict | None) -> dict:
+    """Return the evidence state that controls drift alerts and suggestions."""
+    import goal_scope as GS
+
+    missing: list[str] = []
+    if not isinstance(gate, dict) or not gate.get("ok"):
+        missing.extend(["gac", "scope_match"])
+    else:
+        if gate.get("gac") is None:
+            missing.append("gac")
+        factors = gate.get("factors") or {}
+        scope = factors.get("scope_match") or {}
+        if scope.get("value") is None:
+            missing.append("scope_match")
+        for item in gate.get("missing_factors") or []:
+            factor = item.get("factor") if isinstance(item, dict) else item
+            if factor in {"gac", "valid_gac", "gac_contract", "scope_match",
+                          "scope_contract"}:
+                missing.append(str(factor))
+    if missing:
+        return {"state": GS.INSUFFICIENT_EVIDENCE,
+                "drift": False, "reason": "INSUFFICIENT_EVIDENCE",
+                "missing": sorted(set(missing))}
+
+    contracts = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        change = row.get("drift_contract") or row.get("change_contract")
+        if change is not None:
+            contracts.append(GS.drift_contract(change))
+    if not contracts:
+        return {"state": GS.INSUFFICIENT_EVIDENCE, "drift": False,
+                "reason": "INSUFFICIENT_EVIDENCE",
+                "missing": ["change_contract"]}
+    if any(c.get("state") == GS.INSUFFICIENT_EVIDENCE for c in contracts):
+        return {"state": GS.INSUFFICIENT_EVIDENCE, "drift": False,
+                "reason": "INSUFFICIENT_EVIDENCE",
+                "missing": ["change_contract_evidence"]}
+    if any(c.get("drift") is True for c in contracts):
+        return {"state": "DRIFT_CANDIDATE", "drift": True,
+                "reason": "canonical_contract_incompatibility_evidenced",
+                "missing": []}
+    return {"state": GS.EXECUTION_EVOLUTION, "drift": False,
+            "reason": "execution_evolution", "missing": []}
+
+
 def drift_alerts(rows: list, gate: dict | None = None) -> list:
     """找出符合三條件的區段。回傳每段的起訖與證據。
 
@@ -530,14 +580,27 @@ def drift_alerts(rows: list, gate: dict | None = None) -> list:
     仍持續、至少兩個獨立證據維度。那四條目前都沒有實作，所以現在最高
     仍然是 SUSPECTED，差別在於理由是算出來的而不是寫死的。
     """
+    import goal_scope as GS
+
+    # No GAC/scope contract means there is no reference frame.  Returning no
+    # alerts is deliberate: the caller must expose the UNKNOWN status through
+    # drift_contract_status(), never paint an orange line or offer correction.
+    gate_status = drift_contract_status(rows, gate)
+    if gate_status.get("state") != "DRIFT_CANDIDATE":
+        return []
+
     out: list = []
     run_start = None
     for i, r in enumerate(rows):
         g = r.get("goal") or {}
         corrected = bool(r.get("corrected_by_owner"))
         changed = bool(r.get("owner_changed_goal"))   # 保留欄位，目前沒人填
+        change = r.get("drift_contract") or r.get("change_contract")
+        classified = GS.drift_contract(change)
 
-        if corrected or changed:
+        if (corrected or changed or
+                classified.get("state") != GS.DRIFT or
+                classified.get("drift") is not True):
             run_start = None          # 她出手了，這一段不算「她沒動」
             continue
         if run_start is None:

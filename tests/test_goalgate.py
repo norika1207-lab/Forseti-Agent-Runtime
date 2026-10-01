@@ -157,11 +157,22 @@ def test_候選曲線關閉時turns仍要帶出去():
 
 def _run(gate):
     """造一段符合三條件的偏離：連續多輪沒糾正、距離超標且上升。"""
+    if gate is not None and gate.get("ok"):
+        gate = dict(gate)
+        gate.setdefault("factors", {
+            "scope_match": {"status": "MATCH", "value": 1.0},
+        })
     rows = []
     for i in range(8):
         rows.append({
             "n": i,
             "corrected_by_owner": False,
+            "drift_contract": {
+                "kind": "OWNER_GOAL_CHANGE",
+                "incompatible": True,
+                "incompatible_dimensions": ["goal_outcome"],
+                "evidence_refs": ["owner:event:goal-change"],
+            },
             "goal": {"distance": 0.20 + i * 0.05, "coverage": 0.8},
         })
     return VT.drift_alerts(rows, gate)
@@ -169,8 +180,7 @@ def _run(gate):
 
 def test_沒接gate時照實說沒接():
     a = _run(None)
-    assert a, "這段資料應該要觸發 SUSPECTED"
-    assert any("沒有接上" in e for e in a[-1]["excluded"])
+    assert a == [], "缺 GAC/scope 參考系時不得產生橘線或 correction prompt"
 
 
 def test_gac算不出來時要指名缺哪個因子():
@@ -178,7 +188,7 @@ def test_gac算不出來時要指名缺哪個因子():
             "missing_factors": [{"factor": "freshness", "why": ""}],
             "thresholds_uncalibrated": True}
     a = _run(gate)
-    assert any("freshness" in e for e in a[-1]["excluded"])
+    assert a == [], "GAC 不可計算時必須 fail closed"
 
 
 def test_gac未達門檻時要寫出實際數值():
@@ -203,15 +213,14 @@ def test_每筆都要帶goal_anchor_ref():
             "goal_state": "NO_VALID_GOAL_ANCHOR", "missing_factors": [],
             "thresholds_uncalibrated": True}
     a = _run(gate)
-    assert a[-1]["goal_anchor_ref"] == "NO_VALID_GOAL_ANCHOR"
+    assert a == [], "GAC 不可計算時不得產生 drift row"
 
 
 def test_gate跑不起來時不准靜默當成通過():
     gate = {"ok": False, "gac": None, "may_confirm_drift": False,
             "note": "找不到 node"}
     a = _run(gate)
-    assert a[-1]["state"] == "SUSPECTED_DRIFT"
-    assert any("跑不起來" in e for e in a[-1]["excluded"])
+    assert a == [], "gate 失敗時不得把距離變成 drift"
 
 
 def test_門檻未校準要講出來():

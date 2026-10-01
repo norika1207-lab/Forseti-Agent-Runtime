@@ -2712,11 +2712,13 @@ MISSING: tuple[dict, ...] = (
      "blocked": "northstar.Chain 寫好了,但北極星到現在換版 0 次,"
                 "那條鏈是空的。adopt 是權威行為,要等第一次真的換版"},
     {"name": "紫點下判決", "spec": "docs/spec-v2.0 §6.2",
-     "what": "偏離目標從「可疑」升成「確認」。現在只出得了 SUSPECTED,"
-             "因為下判決要四個條件,一個都還沒做",
+     "what": "只有 owner goal/north-star outcome、scope boundary 或 invariant"
+             " 的不相容變更才可從候選進入判決；實作路徑演化不算 drift",
      "barrier": "OWNER",
-     "blocked": "GAC 算不出來,缺 scope_match 這個因子。那要你定義"
-                "什麼算離開北極星的範圍 —— 我定過兩次,兩次都誤判"},
+     "blocked": "scope_match 或 GAC 不可計算時現在 fail closed 為"
+                " UNKNOWN/INSUFFICIENT_EVIDENCE，不畫橘線也不給 correction；"
+                "仍需 owner 定義 canonical outcome、scope boundary 與 invariant"
+                " 的不相容證據，才可進入 drift candidate"},
     {"name": "換模型會不會變差", "spec": "v5.0 §15 三軸的 models 與 contexts",
      "what": "同一個判斷題餵給不同模型、在 context 被塞滿之後再問一次,"
              "看它還做不做得對。這是唯一能回答「Forseti 自己有沒有"
@@ -3445,6 +3447,15 @@ def strands(session: str = "", projects: Path | None = None,
     snap["goal_gate"] = _gate or {"ok": False,
                                   "note": "goalgate 跑不起來",
                                   "gac": None, "may_confirm_drift": False}
+    # Drift only has a reference frame when GAC, scope and an explicit
+    # canonical-change contract are all present.  The status is exposed as
+    # UNKNOWN/INSUFFICIENT_EVIDENCE; the alert list stays empty so the UI
+    # cannot paint an orange line or manufacture a correction prompt.
+    snap["drift_contract"] = _safe(
+        lambda: VT.drift_contract_status(_rows, _gate),
+        {"state": "INSUFFICIENT_EVIDENCE",
+         "reason": "INSUFFICIENT_EVIDENCE",
+         "missing": ["gac", "scope_match"]})
     _alerts = _safe(lambda: VT.drift_alerts(_rows, _gate), []) or []
     _by_n = {a["n"]: a for a in _alerts}
     for _r in _rows:
