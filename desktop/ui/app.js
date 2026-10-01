@@ -1736,11 +1736,12 @@ function drawDrift() {
     const button = document.createElement("button");
     button.className = "laneButton";
     button.type = "button";
+    button.textContent = "i";
     button.setAttribute("aria-label", `${it.label || "分岔"}，第 ${it.from_n} 至 ${it.to_n} 輪，點擊查看原因`);
     button.title = "點擊查看這條分岔線的原因";
     button.style.left = `${x - 7}px`;
-    button.style.top = `${y0}px`;
-    button.style.height = `${Math.max(14, y1 - y0)}px`;
+    button.style.top = `${Math.max(y0, (y0 + y1) / 2 - 7)}px`;
+    button.style.height = "14px";
     button.addEventListener("pointerenter", (e) => showLaneReason(e, it));
     button.addEventListener("pointerleave", () => {
       const pop = $("pop");
@@ -3033,7 +3034,7 @@ function jump(n) {
 const pop = $("pop");
 let tipDot = null;
 document.addEventListener("pointerover", (e) => {
-  if (e.target.closest(".laneHit")) return;
+  if (e.target.closest(".laneHit, .laneButton")) return;
   const d = e.target.closest(".d");
   if (!d || !d.dataset.tip) { tipDot = null; pop.hidden = true; return; }
   // Pointer movement inside one dot produces many mouseover-equivalent
@@ -3054,7 +3055,7 @@ document.addEventListener("pointerover", (e) => {
   pop.style.top = (r.bottom + 6) + "px";
 });
 document.addEventListener("pointerout", (e) => {
-  if (e.target.closest(".laneHit")) return;
+  if (e.target.closest(".laneHit, .laneButton")) return;
   if (!e.relatedTarget || !e.relatedTarget.closest(".pop, .d")) {
     tipDot = null;
     pop.hidden = true;
@@ -3062,7 +3063,7 @@ document.addEventListener("pointerout", (e) => {
 });
 document.addEventListener("click", (e) => {
   const p = $("pop");
-  if (p?.dataset.lane === "1" && !e.target.closest(".laneHit, .pop")) {
+  if (p?.dataset.lane === "1" && !e.target.closest(".laneHit, .laneButton, .pop")) {
     p.hidden = true;
     delete p.dataset.lane;
     delete p.dataset.pinned;
