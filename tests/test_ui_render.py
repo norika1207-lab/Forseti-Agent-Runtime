@@ -261,6 +261,33 @@ class ChecksThemselvesCatchThings(unittest.TestCase):
         return RC.Render(dom=dom, console=[], fixture=fixture,
                          outdir=Path("/nonexistent"))
 
+    def _feature(self, tags: str, descriptions: str = ""):
+        dom = ('<div id="lane"><div class="fHead">'
+               '檢查器可用；不代表下方結果通過</div>'
+               '<div class="fi available outcome-incomplete">'
+               f'{tags}<span class="fiOutcome">未完成</span>'
+               f'<div class="fiWhat">{descriptions}</div></div>'
+               '<div class="fi available outcome-incomplete">'
+               '<span class="fiTag">檢查器可用</span>'
+               '<span class="fiOutcome">未完成</span></div></div>')
+        fixture = {"features": {"items": [
+            {"name": "必讀文件讀完了沒", "live": "0 / 28 份讀完"},
+            {"name": "區塊閱讀與反向拷問", "live": "0 / 391 塊"},
+        ], "scale": {"tests": 99}}}
+        return self._fake(dom, fixture)
+
+    def test_feature_outcome_ignores_liveness_phrase_in_description(self):
+        r = self._feature(
+            '<span class="fiTag">檢查器可用</span>',
+            "抓得到才算活的；這是 detector 說明，不是 badge")
+        self.assertEqual(RC.check_feature_outcomes(r), [])
+
+    def test_feature_outcome_rejects_legacy_liveness_badge(self):
+        r = self._feature('<span class="fiTag">活的</span>')
+        found = RC.check_feature_outcomes(r)
+        self.assertEqual(len(found), 1)
+        self.assertIn("活的", found[0].actual)
+
     def test_溫度對不上會紅(self):
         r = self._fake('<span id="vTemp">99.9</span><span id="vBand">安靜 證據 92%</span>',
                        {"strands": {"temp": {"c": 36.9, "coverage": 0.92}},

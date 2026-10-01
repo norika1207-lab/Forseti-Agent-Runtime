@@ -1141,7 +1141,15 @@ def check_feature_outcomes(r: Render) -> list[Finding]:
             symptom="閱讀覆蓋率是 0 卻畫成可用／綠色，會把未完成誤讀成通過",
             expected=f"至少 {len(pending)} 張 outcome-incomplete 並標示未完成",
             actual=f"只有 {got} 張 outcome-incomplete")]
-    if pending and "活的" in lane:
+    # Only the availability badge is evidence for this regression. The
+    # feature description legitimately contains the phrase "活的" when it
+    # explains the synthetic detector probe, so searching the whole lane
+    # creates a false failure even when the badge is correctly separated.
+    fi_tags = re.findall(
+        r'<span class="fiTag(?: [^"]*)?">(.*?)</span>', lane, re.S)
+    fi_tag_text = " ".join(re.sub(r"<[^>]+>", " ", tag)
+                             for tag in fi_tags)
+    if pending and "活的" in fi_tag_text:
         return [Finding(
             where="分頁 功能 ／ outcome",
             symptom="卡片仍把 detector liveness 寫成『活的』，沒有顯示實際結果",

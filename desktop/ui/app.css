@@ -142,7 +142,7 @@ button{font:inherit;cursor:pointer;color:inherit}
    一半視窗高是刻意的:頂部再有用，它也不該吃掉主畫面。 */
 .top{padding:38px 20px 0;user-select:none;position:relative;z-index:10;
   background:var(--surface);
-  min-height:0;max-height:min(50vh,520px);overflow-y:auto;
+  min-height:0;max-height:50vh;overflow-y:auto;
   overscroll-behavior:contain}
 
 .bar{display:flex;align-items:center;gap:9px;pointer-events:none}
