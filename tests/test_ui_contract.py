@@ -224,6 +224,76 @@ class InsufficientDriftContract(unittest.TestCase):
         self.assertIn('.driftBox.insufficient', CSS)
 
 
+class RequiredReadingInteractionContract(unittest.TestCase):
+    """AI 閱讀是主流程；人類 row 只能做唯讀診斷。"""
+
+    def test_rows_are_keyboard_controls_and_reader_has_all_states(self):
+        self.assertIn('class="specRow ', JS)
+        self.assertIn('type="button"', JS)
+        self.assertIn('aria-label="檢視', JS)
+        self.assertIn('inspectSpecDocument(', JS)
+        self.assertIn('DOCUMENT_READ_COMMAND = "read_document"', JS)
+        self.assertIn('className = "docReader"', JS)
+        self.assertIn('class="docReaderClose"', JS)
+        self.assertIn('READ_FAILED', JS)
+        self.assertIn('FILE_NOT_FOUND', JS)
+        self.assertIn('READ_ERROR_CODES', JS)
+        self.assertIn('specReaderSeq', JS)
+        self.assertIn('seq !== specReaderSeq', JS)
+        self.assertIn('if (e.target === specReader) closeSpecReader()', JS)
+
+    def test_human_inspection_never_marks_ai_coverage(self):
+        self.assertIn("人工檢視不會改變 AI 閱讀進度", JS)
+        self.assertNotIn("invoke(\"record_reading\"", JS)
+        self.assertIn('purpose: "inspection"', JS)
+        self.assertIn('未寫入 AI 閱讀證據', JS)
+
+    def test_ai_resume_requires_backend_evidence_before_refreshing_progress(self):
+        self.assertIn('AI_READING_COMMAND = "resume_ai_reading"', JS)
+        self.assertIn('evidence_recorded !== true', JS)
+        self.assertIn('if (result.ok !== true || result.evidence_recorded !== true || !result.spec_reading)', JS)
+        self.assertIn('specCache = result.spec_reading', JS)
+        self.assertIn('AI_READ_ENDPOINT_UNAVAILABLE', JS)
+        self.assertIn('AI 閱讀進度', JS)
+        self.assertIn('specAiWorker', JS)
+        self.assertIn('specAiHash', JS)
+        self.assertIn('specAiEvidence', JS)
+        self.assertIn('specAiBlocks', JS)
+        self.assertIn('specAiQuestions', JS)
+
+    def test_required_backend_contract_is_explicit_when_missing(self):
+        self.assertIn('const DOCUMENT_READ_CONTRACT =', JS)
+        self.assertIn('const AI_READING_CONTRACT =', JS)
+        self.assertIn('read_document({path,name,purpose', JS)
+        self.assertIn('resume_ai_reading({documents,session})', JS)
+        self.assertIn('.specAiStatus.error', CSS)
+        self.assertIn('.docReaderText', CSS)
+
+
+class FeatureOutcomeContract(unittest.TestCase):
+    """探針可用性與實際結果必須分欄，不能用綠色 liveness 冒充通過。"""
+
+    def test_required_reading_incomplete_is_red_and_named(self):
+        self.assertIn('function featureOutcome(x)', JS)
+        self.assertIn('return Number(m[1]) === Number(m[2]) && Number(m[2]) > 0', JS)
+        self.assertIn('"INCOMPLETE"', JS)
+        self.assertIn('INCOMPLETE: "未完成"', JS)
+        self.assertIn('.fi.outcome-incomplete .fiOutcome', CSS)
+        self.assertIn('.fi.outcome-incomplete,.fi.outcome-fail', CSS)
+
+    def test_availability_is_not_outcome_and_unknown_is_explicit(self):
+        self.assertIn('const availability = x.alive === true ? "AVAILABLE" : "UNAVAILABLE"', JS)
+        self.assertIn('檢查器可用', JS)
+        self.assertIn('UNKNOWN: "證據不足"', JS)
+        self.assertIn('class="fAvail"', JS)
+        self.assertNotIn('<span class="fiTag">${x.alive ? "活的" : "沒反應"}</span>', JS)
+
+    def test_test_inventory_zero_is_not_presented_as_verified_zero(self):
+        self.assertIn('const testsKnown = sc.tests_known === true || sc.tests_verified === true', JS)
+        self.assertIn('未提供／未知', JS)
+        self.assertIn('測試庫 <b>${testsLabel}</b>', JS)
+
+
 class TauriWiring(unittest.TestCase):
     """前端連不連得上後端。
 

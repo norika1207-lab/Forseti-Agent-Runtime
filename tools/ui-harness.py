@@ -185,6 +185,13 @@ def build(out: Path, fake: bool, session: str = "",
                "audit": D.audit(data, persist=False),
                "spec_reading": D.spec_reading(),
                "block_reading": D.block_reading(),
+               # Explicit blockers, never fabricated document text or
+               # reading evidence. Production needs these safe endpoints.
+               "read_document": {"ok": False, "code": "READ_FAILED",
+                                 "why": "harness 未提供 read_document"},
+               "resume_ai_reading": {"ok": False,
+                                     "code": "AI_READ_ENDPOINT_UNAVAILABLE",
+                                     "why": "harness 未提供 resume_ai_reading"},
                "sufficiency": D.sufficiency_state()}
     (out / "fixture.json").write_text(
         json.dumps(fixture, ensure_ascii=False), encoding="utf-8")

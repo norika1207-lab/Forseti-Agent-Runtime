@@ -1125,6 +1125,45 @@ def check_tab_values(r: Render, tab: Tab) -> list[Finding]:
     return out
 
 
+def check_feature_outcomes(r: Render) -> list[Finding]:
+    """liveness 可用不等於 outcome 通過，尤其是兩個閱讀 gate。"""
+    dom = strip_fixture(r.dom)
+    lane = _lane(r) or ""
+    fx = r.fixture.get("features") or {}
+    items = fx.get("items") or []
+    pending = [x for x in items
+               if any(k in str(x.get("name") or "") for k in ("必讀文件", "區塊閱讀"))
+               and re.search(r"^\s*0\s*/\s*\d+", str(x.get("live") or ""))]
+    got = _count_class(lane, "outcome-incomplete")
+    if got < len(pending):
+        return [Finding(
+            where="分頁 功能 ／ outcome",
+            symptom="閱讀覆蓋率是 0 卻畫成可用／綠色，會把未完成誤讀成通過",
+            expected=f"至少 {len(pending)} 張 outcome-incomplete 並標示未完成",
+            actual=f"只有 {got} 張 outcome-incomplete")]
+    if pending and "活的" in lane:
+        return [Finding(
+            where="分頁 功能 ／ outcome",
+            symptom="卡片仍把 detector liveness 寫成『活的』，沒有顯示實際結果",
+            expected="可用性與 outcome 分開",
+            actual="畫面仍出現『活的』")]
+    if "檢查器可用" not in lane or "不代表下方結果通過" not in lane:
+        return [Finding(
+            where="分頁 功能 ／ outcome",
+            symptom="21/21 沒有標明只是檢查器可用，容易被讀成整體完成",
+            expected="檢查器可用且不代表下方結果通過",
+            actual="缺少語意標籤")]
+    scale = fx.get("scale") or {}
+    if scale.get("tests") == 0 and not (scale.get("tests_known") or scale.get("tests_verified")) \
+            and "未提供／未知" not in lane:
+        return [Finding(
+            where="分頁 功能 ／ 測試庫",
+            symptom="測試數為 0 卻看起來像健康的已驗證數字",
+            expected="未提供／未知",
+            actual="沒有未知標籤")]
+    return []
+
+
 def check_burger_opens_picker(r: Render) -> list[Finding]:
     """只按漢堡，那個面板要真的打開。
 

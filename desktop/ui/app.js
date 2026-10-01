@@ -2506,33 +2506,65 @@ async function renderFeat() {
   const r = featCache;
   const bad = r.alive < r.total;
   const sc = r.scale || {};
+  const testsKnown = sc.tests_known === true || sc.tests_verified === true;
+  const testsLabel = testsKnown
+    ? `${sc.tests || 0} 支`
+    : (sc.tests > 0 ? `${sc.tests} 支` : "未提供／未知");
 
   const head = document.createElement("div");
   head.className = "fHead";
   head.innerHTML =
     `<span class="fBig${bad ? " bad" : ""}">${r.alive}/${r.total}</span>` +
-    '<span class="fSub">每一項都餵過一筆刻意造的違規，抓得到才算活的。' +
-    '右邊的數字是這段對話的真實結果，不是測試資料</span>' +
+    '<span class="fAvail">檢查器可用</span>' +
+    '<span class="fSub">每一項都餵過一筆刻意造的違規，抓得到才算檢查器可用。' +
+    '左邊只代表檢查器可用，不代表下方結果通過；右邊的數字是這段對話的真實結果，不是測試資料</span>' +
     '<div class="fScale">' +
     `<span>模組 <b>${sc.modules || 0}</b></span>` +
     `<span>公開函式 <b>${sc.functions || 0}</b></span>` +
     `<span>Python <b>${(sc.lines || 0).toLocaleString()}</b> 行</span>` +
     `<span>JavaScript <b>${(sc.js_lines || 0).toLocaleString()}</b> 行</span>` +
-    `<span>測試 <b>${sc.tests || 0}</b> 支</span></div>`;
+    `<span>測試庫 <b>${testsLabel}</b></span></div>`;
   lane.appendChild(head);
 
   (r.items || []).forEach((x) => {
     const el = document.createElement("div");
-    el.className = "fi" + (x.alive ? "" : " dead");
+    const outcome = featureOutcome(x);
+    const availability = x.alive === true ? "AVAILABLE" : "UNAVAILABLE";
+    el.className = "fi " + availability.toLowerCase() +
+      " outcome-" + outcome.toLowerCase();
     el.innerHTML =
       '<div class="fiTop">' +
-      `<span class="fiTag">${x.alive ? "活的" : "沒反應"}</span>` +
+      `<span class="fiTag">${availability === "AVAILABLE" ? "檢查器可用" : "檢查器不可用"}</span>` +
       `<span class="fiName">${esc(x.name)}</span>` +
+      `<span class="fiOutcome">${featureOutcomeLabel(outcome)}</span>` +
       `<span class="fiLive">${x.live}</span></div>` +
       `<div class="fiWhat">${esc(x.what)}</div>` +
       `<div class="fiSpec">${esc(x.spec)}</div>`;
     lane.appendChild(el);
   });
+
+  /* liveness 只回答「探針能不能工作」，不能把它當成規格結果。
+     必讀與區塊閱讀的分子/分母是目前唯一可由 features payload 判定的 outcome；
+     其餘功能沒有結果證據就保持 UNKNOWN。 */
+  function featureOutcome(x) {
+    const explicit = String(x.outcome || "").toUpperCase();
+    if (["PASS", "FAIL", "INCOMPLETE", "UNKNOWN", "BLOCKED"].includes(explicit)) {
+      return explicit;
+    }
+    const name = String(x.name || "");
+    const live = String(x.live || "");
+    const m = live.match(/(\d+)\s*\/\s*(\d+)/);
+    if (m && /必讀文件|區塊閱讀/.test(name)) {
+      return Number(m[1]) === Number(m[2]) && Number(m[2]) > 0
+        ? "PASS" : "INCOMPLETE";
+    }
+    return "UNKNOWN";
+  }
+
+  function featureOutcomeLabel(outcome) {
+    return ({PASS: "通過", FAIL: "失敗", INCOMPLETE: "未完成",
+             UNKNOWN: "證據不足", BLOCKED: "受阻"})[outcome] || "證據不足";
+  }
 
   if ((r.not_wired || []).length) {
     const h = document.createElement("div");
@@ -2767,6 +2799,141 @@ async function renderWork() {
 }
 
 let specCache = null;
+let specReader = null;
+let specReaderSeq = 0;
+
+const DOCUMENT_READ_COMMAND = "read_document";
+const AI_READING_COMMAND = "resume_ai_reading";
+const DOCUMENT_READ_CONTRACT =
+  "read_document({path,name,purpose:'inspection'}) → " +
+  "{ok:true,filename,canonical_path,text,content_hash}; 不寫 AI coverage";
+const READ_ERROR_CODES = new Set(["FILE_NOT_FOUND", "READ_FAILED"]);
+const AI_READING_CONTRACT =
+  "resume_ai_reading({documents,session}) → " +
+  "{ok:true,evidence_recorded:true,spec_reading,block_reading,worker,session}";
+
+function parseInvokeResult(raw) {
+  if (typeof raw === "string") {
+    try { return JSON.parse(raw); } catch (e) { return {ok: false, code: "READ_FAILED", why: "回傳不是 JSON"}; }
+  }
+  return raw || {};
+}
+
+function ensureSpecReader() {
+  if (specReader) return specReader;
+  specReader = document.createElement("aside");
+  specReader.className = "docReader";
+  specReader.hidden = true;
+  specReader.setAttribute("role", "dialog");
+  specReader.setAttribute("aria-modal", "true");
+  specReader.innerHTML =
+    `<div class="docReaderInner">` +
+    `<div class="docReaderHead"><div><h2 class="docReaderTitle"></h2>` +
+    `<p class="docReaderPath"></p></div>` +
+    `<button class="docReaderClose" type="button" aria-label="關閉文件檢視">×</button></div>` +
+    `<div class="docReaderState" role="status"></div>` +
+    `<pre class="docReaderText"></pre>` +
+    `<p class="docReaderNote"></p></div>`;
+  document.body.appendChild(specReader);
+  specReader.querySelector(".docReaderClose").addEventListener("click", closeSpecReader);
+  specReader.addEventListener("click", (e) => {
+    if (e.target === specReader) closeSpecReader();
+  });
+  return specReader;
+}
+
+function closeSpecReader() {
+  specReaderSeq += 1;
+  if (specReader) specReader.hidden = true;
+}
+
+function setSpecReaderState(kind, text, note = "") {
+  const box = ensureSpecReader();
+  const state = box.querySelector(".docReaderState");
+  const body = box.querySelector(".docReaderText");
+  state.className = "docReaderState " + kind;
+  state.textContent = text;
+  body.textContent = kind === "loading" ? "正在向後端要求檔案…" : "";
+  box.querySelector(".docReaderNote").textContent = note;
+}
+
+function showSpecReaderError(code, why, contract) {
+  setSpecReaderState("error", `${code}：${why}`, contract);
+}
+
+async function inspectSpecDocument(row) {
+  const box = ensureSpecReader();
+  const seq = ++specReaderSeq;
+  box.hidden = false;
+  box.querySelector(".docReaderTitle").textContent = row.name || "未命名文件";
+  box.querySelector(".docReaderPath").textContent = row.path ||
+    "canonical source path：後端未提供（不猜路徑）";
+  setSpecReaderState("loading", "載入中", "人工檢視不會改變 AI 閱讀進度或 reading_coverage。");
+
+  if (!row.path) {
+    showSpecReaderError("READ_FAILED", "缺少 canonical source path，無法安全讀取。",
+      DOCUMENT_READ_CONTRACT);
+    return;
+  }
+  if (typeof invoke !== "function") {
+    showSpecReaderError("READ_FAILED", "Tauri read endpoint 不存在。",
+      DOCUMENT_READ_CONTRACT);
+    return;
+  }
+  try {
+    const result = parseInvokeResult(await invoke(DOCUMENT_READ_COMMAND, {
+      path: row.path, name: row.name, purpose: "inspection",
+    }));
+    if (seq !== specReaderSeq || box.hidden) return;
+    if (result.ok !== true || typeof result.text !== "string") {
+      const code = READ_ERROR_CODES.has(result.code) ? result.code : "READ_FAILED";
+      showSpecReaderError(code,
+        result.why || "後端沒有回傳可顯示的文件內容。", DOCUMENT_READ_CONTRACT);
+      return;
+    }
+    box.querySelector(".docReaderPath").textContent =
+      result.canonical_path || row.path;
+    box.querySelector(".docReaderState").className = "docReaderState ready";
+    box.querySelector(".docReaderState").textContent = "檢視成功；未寫入 AI 閱讀證據";
+    box.querySelector(".docReaderText").textContent = result.text;
+    box.querySelector(".docReaderNote").textContent =
+      `hash ${result.content_hash || "後端未提供"}；${DOCUMENT_READ_CONTRACT}`;
+  } catch (e) {
+    if (seq !== specReaderSeq) return;
+    showSpecReaderError("READ_FAILED", String(e), DOCUMENT_READ_CONTRACT);
+  }
+}
+
+async function resumeAiReading(d, statusEl) {
+  const pending = (d.rows || []).filter((r) => r.state !== "讀完");
+  if (!pending.length) {
+    statusEl.textContent = "AI 閱讀進度已全部完成，沒有需要接續的文件。";
+    return;
+  }
+  statusEl.className = "specAiStatus loading";
+  statusEl.textContent = "正在要求 AI worker 接續閱讀…";
+  try {
+    const result = parseInvokeResult(await invoke(AI_READING_COMMAND, {
+      documents: pending.map((r) => ({name: r.name, path: r.path || null})),
+      session: currentSession || null,
+    }));
+    if (result.ok !== true || result.evidence_recorded !== true || !result.spec_reading) {
+      statusEl.className = "specAiStatus error";
+      statusEl.textContent = `${result.code || "AI_READ_ENDPOINT_UNAVAILABLE"}：` +
+        `${result.why || "後端尚未提供 AI resume/evidence refresh。"} ${AI_READING_CONTRACT}`;
+      return;
+    }
+    // 只有後端明確回 evidence_recorded=true 且帶新 spec_reading 才刷新。
+    specCache = result.spec_reading;
+    statusEl.className = "specAiStatus ready";
+    statusEl.textContent = `AI evidence 已刷新（${result.worker || "worker 未提供"}／` +
+      `${result.session || currentSession || "session 未提供"}）`;
+    await renderSpec();
+  } catch (e) {
+    statusEl.className = "specAiStatus error";
+    statusEl.textContent = `AI_READ_FAILED：${String(e)} ${AI_READING_CONTRACT}`;
+  }
+}
 
 async function loadFoundation() {
   try {
@@ -2805,16 +2972,40 @@ async function renderSpec() {
       : "必讀文件全部讀完，而且讀的版本跟現行檔案一致。"}</span>`;
   lane.appendChild(head);
 
+  const ai = document.createElement("section");
+  ai.className = "specAi";
+  const pending = (d.rows || []).filter((r) => r.state !== "讀完");
+  const aiWorker = d.worker || "後端未提供";
+  const aiSession = d.session || currentSession || "後端未提供";
+  const aiHash = d.hash || d.content_hash || "後端未提供";
+  const aiEvidence = d.evidence || d.note || "後端未提供";
+  ai.innerHTML =
+    `<div class="specAiHead"><b>AI 閱讀進度</b><strong>${d.full} / ${d.total}</strong></div>` +
+    `<p class="specAiWorker">目前 AI worker：${esc(aiWorker)}；session：${esc(aiSession)}</p>` +
+    `<p class="specAiHash">hash：${esc(aiHash)}</p>` +
+    `<p class="specAiEvidence">evidence：${esc(aiEvidence)}；人類檢視不會改變此進度。</p>` +
+    '<p class="specAiBlocks">block coverage：後端未提供</p>' +
+    '<p class="specAiQuestions">questions：後端未提供</p>' +
+    `<button class="specResume" type="button" ${pending.length ? "" : "disabled"}>` +
+      `讓 AI 讀取未完成文件</button><p class="specAiStatus" role="status"></p>`;
+  lane.appendChild(ai);
+  const aiStatus = ai.querySelector(".specAiStatus");
+  ai.querySelector(".specResume").addEventListener("click", () => resumeAiReading(d, aiStatus));
+
   const ul = document.createElement("div");
-  ul.className = "fam";
+  ul.className = "fam specRows";
   ul.innerHTML = (d.rows || []).map((r) => {
     const ok = r.state === "讀完";
-    return `<li class="${ok ? "" : "gone"}"><span class="dot"></span>` +
-      `<span>${esc(r.name)}</span>` +
+    return `<button class="specRow ${ok ? "" : "gone"}" type="button" ` +
+      `data-name="${esc(r.name)}" data-path="${esc(r.path || "")}" ` +
+      `aria-label="檢視 ${esc(r.name)} 的來源文件"><span class="dot"></span>` +
+      `<span class="specName">${esc(r.name)}</span>` +
       `<span class="ct">${esc(r.state)}${
-        r.state === "只讀一部分" ? "　" + Math.round(r.ratio * 100) + "%" : ""}</span></li>`;
+        r.state === "只讀一部分" ? "　" + Math.round(r.ratio * 100) + "%" : ""}</span></button>`;
   }).join("");
   lane.appendChild(ul);
+  ul.querySelectorAll(".specRow").forEach((button) => button.addEventListener("click", () =>
+    inspectSpecDocument({name: button.dataset.name, path: button.dataset.path})));
 
   const box = document.createElement("div");
   box.className = "fam plain";
@@ -2823,6 +3014,14 @@ async function renderSpec() {
   try {
     const b = JSON.parse(await invoke("block_reading", {}));
     if (view !== "spec") return;
+    const blockCoverage = b.has && b.done != null && b.blocks != null
+      ? `${b.done} / ${b.blocks} 塊` : "後端未提供";
+    const questionCount = Array.isArray(b.questions)
+      ? `${b.questions.length} 條` : "後端未提供";
+    ai.querySelector(".specAiBlocks").textContent =
+      `block coverage：${blockCoverage}`;
+    ai.querySelector(".specAiQuestions").textContent =
+      `questions：${questionCount}`;
     if (!b.has) { box.innerHTML = `<div class="none">${esc(b.why || "")}</div>`; return; }
     box.className = "fam";
     box.innerHTML =
@@ -2842,6 +3041,8 @@ async function renderSpec() {
     lane.appendChild(qb);
   } catch (e) {
     box.innerHTML = `<div class="none">讀不到：${esc(String(e))}</div>`;
+    ai.querySelector(".specAiBlocks").textContent = "block coverage：讀取失敗";
+    ai.querySelector(".specAiQuestions").textContent = "questions：讀取失敗";
   }
 
   await renderTakeoverGate(lane);
@@ -3395,6 +3596,7 @@ addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   closeSheet();
   closeNode();
+  closeSpecReader();
 });
 
 

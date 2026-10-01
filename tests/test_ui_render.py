@@ -526,6 +526,9 @@ class TabsMatchData(unittest.TestCase):
 
     def test_功能那一頁(self):
         self._assert_clean("feat")
+        r = _tab_shot("feat")
+        f = RC.check_feature_outcomes(r)
+        self.assertEqual(f, [], "\n".join(str(x) for x in f))
 
     def test_讀文件那一頁(self):
         self._assert_clean("spec")

@@ -60,6 +60,10 @@
 
   --ease:cubic-bezier(.28,.11,.32,1);   /* Apple 的緩動曲線 */
   --lane-x:46px;
+
+  /* 窄視窗的區域契約：footer 不得遮住 scroll 裡最後一張卡。 */
+  --layout-footer-min:44px;
+  --layout-footer-clearance:72px;
 }
 
 /* 時間軸那一區是深的。
@@ -114,7 +118,8 @@ body{background:var(--bg);color:var(--ink);
 button{font:inherit;cursor:pointer;color:inherit}
 :focus-visible{outline:2px solid var(--blue);outline-offset:3px;border-radius:6px}
 
-.w{display:grid;grid-template-rows:auto 1fr auto;height:100vh}
+.w{display:grid;grid-template-rows:auto minmax(0,1fr) auto;height:100vh;
+  min-height:100dvh;overflow:hidden}
 
 /* 寬視窗時內容不要攤平。
    這個介面是為 340 的窄長條設計的，拉到 1024 寬之後卡片會被
@@ -137,7 +142,8 @@ button{font:inherit;cursor:pointer;color:inherit}
    一半視窗高是刻意的:頂部再有用，它也不該吃掉主畫面。 */
 .top{padding:38px 20px 0;user-select:none;position:relative;z-index:10;
   background:var(--surface);
-  max-height:50vh;overflow-y:auto;overscroll-behavior:contain}
+  min-height:0;max-height:min(50vh,520px);overflow-y:auto;
+  overscroll-behavior:contain}
 
 .bar{display:flex;align-items:center;gap:9px;pointer-events:none}
 
@@ -231,7 +237,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 /* 捲進頂欄的內容淡出，不是被切斷。
    一條被硬切的字跟一條淡出的字，差別就是「有人排過」跟「沒有」。 */
 .w{background:var(--surface)}
-.scroll{overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+.scroll{min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
   -webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 16px);
   mask-image:linear-gradient(to bottom,transparent 0,#000 16px)}
 .scroll::-webkit-scrollbar{width:9px}
@@ -240,7 +246,7 @@ button{font:inherit;cursor:pointer;color:inherit}
   background-clip:content-box}
 .scroll::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.3);
   background-clip:content-box}
-.lane{padding:18px 0 64px;position:relative}
+.lane{padding:18px 0 var(--layout-footer-clearance);position:relative}
 
 /* 日期分隔。跨天的 session 只看 hh:mm:ss 會把昨天當今天。 */
 .daymark{display:flex;align-items:center;gap:12px;
@@ -396,7 +402,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .bottom{display:flex;align-items:center;gap:10px;padding:11px 16px 13px;
   flex-wrap:wrap;
   background:var(--surface);border-top:.5px solid var(--hair);
-  width:100%;box-sizing:border-box}
+  width:100%;min-height:var(--layout-footer-min);box-sizing:border-box;
+  position:relative;z-index:20}
 
 /* 六個分頁在 340 寬塞不下一行(實測第六個「自我審計」被推出畫面)。
    原本靠 overflow-x:auto 橫捲,但沒有人知道那裡可以捲,等於那個
@@ -461,6 +468,52 @@ button{font:inherit;cursor:pointer;color:inherit}
 .fam.plain{background:transparent;margin-top:4px}
 .fam.plain .none{border:0;padding:6px 16px 0;font-size:11px;
   color:var(--ink-4);line-height:1.55}
+
+/* 必讀文件：AI 進度是主流程，人類 row 只是唯讀診斷出口。 */
+.specAi{margin:0 16px 10px;padding:13px 15px;border-radius:var(--r-lg);
+  background:var(--surface);border:.5px solid var(--hair)}
+.specAiHead{display:flex;align-items:baseline;gap:10px;color:var(--ink-2)}
+.specAiHead strong{margin-left:auto;font:250 27px/1 var(--display);
+  color:var(--red);font-variant-numeric:tabular-nums}
+.specAi p{margin:6px 0 0;color:var(--ink-3);font-size:11px;line-height:1.5}
+.specResume{margin-top:10px;padding:6px 11px;border:0;border-radius:var(--r-pill);
+  background:var(--blue);color:#fff;font-size:11px}
+.specResume:disabled{background:var(--surface-3);color:var(--ink-4);cursor:default}
+.specAiStatus{overflow-wrap:anywhere}
+.specAiStatus.loading{color:var(--amber)}
+.specAiStatus.error{color:var(--red)}
+.specAiStatus.ready{color:var(--green)}
+.specRows{overflow:hidden}
+.specRow{width:100%;border:0;border-top:.5px solid var(--hair);background:transparent;
+  color:var(--ink-2);padding:10px 16px;text-align:left;display:flex;gap:10px;
+  align-items:baseline;font:inherit;cursor:pointer}
+.specRow:first-child{border-top:0}
+.specRow:hover{background:var(--surface-2)}
+.specRow:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+.specRow .specName{flex:1 1 auto;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.specRow .ct{flex:0 0 auto;color:var(--ink-3)}
+.specRow.gone .ct{color:var(--red)}
+
+.docReader[hidden]{display:none}
+.docReader{position:fixed;inset:0;z-index:85;background:rgba(0,0,0,.34);
+  display:flex;align-items:flex-end;padding:0}
+.docReaderInner{width:100%;max-height:86vh;overflow:auto;background:var(--surface);
+  border-radius:var(--r-xl) var(--r-xl) 0 0;padding:18px 20px 24px;
+  box-shadow:0 -8px 40px rgba(0,0,0,.3)}
+.docReaderHead{display:flex;gap:10px;align-items:flex-start;position:sticky;top:-18px;
+  margin:-18px -20px 10px;padding:18px 20px 12px;background:var(--surface);
+  border-bottom:.5px solid var(--hair)}
+.docReaderHead h2{margin:0;font:590 15px var(--display);overflow-wrap:anywhere}
+.docReaderPath{margin:3px 0 0;color:var(--ink-3);font:10px var(--mono);overflow-wrap:anywhere}
+.docReaderClose{margin-left:auto;flex:0 0 auto;border:0;background:transparent;
+  color:var(--ink-3);font-size:19px;line-height:1;padding:2px 6px}
+.docReaderState{font-size:12px;color:var(--amber);overflow-wrap:anywhere}
+.docReaderState.ready{color:var(--green)}
+.docReaderState.error{color:var(--red)}
+.docReaderText{margin:10px 0 0;min-height:80px;max-height:48vh;overflow:auto;
+  white-space:pre-wrap;overflow-wrap:anywhere;color:var(--ink-2);font:12px/1.6 var(--mono)}
+.docReaderNote{margin:10px 0 0;color:var(--ink-4);font-size:10.5px;line-height:1.5;overflow-wrap:anywhere}
 
 
 /* ── 圖例 ───────────────────────────────────────
@@ -708,6 +761,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .fHead{padding:14px 16px 6px}
 .fBig{font:250 32px/1 var(--display);letter-spacing:-.03em;color:var(--green)}
 .fBig.bad{color:var(--red)}
+.fAvail{display:inline-block;margin-left:8px;color:var(--ink-3);font-size:11px;
+  vertical-align:baseline}
 .fSub{display:block;font-size:11.5px;color:var(--ink-3);margin-top:7px;
   line-height:1.5}
 .fScale{display:flex;flex-wrap:wrap;gap:6px;margin-top:11px}
@@ -717,13 +772,18 @@ button{font:inherit;cursor:pointer;color:inherit}
 
 .fi{margin:0 16px 8px;padding:13px 15px;border-radius:var(--r-lg);
   background:var(--surface);border:.5px solid var(--hair)}
-.fi.dead{border-color:rgba(255,69,58,.45)}
+.fi.outcome-incomplete,.fi.outcome-fail{border-color:rgba(255,69,58,.55)}
+.fi.outcome-pass{border-color:rgba(48,209,88,.35)}
 .fiTop{display:flex;align-items:baseline;gap:9px}
 .fiTag{font-size:10px;font-weight:590;letter-spacing:.03em;padding:3px 8px;
-  border-radius:var(--r-pill);background:rgba(48,209,88,.18);color:#7FE29A;
+  border-radius:var(--r-pill);background:rgba(10,132,255,.16);color:#9BC8FF;
   flex:0 0 auto}
-.fi.dead .fiTag{background:rgba(255,69,58,.22);color:#FFB3AE}
+.fi.unavailable .fiTag{background:rgba(255,69,58,.18);color:#FFB3AE}
 .fiName{font-size:13px;font-weight:560;color:var(--ink);letter-spacing:-.01em}
+.fiOutcome{flex:0 0 auto;color:var(--ink-3);font:600 10px/1.4 var(--mono)}
+.fi.outcome-incomplete .fiOutcome,.fi.outcome-fail .fiOutcome{color:#FFB3AE}
+.fi.outcome-pass .fiOutcome{color:#7FE29A}
+.fi.outcome-blocked .fiOutcome{color:#FFCC80}
 .fiLive{margin-left:auto;font:300 18px/1 var(--display);color:var(--ink);
   font-variant-numeric:tabular-nums;letter-spacing:-.02em;flex:0 0 auto}
 .fiWhat{font-size:11.5px;line-height:1.5;color:var(--ink-2);margin-top:7px}
@@ -940,6 +1000,17 @@ button{font:inherit;cursor:pointer;color:inherit}
   font-size:11.5px;color:var(--ink-2);line-height:1.45}
 .card2 .five .k{flex:0 0 74px;color:var(--ink-4)}
 .adviceBox[hidden]{display:none}
+
+/* Narrow viewport geometry. The panel stays in normal flow and gets its own
+   scroll window; it may not paint over the graph/card scroll region. */
+@media (max-width:760px){
+  .top{max-height:min(52vh,460px)}
+  .panel:not([hidden]){max-height:calc(min(52vh,460px) - 64px);
+    overflow-y:auto;overscroll-behavior:contain}
+  .cards{padding-left:12px;padding-right:12px}
+  .card2{width:100%;min-width:0;overflow-wrap:anywhere}
+  .card2 .row{flex-wrap:wrap}
+}
 
 
 /* ── 需要注意：三層 §12.2 §12.3 ────────────
