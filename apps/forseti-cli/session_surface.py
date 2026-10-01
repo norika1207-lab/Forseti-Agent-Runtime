@@ -42,6 +42,11 @@ _CODEX_FOCUS_RE = re.compile(
     r".*rendererWindowAppearance=primary "
     r"rendererWindowFocused=true.*rendererWindowVisible=true"
 )
+_CODEX_OWNER_ROUTE_RE = re.compile(
+    r"^(\S+).*IAB_LIFECYCLE received browser sidebar owner sync "
+    r".*conversationId=([0-9a-fA-F-]{20,}) "
+    r".*ownerRoutePath=/local/\2(?:\s|$)"
+)
 _SESSION_ID_RE = re.compile(
     r"([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
@@ -75,7 +80,8 @@ def latest_codex_focused_session(root: Path | None = None) -> str:
         except OSError:
             continue
         for line in text.splitlines():
-            match = _CODEX_FOCUS_RE.search(line)
+            match = (_CODEX_FOCUS_RE.search(line)
+                     or _CODEX_OWNER_ROUTE_RE.search(line))
             if match and (best is None or match.group(1) > best[0]):
                 best = (match.group(1), match.group(2))
     return best[1] if best else ""

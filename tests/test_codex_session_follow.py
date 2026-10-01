@@ -173,6 +173,26 @@ def test_codex_foreground_switch_beats_stale_deploy_hint(tmp_path, monkeypatch):
     assert focused in session_surface.resolve_requested("", logs_root=logs).name
 
 
+def test_codex_sidebar_owner_sync_beats_previous_activity_event(tmp_path):
+    previous = "01a0f665-8995-7dd1-bebf-eb1ec7c58137"
+    selected = "01a0c213-35e3-7053-95fc-36a449c5d676"
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "codex.log").write_text(
+        "2026-10-01T07:37:24.830Z info [electron-message-handler] "
+        "thread_stream_view_activity_changed active=true "
+        f"conversationId={previous} rendererWebContentsId=1 "
+        "rendererWindowAppearance=primary rendererWindowFocused=true "
+        "rendererWindowId=1 rendererWindowVisible=true\n"
+        "2026-10-01T07:37:53.105Z info [electron-message-handler] "
+        "IAB_LIFECYCLE received browser sidebar owner sync browserTabId=null "
+        f"conversationId={selected} originWebContentsId=1 "
+        f"ownerRoutePath=/local/{selected} windowId=1\n",
+        encoding="utf-8")
+
+    assert session_surface.latest_codex_focused_session(logs) == selected
+
+
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
