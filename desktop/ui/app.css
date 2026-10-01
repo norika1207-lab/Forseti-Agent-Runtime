@@ -430,6 +430,9 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pop .r{display:flex;gap:8px;padding:1px 0;align-items:flex-start}
 .pop .r i{width:5px;height:5px;border-radius:50%;flex:0 0 auto;margin-top:6px}
 .pop .r span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop .laneTipTitle{font:600 12px/1.45 var(--sans);color:var(--ink);margin-bottom:5px}
+.pop .laneTipWhy{font:400 11px/1.55 var(--sans);color:var(--ink-2)}
+.pop .laneTipMeta{font:500 9.5px/1.5 var(--mono);color:var(--ink-4);margin-top:7px}
 
 /* ── List §12 ───────────────────────────────── */
 .fam{margin:14px 16px;border-radius:var(--r-xl);background:var(--surface);
@@ -1194,6 +1197,9 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .lane.ld{stroke:var(--amber)}     /* 偏離目標 */
 .drift .lane.lf{stroke:var(--blue)}      /* 工具失敗:誠實的失敗 */
 .drift .lane.lw{stroke:var(--violet)}    /* 只讀不寫 */
+.drift .laneHit{fill:none;stroke:transparent;stroke-width:12;
+  pointer-events:stroke;cursor:help}
+.drift .laneHit:focus{outline:none;stroke:color-mix(in srgb,var(--blue) 18%,transparent)}
 
 /* 動作按鈕。會改帳本的東西，樣式要克制但按得到。 */
 .wk .acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;

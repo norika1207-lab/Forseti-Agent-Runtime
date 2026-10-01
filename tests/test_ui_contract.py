@@ -294,6 +294,20 @@ class DraggableAreaStaysBigEnough(unittest.TestCase):
         self.assertIn("pointer-events:none", block)
 
 
+class BranchLaneReasonsStayInspectable(unittest.TestCase):
+    """分岔線不是裝飾；滑鼠點線必須說明為何分岔。"""
+
+    def test_lane_has_wide_pointer_target_and_reason_popup(self):
+        self.assertIn('setAttribute("class", "laneHit")', JS)
+        self.assertIn('hit.addEventListener("click"', JS)
+        self.assertIn('hit.addEventListener("pointerenter"', JS)
+        self.assertIn("LANE_REASON", JS)
+        self.assertIn("laneTipWhy", JS)
+        block = CSS.split(".drift .laneHit{", 1)[1].split("}", 1)[0]
+        self.assertIn("pointer-events:stroke", block)
+        self.assertIn("stroke-width:12", block)
+
+
 class NoShadowedDefinitions(unittest.TestCase):
     """同一個模組裡不准有兩個同名的頂層定義。
 

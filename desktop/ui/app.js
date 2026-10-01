@@ -1543,6 +1543,32 @@ const LANE_CLS = {
   TOOL_FAIL: "lf", BLIND_WRITE: "lw",
 };
 
+const LANE_REASON = {
+  COMPACT: "這裡發生過對話壓縮，先前脈絡不再完整；除非重新補回脈絡，這條線不會自行收回。",
+  BETRAYAL: "這一輪出現已宣稱完成、但紀錄裡沒有對應寫入的落差；後續真的寫入才算收斂。",
+  DRIFT: "這幾輪與目前目標的距離超過門檻；距離回到門檻內才會接回主線。",
+  TOOL_FAIL: "這幾輪有工具執行失敗；下一輪沒有工具失敗時才視為恢復。",
+  BLIND_WRITE: "連續多輪只有讀取、沒有寫入或實作動作；出現寫入後才會接回主線。",
+};
+
+function showLaneReason(e, it, pinned = false) {
+  const pop = $("pop");
+  if (!pop) return;
+  pop.dataset.lane = "1";
+  pop.dataset.pinned = pinned ? "1" : "0";
+  const state = it.open ? "尚未收斂" : "已接回主線";
+  const count = Number(it.issues || 1);
+  pop.innerHTML =
+    `<div class="laneTipTitle">${esc(it.label || it.kind || "分岔")}</div>` +
+    `<div class="laneTipWhy">${esc(LANE_REASON[it.kind] || "這段紀錄形成了一條獨立問題軌道。")}</div>` +
+    `<div class="laneTipMeta">第 ${it.from_n} 至 ${it.to_n} 輪 · ${it.turns || 1} 輪 · ${state}` +
+    (count > 1 ? ` · ${count} 筆同類紀錄` : "") + `</div>`;
+  pop.hidden = false;
+  const x = Number(e.clientX || 0), y = Number(e.clientY || 0);
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - 310, x + 12)) + "px";
+  pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, y + 12)) + "px";
+}
+
 /* 同時開著的軌道要各佔一條 x。貪心配置:找第一條已經空出來的，
    沒有就開新的。軌道編號一旦給出去就不再變，眼睛才追得住。 */
 function packLanes(items) {
@@ -1604,16 +1630,17 @@ function drawDrift() {
     const cls = "lane " + (LANE_CLS[it.kind] || "ld") + (it.open ? " open" : "");
     const bend = 14;
 
+    const paths = [];
     const out = document.createElementNS(NS, "path");
     out.setAttribute("d",
       `M ${MAIN} ${A.y0} C ${MAIN} ${A.y0 + bend * .6}, ` +
       `${x} ${A.y0 + bend * .4}, ${x} ${A.y0 + bend}`);
-    add(out, cls);
+    add(out, cls); paths.push(out);
 
     if (B.y1 > A.y0 + bend) {
       const run = document.createElementNS(NS, "path");
       run.setAttribute("d", `M ${x} ${A.y0 + bend} L ${x} ${B.y1 - (it.open ? 0 : bend)}`);
-      add(run, cls);
+      add(run, cls); paths.push(run);
     }
     // 收回來的才畫回收曲線。一路開著的就讓它走到底 ——
     // 沒解決的問題不會自己回到主線。
@@ -1622,8 +1649,34 @@ function drawDrift() {
       back.setAttribute("d",
         `M ${x} ${B.y1 - bend} C ${x} ${B.y1 - bend * .4}, ` +
         `${MAIN} ${B.y1 - bend * .6}, ${MAIN} ${B.y1}`);
-      add(back, cls);
+      add(back, cls); paths.push(back);
     }
+
+    // 可見線保持細；另外疊一條透明寬線收滑鼠，才不必精準點中 1px。
+    // 只有線本身吃事件，不會破壞標題列拖曳。
+    paths.forEach((path) => {
+      const hit = path.cloneNode(false);
+      hit.setAttribute("class", "laneHit");
+      hit.setAttribute("tabindex", "0");
+      hit.setAttribute("role", "button");
+      hit.setAttribute("aria-label", `${it.label || "分岔"}，第 ${it.from_n} 至 ${it.to_n} 輪`);
+      hit.addEventListener("pointerenter", (e) => showLaneReason(e, it));
+      hit.addEventListener("pointermove", (e) => {
+        if ($("pop")?.dataset.pinned !== "1") showLaneReason(e, it);
+      });
+      hit.addEventListener("pointerleave", () => {
+        const pop = $("pop");
+        if (pop?.dataset.lane === "1" && pop.dataset.pinned !== "1") pop.hidden = true;
+      });
+      hit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showLaneReason(e, it, true);
+      });
+      hit.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") showLaneReason(e, it, true);
+      });
+      svg.appendChild(hit);
+    });
   });
 
   /* 主線。一輪一段，顏色跟著那一輪走。 */
@@ -2943,6 +2996,7 @@ function jump(n) {
 const pop = $("pop");
 let tipDot = null;
 document.addEventListener("pointerover", (e) => {
+  if (e.target.closest(".laneHit")) return;
   const d = e.target.closest(".d");
   if (!d || !d.dataset.tip) { tipDot = null; pop.hidden = true; return; }
   // Pointer movement inside one dot produces many mouseover-equivalent
@@ -2963,9 +3017,18 @@ document.addEventListener("pointerover", (e) => {
   pop.style.top = (r.bottom + 6) + "px";
 });
 document.addEventListener("pointerout", (e) => {
+  if (e.target.closest(".laneHit")) return;
   if (!e.relatedTarget || !e.relatedTarget.closest(".pop, .d")) {
     tipDot = null;
     pop.hidden = true;
+  }
+});
+document.addEventListener("click", (e) => {
+  const p = $("pop");
+  if (p?.dataset.lane === "1" && !e.target.closest(".laneHit, .pop")) {
+    p.hidden = true;
+    delete p.dataset.lane;
+    delete p.dataset.pinned;
   }
 });
 
