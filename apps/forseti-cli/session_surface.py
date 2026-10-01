@@ -167,6 +167,79 @@ def main(argv: list[str]) -> int:
     # is present; omitting it reduced every session to a straight main line.
     snap["lanes"] = lanes.summary(rows)
     source_tree_schema.annotate_rows(rows)
+
+    # Node details are part of the primary evidence surface.  The fast follow
+    # path used to omit these fields, leaving clickable nodes with no record of
+    # why a path diverged, when it recovered, or what the owner had marked.
+    try:
+        import goalgate
+        last_correction = next(
+            (i for i in range(len(rows) - 1, -1, -1)
+             if rows[i].get("corrected_by_owner")), None)
+        since = (len(rows) - 1 - last_correction
+                 if last_correction is not None else None)
+        actions: list[str] = []
+        for row in rows[-12:]:
+            if row.get("ai_text"):
+                actions.append(str(row["ai_text"]))
+            actions.extend(str(dot.get("detail")) for dot in row.get("dots", [])
+                           if dot.get("detail"))
+        gate = goalgate.gate(actions=actions, turns_since_owner=since)
+        alerts = vitals.drift_alerts(rows, gate)
+        by_n = {item["n"]: item for item in alerts}
+        for row in rows:
+            alert = by_n.get(row.get("n"))
+            if alert:
+                row["drift_alert"] = dict(
+                    alert, prompt=vitals.drift_prompt(alert))
+        snap["goal_gate"] = gate
+        snap["drift_alerts"] = len(alerts)
+    except Exception as exc:
+        snap["goal_gate"] = {"ok": False, "note": str(exc)[:160]}
+        snap["drift_alerts"] = 0
+
+    try:
+        import divergence
+        snap["divergence"] = divergence.summary(rows)
+    except Exception as exc:
+        snap["divergence"] = {"has": False, "why": str(exc)[:160]}
+    try:
+        import latency
+        snap["latency"] = latency.summary(rows)
+    except Exception as exc:
+        snap["latency"] = {"has": False, "why": str(exc)[:160]}
+
+    session_for_records = (_SESSION_ID_RE.search(target.name).group(1)
+                           if _SESSION_ID_RE.search(target.name)
+                           else target.stem)
+    try:
+        import notes
+        notes_by_turn = notes.by_turn(session_for_records)
+        for row in rows:
+            found = notes_by_turn.get(int(row.get("n") or 0))
+            if found:
+                row["notes"] = [{"text": item.get("text", ""),
+                                 "at": item.get("at")} for item in found]
+        snap["notes"] = notes.summary(session_for_records)
+    except Exception as exc:
+        snap["notes"] = {"total": 0, "turns": [], "why": str(exc)[:160]}
+    try:
+        import checkpoint
+        saved = checkpoint.load(session=session_for_records)
+        by_turn: dict[int, list[dict]] = {}
+        for item in saved:
+            by_turn.setdefault(int(item.get("n") or 0), []).append(item)
+        for row in rows:
+            found = by_turn.get(int(row.get("n") or 0))
+            if found:
+                row["checkpoint"] = {
+                    "n": len(found),
+                    "last_good": any(item.get("last_good") for item in found),
+                    "reason": found[-1].get("reason", ""),
+                }
+        snap["checkpoints"] = checkpoint.summary(session_for_records)
+    except Exception as exc:
+        snap["checkpoints"] = {"total": 0, "rows": [], "why": str(exc)[:160]}
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)
     session = id_match.group(1) if id_match else target.stem

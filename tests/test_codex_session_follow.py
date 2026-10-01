@@ -274,6 +274,12 @@ def test_fast_surface_keeps_problem_branch_lanes(
     assert data["lanes"]["total"] >= 1
     assert any(item["kind"] == "BLIND_WRITE"
                for item in data["lanes"]["lanes"])
+    assert "goal_gate" in data
+    assert "drift_alerts" in data
+    assert "divergence" in data
+    assert "latency" in data
+    assert "notes" in data
+    assert "checkpoints" in data
 
 
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
