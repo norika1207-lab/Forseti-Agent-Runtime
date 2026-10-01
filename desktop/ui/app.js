@@ -1439,7 +1439,6 @@ function renderGate(d) {
 
 /* 三張卡片。bible.md I-04。
    點「用這句」把話放進剪貼簿 —— 她要做的事就只剩貼上去。 */
-let cardsOpen = false;
 /* 展開過的卡片。renderCards 每次 tick 會重建 innerHTML，
    不記住的話她點開的東西兩秒後就自己關上。 */
 const cardsWhy = new Set();
@@ -1449,7 +1448,7 @@ function renderCards(d) {
   if (!box) return;
   const cs = d.cards || [];
   if (!cs.length) { box.innerHTML = ""; return; }
-  const show = cardsOpen ? cs : cs.slice(0, 1);
+  const show = cs.slice(0, 3);
   box.innerHTML = show.map((c, i) => `
     <div class="card2${i === 0 ? " hot" : ""}" data-k="${esc(c.key)}">
       <div class="t">${esc(c.title)}</div>
@@ -1465,11 +1464,7 @@ function renderCards(d) {
         <li><span class="k">信心</span><span>${esc(c.confidence || "")}</span></li>
         <li><span class="k">不理會</span><span>${esc(c.if_ignored || "")}</span></li>
       </ul>
-    </div>`).join("") +
-    (cs.length > 1
-      ? `<button class="more" type="button">${
-          cardsOpen ? "收起" : `還有 ${cs.length - 1} 個建議`}</button>`
-      : "");
+    </div>`).join("");
 
   box.querySelectorAll(".card2").forEach((el, i) => {
     const k = el.dataset.k;
@@ -1486,10 +1481,6 @@ function renderCards(d) {
       catch { e.target.textContent = "複製不了，請手動選取"; }
       setTimeout(() => { e.target.textContent = "用這句"; }, 1800);
     });
-  });
-  box.querySelector(".more")?.addEventListener("click", () => {
-    cardsOpen = !cardsOpen;
-    renderCards(lastSnap || d);
   });
 }
 
@@ -1984,10 +1975,11 @@ function renderTree() {
 
     const time = document.createElement("div");
     time.className = "time";
-    time.innerHTML = hhmmss(s.started_at) +
+    time.innerHTML = `<span class="clock">${hhmmss(s.started_at)}</span>` +
       `<span class="dur">${s.growing ? "長中" : dur(s.duration)}</span>`;
 
-    wrap.append(gut, body, time);
+    body.prepend(time);
+    wrap.append(gut, body);
     // 用真實元素不用偽元素:`.st::after` 被粉紅點的角標佔著、
     // `::before` 被 checkpoint 佔著、左緣的 inset 陰影被分歧點佔著。
     // 同一輪可能同時是這幾種,共用任何一個都會讓後寫的蓋掉前面的。

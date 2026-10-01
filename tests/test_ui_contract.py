@@ -1283,5 +1283,26 @@ class NoNetworkFonts(unittest.TestCase):
         self.assertNotIn("@import", CSS)
 
 
+class KeyNodeRecommendationsAndCardTime(unittest.TestCase):
+    """關鍵節點的三個方向與卡片時間位置不得再次退化。"""
+
+    def test_key_node_shows_three_recommendations_without_collapsing(self):
+        self.assertIn("const show = cs.slice(0, 3);", JS)
+        self.assertNotIn("cs.slice(0, 1)", JS)
+        self.assertNotIn("cardsOpen", JS)
+
+    def test_time_is_inside_the_conversation_card(self):
+        self.assertIn("body.prepend(time);", JS)
+        self.assertIn("wrap.append(gut, body);", JS)
+        self.assertNotIn("wrap.append(gut, body, time);", JS)
+
+    def test_timeline_has_no_separate_right_time_column(self):
+        rule = re.search(r"\.st\{([^}]*)\}", CSS, re.S)
+        self.assertIsNotNone(rule)
+        self.assertIn("grid-template-columns:var(--lane-x) minmax(0,1fr)",
+                      rule.group(1))
+        self.assertNotIn("50px", rule.group(1))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
