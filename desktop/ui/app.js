@@ -1679,6 +1679,47 @@ function showLaneEvent(e, it, event, pinned = false) {
   pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, y + 12)) + "px";
 }
 
+function laneStateForRow(it, row) {
+  const events = (it.events || []).slice().sort((a, b) => Number(a.n) - Number(b.n));
+  const exact = events.find((event) => Number(event.n) === Number(row.n));
+  if (exact) return exact;
+  const prior = events.filter((event) => Number(event.n) < Number(row.n));
+  const before = prior.length ? prior[prior.length - 1] : null;
+  const after = events.find((event) => Number(event.n) > Number(row.n));
+  const semantic = row.path_semantics || {};
+  const owner = flat(row.owner_text).slice(0, 180) || "這一輪沒有新的使用者指令";
+  const answer = flat(row.ai_text).slice(0, 180) || "這一輪尚未留下 AI 回答";
+  const index = Math.max(1, events.filter((event) => Number(event.n) <= Number(row.n)).length);
+  return {
+    n: row.n,
+    title: `${it.label || it.kind || "問題"}延續狀態`,
+    why: `第 ${row.n} 輪仍位於這條問題軌道；這裡顯示的是當輪狀態，不是整段摘要。`,
+    evidence: semantic.evidence || answer,
+    objective: row.active_goal_objective || "",
+    goal_version: row.active_goal_version || "?",
+    distance: row.goal?.distance,
+    support: row.goal?.support,
+    coverage: row.goal?.coverage,
+    chain: {
+      index: `${index}.${row.n}`,
+      total: events.length || 1,
+      relation: before ? `承接第 ${before.n} 輪後仍未收斂` : "問題軌道起點後的延續狀態",
+      predecessor: before
+        ? `第 ${before.n} 輪：${before.title || it.label || "前一個事件"}`
+        : `第 ${it.from_n} 輪：問題軌道開始`,
+      current: `使用者：${owner}；AI：${answer}`,
+      consequence: after
+        ? `下一個可查事件在第 ${after.n} 輪：${after.title || it.label || "狀態更新"}`
+        : `到第 ${it.to_n} 輪仍在這條軌道上`,
+      successor: after
+        ? `第 ${after.n} 輪將更新判定`
+        : (it.open ? "尚未收斂，等待後續可驗證動作" : "其後接回主線"),
+      epistemic: "逐輪狀態",
+      basis: `依第 ${row.n} 輪對話與相鄰原始事件還原`,
+    },
+  };
+}
+
 const DIVERGENCE_LABEL = {
   susp: "最早警訊",
   conf: "確認偏離",
@@ -1749,7 +1790,7 @@ function drawDrift() {
   const lane = $("lane");
   if (!lane) return;
   lane.querySelector(".drift")?.remove();
-  lane.querySelectorAll(".laneButton,.laneEventButton").forEach((el) => el.remove());
+  lane.querySelectorAll(".laneButton,.laneEventButton,.laneStateButton").forEach((el) => el.remove());
   const guts = [...lane.querySelectorAll(".st .gut")];
   if (guts.length < 2) return;
 
@@ -1791,9 +1832,11 @@ function drawDrift() {
   const packed = packLanes(raw);
   const laneRegions = [];
   const laneEventRegions = [];
+  const laneStateRegions = [];
   const showNearestLaneEvent = (e, it) => {
-    const candidates = (it.events || [])
-      .map((event) => ({event, point: yOf.get(Number(event.n))}))
+    const candidates = rows
+      .filter((row) => Number(row.n) >= Number(it.from_n) && Number(row.n) <= Number(it.to_n))
+      .map((row) => ({event: laneStateForRow(it, row), point: yOf.get(Number(row.n))}))
       .filter((item) => item.point);
     if (!candidates.length) {
       showLaneReason(e, it, true);
@@ -1895,6 +1938,18 @@ function drawDrift() {
       });
       svg.appendChild(eventHit);
       laneEventRegions.push({it, event, x, y: cy});
+    });
+
+    pts.filter((point) => point.n >= it.from_n && point.n <= it.to_n).forEach((point) => {
+      const row = rows.find((item) => Number(item.n) === Number(point.n));
+      if (!row) return;
+      laneStateRegions.push({
+        it,
+        event: laneStateForRow(it, row),
+        exact: (it.events || []).some((event) => Number(event.n) === Number(point.n)),
+        x,
+        y: (point.y0 + point.y1) / 2,
+      });
     });
   });
 
@@ -2004,6 +2059,21 @@ function drawDrift() {
   });
 
   lane.appendChild(svg);
+  laneStateRegions.forEach(({it, event, exact, x, y}) => {
+    const button = document.createElement("button");
+    button.className = `laneStateButton ${LANE_CLS[it.kind] || "ld"}${exact ? " exact" : ""}`;
+    button.type = "button";
+    button.setAttribute("aria-label",
+      `第 ${event.n} 輪，${event.title || it.label || "問題狀態"}，點擊查看當輪因果狀態`);
+    button.title = `第 ${event.n} 輪：查看當輪因果狀態`;
+    button.style.left = `${x - (exact ? 7 : 5)}px`;
+    button.style.top = `${y - (exact ? 7 : 5)}px`;
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showLaneEvent(e, it, event, true);
+    });
+    lane.appendChild(button);
+  });
   // WKWebView does not consistently expose transparent SVG circles as real
   // pointer targets. Keep the SVG for drawing, but put a visible HTML button
   // above every event so a point can never fall through to the lane summary.
