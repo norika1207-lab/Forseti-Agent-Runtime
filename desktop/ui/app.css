@@ -267,7 +267,9 @@ button{font:inherit;cursor:pointer;color:inherit}
 .gut .v{position:absolute;left:7px;top:0;bottom:0;width:1.5px;
   border-radius:1px}
 .gut .cap{position:absolute;left:3.75px;width:8px;height:8px;
-  border-radius:50%;box-shadow:0 0 0 3px var(--bg)}
+  border-radius:50%;box-shadow:0 0 0 3px var(--bg);border:0;padding:0;cursor:pointer}
+.gut .cap::after{content:"";position:absolute;inset:-6px;border-radius:50%}
+.gut .cap:hover,.gut .cap:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 .gut .cap.s{top:-1px}
 .gut .cap.e{bottom:-1px}
 /* 壓縮的錨。**環，不是實心** ——
@@ -445,6 +447,15 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pop .laneTipTitle{font:600 12px/1.45 var(--sans);color:var(--ink);margin-bottom:5px}
 .pop .laneTipWhy{font:400 11px/1.55 var(--sans);color:var(--ink-2)}
 .pop .laneTipMeta{font:500 9.5px/1.5 var(--mono);color:var(--ink-4);margin-top:7px}
+.pop .pointDecision p{margin:4px 0;color:var(--ink-2);font:400 11px/1.5 var(--sans)}
+.pop .pointDecision span,.pop .pointDirection{display:block;margin-top:5px;color:var(--ink-4);font:500 9.5px/1.45 var(--mono)}
+.pop .pointVerdict{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
+.pop .pointVerdict b{color:var(--ink);font:600 11px/1.4 var(--sans)}
+.pop .pointVerdict span{color:var(--ink-4);font:500 9.5px/1.4 var(--mono)}
+.pop blockquote{margin:7px 0 0;padding-left:8px;border-left:2px solid var(--ink-4);color:var(--ink-3)}
+.pop .pointDivergence{display:flex;justify-content:space-between;margin-top:8px;padding-top:7px;border-top:.5px solid var(--hair)}
+.pop .pointDivergence.cons b{color:var(--red)}
+.pop .pointDivergence.conf b,.pop .pointDivergence.susp b{color:var(--amber)}
 
 /* ── List §12 ───────────────────────────────── */
 .fam{margin:14px 16px;border-radius:var(--r-xl);background:var(--surface);

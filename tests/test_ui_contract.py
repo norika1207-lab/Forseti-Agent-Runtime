@@ -469,10 +469,12 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         root = CSS.split(".drift{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:auto", root)
 
-    def test_each_conversation_dot_opens_its_semantic_evidence(self):
+    def test_each_conversation_dot_opens_distinct_point_in_time_judgment(self):
         self.assertIn('setAttribute("class", "nodeHit")', JS)
         self.assertIn('hit.setAttribute("role", "button")', JS)
-        self.assertIn('openNode(row)', JS)
+        self.assertIn('showPointJudgment(e, row, "judgment", true)', JS)
+        point_fn = JS.split("function showPointJudgment", 1)[1].split("\n}\n", 1)[0]
+        self.assertNotIn("openNode(", point_fn)
         self.assertIn('semantic.meaning', JS)
         block = CSS.split(".drift .nodeHit{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:all", block)
@@ -480,6 +482,16 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         self.assertIn("當時生效方向", JS)
         self.assertIn("active_goal_objective", JS)
         self.assertIn("active_goal_from_n", JS)
+
+    def test_large_turn_endpoints_explain_start_and_end(self):
+        self.assertIn('class="cap s${bigCap}" type="button"', JS)
+        self.assertIn('class="cap e" type="button"', JS)
+        self.assertIn('showPointJudgment(e, s, "start", true)', JS)
+        self.assertIn('showPointJudgment(e, s, "end", true)', JS)
+        self.assertIn("divergenceAtTurn", JS)
+        self.assertIn("DIVERGENCE_LABEL", JS)
+        cap = CSS.split(".gut .cap{", 1)[1].split("}", 1)[0]
+        self.assertIn("cursor:pointer", cap)
 
 
 class NoShadowedDefinitions(unittest.TestCase):

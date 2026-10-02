@@ -1631,6 +1631,60 @@ function showLaneReason(e, it, pinned = false) {
   pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, y + 12)) + "px";
 }
 
+const DIVERGENCE_LABEL = {
+  susp: "最早警訊",
+  conf: "確認偏離",
+  cons: "造成後果",
+};
+
+function divergenceAtTurn(n) {
+  const d = (lastSnap || {}).divergence;
+  if (!d || !d.has) return null;
+  const ranges = [["cons", d.first_consequential], ["conf", d.earliest_confirmed],
+    ["susp", d.earliest_suspicious]];
+  const found = ranges.find(([, range]) =>
+    range && n >= Number(range[0]) && n <= Number(range[1]));
+  return found ? {kind: found[0], range: found[1]} : null;
+}
+
+/* 時間軸的點回答「那一刻系統怎麼判斷」；卡片才負責完整對話與動作。 */
+function showPointJudgment(e, row, phase = "judgment", pinned = false) {
+  const pop = $("pop");
+  if (!pop) return;
+  const semantic = row.path_semantics || {};
+  const divergence = divergenceAtTurn(Number(row.n));
+  const direction = flat(row.active_goal_objective).slice(0, 360);
+  const isStart = phase === "start";
+  const phaseLabel = isStart ? "本輪開始" : phase === "end" ? "本輪結束" : "當下判定";
+  const directionChange = row.direction_decision
+    ? "使用者在這一輪改變了方向"
+    : `沿用第 ${row.active_goal_from_n ?? row.n} 輪起的方向`;
+  const divergenceHtml = divergence
+    ? `<div class="pointDivergence ${esc(divergence.kind)}"><b>${esc(DIVERGENCE_LABEL[divergence.kind])}</b>` +
+      `<span>第 ${esc(divergence.range[0])} 至 ${esc(divergence.range[1])} 輪</span></div>`
+    : "";
+
+  pop.dataset.lane = "0";
+  pop.dataset.point = "1";
+  pop.dataset.pinned = pinned ? "1" : "0";
+  pop.innerHTML =
+    `<div class="laneTipTitle">第 ${esc(row.n)} 輪 · ${phaseLabel}</div>` +
+    (isStart
+      ? `<div class="pointDecision"><b>當時生效方向 v${esc(row.active_goal_version || "?")}</b>` +
+        `<p>${esc(direction || "這一輪之前沒有可還原的明確方向。")}</p>` +
+        `<span>${esc(directionChange)}</span></div>`
+      : `<div class="pointVerdict ${esc(semantic.state || "neutral")}"><b>${esc(semantic.label || "資料不足")}</b>` +
+        `<span>${esc(semantic.actor ? `責任：${semantic.actor}` : "尚未能歸責")}</span></div>` +
+        `<div class="laneTipWhy">${esc(semantic.meaning || semantic.why || "尚無足夠證據")}</div>` +
+        (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "") +
+        divergenceHtml +
+        `<div class="pointDirection">當時方向 v${esc(row.active_goal_version || "?")} · ${esc(directionChange)}</div>`);
+  pop.hidden = false;
+  const x = Number(e.clientX || 0), y = Number(e.clientY || 0);
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - 310, x + 12)) + "px";
+  pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, y + 12)) + "px";
+}
+
 /* 同時開著的軌道要各佔一條 x。貪心配置:找第一條已經空出來的，
    沒有就開新的。軌道編號一旦給出去就不再變，眼睛才追得住。 */
 function packLanes(items) {
@@ -1795,9 +1849,8 @@ function drawDrift() {
     c.setAttribute("fill", colorOf(p.k, p.d));
     add(c, "node");
 
-    // The visible dot is deliberately small, so give every conversation turn
-    // a stable keyboard-accessible target. It opens the same evidence sheet as
-    // the turn card, including the reason and evidence in path_semantics.
+    // This point owns the judgment made then; the adjacent card owns the full
+    // transcript and actions. They must not open duplicate content.
     const row = rows.find((item) => Number(item.n) === p.n);
     if (row) {
       const semantic = row.path_semantics || {};
@@ -1812,12 +1865,12 @@ function drawDrift() {
         `第 ${p.n} 輪，${semantic.label || "資料不足"}，點擊查看原因`);
       hit.addEventListener("click", (e) => {
         e.stopPropagation();
-        openNode(row);
+        showPointJudgment(e, row, "judgment", true);
       });
       hit.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          openNode(row);
+          showPointJudgment(e, row, "judgment", true);
         }
       });
       svg.appendChild(hit);
@@ -1938,9 +1991,19 @@ function renderTree() {
     const bigCap = s.compaction ? " big" : "";
     gut.innerHTML =
       `<span class="v" style="background:linear-gradient(var(--green),${col})"></span>` +
-      `<span class="cap s${bigCap}" style="background:${s.compaction ? "" : col}"></span>` +
+      `<button class="cap s${bigCap}" type="button" style="background:${s.compaction ? "" : col}" ` +
+      `aria-label="第 ${s.n} 輪開始，查看當時方向"></button>` +
       (s.growing ? "" :
-        `<span class="cap e" style="background:${col}"></span>`);
+        `<button class="cap e" type="button" style="background:${col}" ` +
+        `aria-label="第 ${s.n} 輪結束，查看當時判定"></button>`);
+    gut.querySelector(".cap.s")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showPointJudgment(e, s, "start", true);
+    });
+    gut.querySelector(".cap.e")?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showPointJudgment(e, s, "end", true);
+    });
 
     const body = document.createElement("button");
     body.className = "body";
