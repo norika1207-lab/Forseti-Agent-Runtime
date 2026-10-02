@@ -1720,6 +1720,47 @@ function laneStateForRow(it, row) {
   };
 }
 
+function showLatencyState(e, row, episode) {
+  const open = episode.recovery === "STILL_OPEN" || episode.still_open;
+  const recovered = open
+    ? "這段到目前仍未回到中軸"
+    : `第 ${episode.to_n} 輪由${episode.recovered_by || "後續動作"}拉回`;
+  const semantic = row.path_semantics || {};
+  const event = {
+    n: row.n,
+    title: open ? "偏離仍未收斂" : "修正延遲中的當輪狀態",
+    why: `此輪位於第 ${episode.from_n} 至 ${episode.to_n} 輪的修正延遲段；${recovered}。`,
+    evidence: semantic.evidence || flat(row.ai_text).slice(0, 240),
+    objective: row.active_goal_objective || "",
+    goal_version: row.active_goal_version || "?",
+    distance: row.goal?.distance,
+    support: row.goal?.support,
+    coverage: row.goal?.coverage,
+    chain: {
+      index: `${Number(row.n) - Number(episode.from_n) + 1}`,
+      total: episode.turns || (Number(episode.to_n) - Number(episode.from_n) + 1),
+      relation: row.n === episode.from_n ? "偏離段起點" : "偏離後尚未完成修正",
+      predecessor: row.n === episode.from_n
+        ? `第 ${episode.from_n} 輪開始偏離`
+        : `第 ${Number(row.n) - 1} 輪後仍未收斂`,
+      current: `第 ${row.n} 輪：${semantic.label || semantic.why || "延遲段持續中"}`,
+      consequence: recovered,
+      successor: open
+        ? "等待可驗證的校正動作"
+        : `第 ${episode.to_n} 輪後回到中軸`,
+      epistemic: episode.recovery === "SELF_RECOVERED" ? "推定狀態" : "可觀測狀態",
+      basis: episode.caveat || `依修正延遲事件第 ${episode.from_n} 至 ${episode.to_n} 輪還原`,
+    },
+  };
+  showLaneEvent(e, {
+    kind: "DRIFT",
+    label: "修正延遲",
+    from_n: episode.from_n,
+    to_n: episode.to_n,
+    open,
+  }, event, true);
+}
+
 const DIVERGENCE_LABEL = {
   susp: "最早警訊",
   conf: "確認偏離",
@@ -2383,8 +2424,17 @@ function renderTree() {
     // 同一輪可能同時是這幾種,共用任何一個都會讓後寫的蓋掉前面的。
     // 這是 TC-LT-03 釘住的那件事。
     if (wrap.dataset.lt) {
-      const ltm = document.createElement("i");
+      const ltm = document.createElement("button");
       ltm.className = "ltm";
+      ltm.type = "button";
+      const episode = ((lastSnap || {}).latency?.episodes || []).find((item) =>
+        item.from_n != null && item.to_n != null && s.n >= item.from_n && s.n <= item.to_n);
+      ltm.setAttribute("aria-label", `第 ${s.n} 輪，查看修正延遲的當輪狀態`);
+      ltm.title = `第 ${s.n} 輪：查看修正延遲狀態`;
+      ltm.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (episode) showLatencyState(e, s, episode);
+      });
       wrap.append(ltm);
     }
     lane.appendChild(wrap);

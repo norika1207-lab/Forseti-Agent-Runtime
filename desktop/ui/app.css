@@ -1458,7 +1458,9 @@ button{font:inherit;cursor:pointer;color:inherit}
 /* 【顏色與畫法不綁在 .st 上】圖例那邊用同一份定義。
    §23 的原話:樣本要用畫面上真正在用的那個 class,
    另外畫一張示意圖的話,它會跟實作分岔。 */
-[data-lt] .ltm{border-radius:1px;background:currentColor}
+[data-lt] .ltm{border:0;border-radius:0;background:transparent;padding:0}
+[data-lt] .ltm::before{content:"";position:absolute;left:4px;top:0;bottom:0;
+  width:2px;border-radius:1px;background:currentColor}
 
 /* 【三色的證據等級不一樣,畫法跟著不一樣】§14.3
    紅跟琥珀是 OBSERVED:她按了打斷、她貼了終端機輸出,
@@ -1470,24 +1472,27 @@ button{font:inherit;cursor:pointer;color:inherit}
 [data-lt="owner"] .ltm{color:var(--red)}
 [data-lt="open"] .ltm{color:var(--amber)}
 [data-lt="self"] .ltm{color:var(--green);
-  background:repeating-linear-gradient(
+  background:transparent}
+[data-lt="self"] .ltm::before{background:repeating-linear-gradient(
     currentColor 0 3px, transparent 3px 6px)}
 
 /* 時間軸上的位置:checkpoint 佔 4 到 16px,這一條 20px,主線 23px。 */
-.st .ltm{position:absolute;left:20px;top:0;bottom:0;width:2px;
-  pointer-events:none}
+.st .ltm{position:absolute;z-index:6;left:16px;top:0;bottom:0;width:10px;
+  min-height:10px;pointer-events:auto;cursor:pointer}
+.st .ltm:focus-visible{outline:2px solid var(--blue);outline-offset:1px}
 
 /* 圖例裡的位置。 */
 .swatch.lgLt{position:relative;display:inline-block;
   width:16px;height:14px;vertical-align:middle}
 .swatch.lgLt .ltm{position:absolute;left:7px;top:0;bottom:0;width:2px}
+.swatch.lgLt .ltm::before{left:0}
 
 /* 收尾端點。還開著的那一段沒有這個。
    畫了等於說「這裡結束了」,而那段其實還開著。TC-LT-02
    用 currentColor 不用 inherit:綠色那一條的 background 是漸層,
    inherit 會把整條漸層連位置一起搬過來。 */
 [data-lt-end] .ltm::after{content:"";position:absolute;
-  left:-2px;bottom:0;width:6px;height:2px;border-radius:1px;
+  left:2px;bottom:0;width:6px;height:2px;border-radius:1px;
   background:currentColor}
 
 /* 退回去的那一格。§17 / ROADMAP P0.1

@@ -236,12 +236,14 @@ class TCLT03不跟既有標記搶偽元素(unittest.TestCase):
         self.assertIn("[data-lt-end] .ltm::after{", self.css,
                       "收尾端點沒有掛在 .ltm 自己的偽元素上")
 
-    def test_不擋點擊(self):
-        """左緣那一條蓋在 .st 上,吃到點擊的話那一輪就打不開。"""
+    def test_線本身只在窄命中區開啟當輪狀態(self):
+        """線要能查當輪狀態，但命中區不能蓋住右側的對話卡。"""
         block = self.css[self.css.index(".st .ltm{"):]
         block = block[:block.index("}")]
-        self.assertIn("pointer-events:none", block,
-                      ".ltm 會吃掉點擊,那一輪的面板就打不開了")
+        self.assertIn("width:10px", block)
+        self.assertIn("pointer-events:auto", block)
+        self.assertIn("showLatencyState(e, s, episode)", self.js)
+        self.assertIn("e.stopPropagation()", self.js)
 
 
 if __name__ == "__main__":
