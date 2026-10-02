@@ -294,6 +294,8 @@ def test_overlapping_same_kind_findings_share_one_visual_lane():
     assert betrayal_lanes[0]["from_n"] == 1
     assert betrayal_lanes[0]["to_n"] == 3
     assert betrayal_lanes[0]["issues"] == 2
+    assert [e["why"] for e in betrayal_lanes[0]["events"]] == ["first", "second"]
+    assert [e["n"] for e in betrayal_lanes[0]["events"]] == [1, 2]
 
 
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(

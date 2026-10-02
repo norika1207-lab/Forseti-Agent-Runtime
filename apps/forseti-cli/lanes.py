@@ -87,17 +87,20 @@ def lanes(rows: list) -> list[dict]:
     out: list[dict] = []
 
     for a, b, openish in _runs(rows, lambda r: (r.get("failed") or 0) > 0):
-        out.append({"kind": "TOOL_FAIL", "from_n": a, "to_n": b, "open": openish})
+        out.append({"kind": "TOOL_FAIL", "from_n": a, "to_n": b, "open": openish,
+                    "events": [{"n": a, "why": "這一輪有工具執行失敗"}]})
 
     for a, b, openish in _runs(
             rows, lambda r: ((r.get("goal") or {}).get("distance") or 0) > DRIFT_ON):
-        out.append({"kind": "DRIFT", "from_n": a, "to_n": b, "open": openish})
+        out.append({"kind": "DRIFT", "from_n": a, "to_n": b, "open": openish,
+                    "events": [{"n": a, "why": "目標距離在這一輪超過門檻"}]})
 
     for a, b, openish in _runs(
             rows,
             lambda r: (r.get("read") or 0) > 0 and (r.get("write") or 0) == 0,
             min_len=BLIND_MIN):
-        out.append({"kind": "BLIND_WRITE", "from_n": a, "to_n": b, "open": openish})
+        out.append({"kind": "BLIND_WRITE", "from_n": a, "to_n": b, "open": openish,
+                    "events": [{"n": a, "why": "從這一輪起連續只有讀取、沒有寫入"}]})
 
     # 白點:那一輪說了沒做。收回來的條件是後面真的有寫入動作 ——
     # 「宣稱終於落地」。找不到就是一路開著。
@@ -109,14 +112,22 @@ def lanes(rows: list) -> list[dict]:
             if (later.get("write") or 0) > 0:
                 end, closed = _n(later), True
                 break
+        events = []
+        for finding in (r.get("betrayals") or []):
+            event = {k: finding.get(k) for k in
+                     ("kind", "title", "why", "hit", "target", "advice", "fp", "grade")
+                     if finding.get(k) not in (None, "")}
+            event["n"] = _n(r)
+            events.append(event)
         out.append({"kind": "BETRAYAL", "from_n": _n(r), "to_n": end,
-                    "open": not closed})
+                    "open": not closed, "events": events})
 
     # 壓縮:沒有收回來的條件，一路畫到底。
     for r in rows:
         if r.get("compaction"):
             out.append({"kind": "COMPACT", "from_n": _n(r),
-                        "to_n": _n(rows[-1]), "open": True})
+                        "to_n": _n(rows[-1]), "open": True,
+                        "events": [{"n": _n(r), "why": "這一輪發生對話壓縮"}]})
 
     for x in out:
         x["turns"] = max(1, x["to_n"] - x["from_n"] + 1)
@@ -136,6 +147,7 @@ def lanes(rows: list) -> list[dict]:
             current["to_n"] = max(current["to_n"], item["to_n"])
             current["open"] = current["open"] or item["open"]
             current["issues"] += item.get("issues", 1)
+            current.setdefault("events", []).extend(item.get("events", []))
             current["turns"] = current["to_n"] - current["from_n"] + 1
             current["label"] = (
                 f"{_LABEL.get(current['kind'], current['kind'])} "

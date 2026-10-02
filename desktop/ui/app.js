@@ -1631,6 +1631,29 @@ function showLaneReason(e, it, pinned = false) {
   pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, y + 12)) + "px";
 }
 
+function showLaneEvent(e, it, event, pinned = false) {
+  const pop = $("pop");
+  if (!pop) return;
+  const title = event.title || it.label || it.kind || "問題紀錄";
+  const claim = event.hit ? `當時宣稱：「${event.hit}」` : "";
+  const target = event.target ? `查核標的：${event.target}` : "";
+  pop.dataset.lane = "1";
+  pop.dataset.point = "0";
+  pop.dataset.pinned = pinned ? "1" : "0";
+  pop.innerHTML =
+    `<div class="laneTipTitle">第 ${esc(event.n)} 輪 · ${esc(title)}</div>` +
+    (claim ? `<div class="laneEventClaim">${esc(claim)}</div>` : "") +
+    `<div class="laneTipWhy">${esc(event.why || LANE_REASON[it.kind] || "這一輪建立了問題軌道。")}</div>` +
+    (target ? `<div class="laneEventTarget">${esc(target)}</div>` : "") +
+    (event.advice ? `<div class="laneEventAdvice">判定後建議：${esc(event.advice)}</div>` : "") +
+    `<div class="laneTipMeta">這是單筆紀錄 · 軌道總覽為第 ${it.from_n} 至 ${it.to_n} 輪` +
+    (event.fp ? ` · ${esc(event.fp)}` : "") + `</div>`;
+  pop.hidden = false;
+  const x = Number(e.clientX || 0), y = Number(e.clientY || 0);
+  pop.style.left = Math.max(8, Math.min(window.innerWidth - 310, x + 12)) + "px";
+  pop.style.top = Math.max(8, Math.min(window.innerHeight - pop.offsetHeight - 8, y + 12)) + "px";
+}
+
 const DIVERGENCE_LABEL = {
   susp: "最早警訊",
   conf: "確認偏離",
@@ -1797,6 +1820,38 @@ function drawDrift() {
         if (e.key === "Enter" || e.key === " ") showLaneReason(e, it, true);
       });
       svg.appendChild(hit);
+    });
+
+    // 線是整段問題的總覽；每顆節點則必須指回建立它的那一筆紀錄。
+    // 合併同類軌道不能把十二筆不同宣稱壓成十二顆同一句話的點。
+    (it.events || []).forEach((event, eventIndex) => {
+      const P = yOf.get(Number(event.n));
+      if (!P) return;
+      const cy = (P.y0 + P.y1) / 2 + Math.min(eventIndex, 2) * 3;
+      const dot = document.createElementNS(NS, "circle");
+      dot.setAttribute("cx", String(x));
+      dot.setAttribute("cy", String(cy));
+      dot.setAttribute("r", "5.5");
+      add(dot, `laneEvent ${LANE_CLS[it.kind] || "ld"}`);
+      const eventHit = document.createElementNS(NS, "circle");
+      eventHit.setAttribute("cx", String(x));
+      eventHit.setAttribute("cy", String(cy));
+      eventHit.setAttribute("r", "9");
+      eventHit.setAttribute("class", "laneEventHit");
+      eventHit.setAttribute("tabindex", "0");
+      eventHit.setAttribute("role", "button");
+      eventHit.setAttribute("aria-label", `第 ${event.n} 輪，${event.title || it.label || "問題紀錄"}`);
+      eventHit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        showLaneEvent(e, it, event, true);
+      });
+      eventHit.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          showLaneEvent(e, it, event, true);
+        }
+      });
+      svg.appendChild(eventHit);
     });
   });
 

@@ -447,6 +447,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pop .laneTipTitle{font:600 12px/1.45 var(--sans);color:var(--ink);margin-bottom:5px}
 .pop .laneTipWhy{font:400 11px/1.55 var(--sans);color:var(--ink-2)}
 .pop .laneTipMeta{font:500 9.5px/1.5 var(--mono);color:var(--ink-4);margin-top:7px}
+.pop .laneEventClaim{margin-bottom:5px;color:var(--ink);font:600 11px/1.5 var(--sans)}
+.pop .laneEventTarget,.pop .laneEventAdvice{margin-top:6px;color:var(--ink-3);font:500 10px/1.5 var(--mono)}
 .pop .pointDecision p{margin:4px 0;color:var(--ink-2);font:400 11px/1.5 var(--sans)}
 .pop .pointDecision span,.pop .pointDirection{display:block;margin-top:5px;color:var(--ink-4);font:500 9.5px/1.45 var(--mono)}
 .pop .pointVerdict{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}
@@ -1331,6 +1333,14 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .lane.ld{stroke:var(--amber)}     /* 偏離目標 */
 .drift .lane.lf{stroke:var(--blue)}      /* 工具失敗:誠實的失敗 */
 .drift .lane.lw{stroke:var(--violet)}    /* 只讀不寫 */
+.drift .laneEvent{stroke:var(--bg);stroke-width:2;pointer-events:none}
+.drift .laneEvent.lb{fill:var(--red)}
+.drift .laneEvent.ld{fill:var(--amber)}
+.drift .laneEvent.lf{fill:var(--blue)}
+.drift .laneEvent.lw{fill:var(--violet)}
+.drift .laneEvent.lc{fill:var(--ink-3)}
+.drift .laneEventHit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}
+.drift .laneEventHit:focus{outline:none;stroke:var(--blue);stroke-width:1.5}
 .drift .laneHit{fill:none;stroke:transparent;stroke-width:12;
   pointer-events:stroke;cursor:help}
 .drift .laneHit:focus{outline:none;stroke:color-mix(in srgb,var(--blue) 18%,transparent)}

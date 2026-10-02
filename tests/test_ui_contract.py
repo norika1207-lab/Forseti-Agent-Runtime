@@ -483,6 +483,16 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         self.assertIn("active_goal_objective", JS)
         self.assertIn("active_goal_from_n", JS)
 
+    def test_each_problem_event_node_opens_its_own_record_not_lane_summary(self):
+        self.assertIn('add(dot, `laneEvent ${LANE_CLS[it.kind] || "ld"}`)', JS)
+        self.assertIn('eventHit.setAttribute("class", "laneEventHit")', JS)
+        self.assertIn("showLaneEvent(e, it, event, true)", JS)
+        self.assertIn("event.hit", JS)
+        self.assertIn("event.target", JS)
+        self.assertIn("event.advice", JS)
+        block = CSS.split(".drift .laneEventHit{", 1)[1].split("}", 1)[0]
+        self.assertIn("pointer-events:all", block)
+
     def test_large_turn_endpoints_explain_start_and_end(self):
         self.assertIn('class="cap s${bigCap}" type="button"', JS)
         self.assertIn('class="cap e" type="button"', JS)
