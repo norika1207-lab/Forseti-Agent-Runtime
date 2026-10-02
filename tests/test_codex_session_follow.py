@@ -329,6 +329,29 @@ def test_drift_lane_nodes_keep_each_turns_judgment_and_direction():
     assert [e["why"] for e in drift_lane["events"]] == ["第一輪理由", "第二輪理由"]
     assert [e["objective"] for e in drift_lane["events"]] == ["方向甲", "方向乙"]
     assert [e["distance"] for e in drift_lane["events"]] == [.2, .4]
+    first, second = drift_lane["events"]
+    assert first["chain"]["relation"] == "DEPARTS_BASELINE"
+    assert first["chain"]["next_n"] == 2
+    assert second["chain"]["previous_n"] == 1
+    assert second["chain"]["relation"] == "DIRECTION_CHANGED"
+    assert second["chain"]["epistemic"] == "OBSERVED_OWNER_DIRECTION"
+    assert all(e["chain"]["current"] == e["why"] for e in (first, second))
+
+
+def test_drift_chain_marks_temporal_continuation_as_inferred_not_proven_cause():
+    rows = [
+        {"n": 4, "goal": {"support": .8, "distance": .2, "coverage": .5},
+         "path_semantics": {"why": "開始偏離"}, "active_goal_version": 2},
+        {"n": 5, "goal": {"support": .7, "distance": .3, "coverage": .6},
+         "path_semantics": {"why": "偏離擴大"}, "active_goal_version": 2,
+         "corrected_by_owner": True},
+    ]
+    drift = next(x for x in session_surface.lanes.lanes(rows) if x["kind"] == "DRIFT")
+    chain = drift["events"][1]["chain"]
+    assert chain["relation"] == "CONTINUES_DRIFT"
+    assert chain["epistemic"] == "INFERRED_SEQUENCE_NOT_CAUSAL_PROOF"
+    assert "增加 10 個百分點" in chain["predecessor"]
+    assert "使用者在本輪出手糾正" in chain["consequence"]
 
 
 def test_non_drift_lane_nodes_keep_structured_per_turn_activity():

@@ -114,6 +114,57 @@ def _events(rows: list, a: int, b: int, kind: str) -> list[dict]:
     return out
 
 
+def _link_drift_chain(events: list[dict], rows: list[dict]) -> list[dict]:
+    """Describe the drift progression without inventing unsupported causality."""
+    by_n = {_n(r): r for r in rows}
+    total = len(events)
+    for i, event in enumerate(events):
+        row = by_n.get(int(event["n"]), {})
+        prev = events[i - 1] if i else None
+        nxt = events[i + 1] if i + 1 < total else None
+        if prev is None:
+            relation = "DEPARTS_BASELINE"
+            predecessor = (f"第 {event['n']} 輪首次超過 {round(DRIFT_ON * 100)}% 偏離基線")
+            basis = event.get("why") or "目標距離超過門檻"
+            epistemic = "OBSERVED_METRIC"
+        elif event.get("goal_version") != prev.get("goal_version"):
+            relation = "DIRECTION_CHANGED"
+            predecessor = (f"第 {prev['n']} 輪後方向由 v{prev.get('goal_version', '?')} "
+                           f"改為 v{event.get('goal_version', '?')}")
+            basis = "歷史方向版本在相鄰節點間改變"
+            epistemic = "OBSERVED_OWNER_DIRECTION"
+        else:
+            relation = "CONTINUES_DRIFT"
+            delta = round((float(event.get("distance") or 0) -
+                           float(prev.get("distance") or 0)) * 100)
+            predecessor = (f"承接第 {prev['n']} 輪；偏離距離"
+                           f"{'增加' if delta > 0 else '減少' if delta < 0 else '持平'} "
+                           f"{abs(delta)} 個百分點")
+            basis = "相鄰輪次在同一方向版本下持續高於偏離基線"
+            epistemic = "INFERRED_SEQUENCE_NOT_CAUSAL_PROOF"
+
+        consequences = []
+        if row.get("corrected_by_owner"):
+            consequences.append("使用者在本輪出手糾正（可觀測人力代價）")
+        if (row.get("failed") or 0) > 0:
+            consequences.append(f"本輪發生 {row['failed']} 個工具失敗")
+        if row.get("betrayals"):
+            consequences.append(f"本輪出現 {len(row['betrayals'])} 筆宣稱與動作不符")
+        consequence = "；".join(consequences) or "本輪尚未觀測到可證實的下游後果"
+        successor = (f"接到第 {nxt['n']} 輪，偏離仍高於基線" if nxt
+                     else "這是本段最後一個偏離狀態；下一輪是否回線由後續資料判定")
+        event["chain"] = {
+            "index": i + 1, "total": total,
+            "previous_n": prev.get("n") if prev else None,
+            "next_n": nxt.get("n") if nxt else None,
+            "relation": relation, "predecessor": predecessor,
+            "current": event.get("why") or "偏離狀態",
+            "consequence": consequence, "successor": successor,
+            "basis": basis, "epistemic": epistemic,
+        }
+    return events
+
+
 def lanes(rows: list) -> list[dict]:
     """把一條線上所有沒收回來的問題算成軌道。
 
@@ -130,7 +181,7 @@ def lanes(rows: list) -> list[dict]:
     for a, b, openish in _runs(
             rows, lambda r: ((r.get("goal") or {}).get("distance") or 0) > DRIFT_ON):
         out.append({"kind": "DRIFT", "from_n": a, "to_n": b, "open": openish,
-                    "events": _events(rows, a, b, "DRIFT")})
+                    "events": _link_drift_chain(_events(rows, a, b, "DRIFT"), rows)})
 
     for a, b, openish in _runs(
             rows,

@@ -450,6 +450,13 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pop .laneEventClaim{margin-bottom:5px;color:var(--ink);font:600 11px/1.5 var(--sans)}
 .pop .laneEventTarget,.pop .laneEventAdvice,.pop .laneEventMetrics,.pop .laneEventDirection{margin-top:6px;color:var(--ink-3);font:500 10px/1.5 var(--mono)}
 .pop .laneEventDirection{color:var(--ink-2);font-family:var(--sans)}
+.pop .causalChain{margin-top:8px;padding-top:8px;border-top:.5px solid var(--hair)}
+.pop .chainPosition{margin-bottom:6px;color:var(--amber);font:600 10px/1.4 var(--mono)}
+.pop .chainStep{display:grid;grid-template-columns:48px 1fr;gap:7px;margin-top:4px}
+.pop .chainStep b{color:var(--ink-3);font:600 10px/1.45 var(--sans)}
+.pop .chainStep span{color:var(--ink-2);font:400 10.5px/1.5 var(--sans)}
+.pop .chainStep.current span{color:var(--ink);font-weight:550}
+.pop .chainBasis{margin-top:7px;color:var(--ink-4);font:500 9px/1.45 var(--mono)}
 .pop .pointDecision p{margin:4px 0;color:var(--ink-2);font:400 11px/1.5 var(--sans)}
 .pop .pointDecision span,.pop .pointDirection{display:block;margin-top:5px;color:var(--ink-4);font:500 9.5px/1.45 var(--mono)}
 .pop .pointVerdict{display:flex;justify-content:space-between;gap:10px;margin-bottom:6px}

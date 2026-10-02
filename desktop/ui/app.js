@@ -1647,6 +1647,16 @@ function showLaneEvent(e, it, event, pinned = false) {
     : event.failed != null ? `失敗動作 ${event.failed} 個` : "";
   const direction = event.objective
     ? `當時方向 v${event.goal_version || "?"}：${event.objective}` : "";
+  const chain = event.chain || null;
+  const chainHtml = chain
+    ? `<div class="causalChain">` +
+      `<div class="chainPosition">偏離關係鏈 ${esc(chain.index)} / ${esc(chain.total)} · ${esc(chain.relation)}</div>` +
+      `<div class="chainStep"><b>前因</b><span>${esc(chain.predecessor)}</span></div>` +
+      `<div class="chainStep current"><b>本輪</b><span>${esc(chain.current)}</span></div>` +
+      `<div class="chainStep"><b>後果</b><span>${esc(chain.consequence)}</span></div>` +
+      `<div class="chainStep"><b>下一狀態</b><span>${esc(chain.successor)}</span></div>` +
+      `<div class="chainBasis">${esc(chain.epistemic)} · ${esc(chain.basis)}</div></div>`
+    : "";
   pop.dataset.lane = "1";
   pop.dataset.point = "0";
   pop.dataset.pinned = pinned ? "1" : "0";
@@ -1657,6 +1667,7 @@ function showLaneEvent(e, it, event, pinned = false) {
     (metrics ? `<div class="laneEventMetrics">${esc(metrics)}</div>` : "") +
     (activity ? `<div class="laneEventMetrics">${esc(activity)}</div>` : "") +
     (direction ? `<div class="laneEventDirection">${esc(direction)}</div>` : "") +
+    chainHtml +
     (event.evidence ? `<blockquote>${esc(event.evidence)}</blockquote>` : "") +
     (target ? `<div class="laneEventTarget">${esc(target)}</div>` : "") +
     (event.advice ? `<div class="laneEventAdvice">判定後建議：${esc(event.advice)}</div>` : "") +
