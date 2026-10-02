@@ -146,7 +146,7 @@ def lanes(rows: list) -> list[dict]:
                 and item["from_n"] <= current["to_n"] + 1):
             current["to_n"] = max(current["to_n"], item["to_n"])
             current["open"] = current["open"] or item["open"]
-            current["issues"] += item.get("issues", 1)
+            current["issues"] += item.get("issues", max(1, len(item.get("events", []))))
             current.setdefault("events", []).extend(item.get("events", []))
             current["turns"] = current["to_n"] - current["from_n"] + 1
             current["label"] = (
@@ -154,7 +154,7 @@ def lanes(rows: list) -> list[dict]:
                 f"x{current['issues']}")
             continue
         copy = dict(item)
-        copy["issues"] = 1
+        copy["issues"] = max(1, len(copy.get("events", [])))
         merged.append(copy)
     merged.sort(key=lambda x: (x["from_n"], x["kind"]))
     return merged

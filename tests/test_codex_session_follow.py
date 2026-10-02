@@ -298,6 +298,17 @@ def test_overlapping_same_kind_findings_share_one_visual_lane():
     assert [e["n"] for e in betrayal_lanes[0]["events"]] == [1, 2]
 
 
+def test_lane_issue_count_counts_findings_not_only_turns():
+    rows = [
+        {"n": 1, "betrayals": [{"why": "first"}, {"why": "second"}], "write": 0},
+        {"n": 2, "betrayals": [], "write": 0},
+    ]
+    betrayal_lane = next(x for x in session_surface.lanes.lanes(rows)
+                         if x["kind"] == "BETRAYAL")
+    assert betrayal_lane["issues"] == 2
+    assert len(betrayal_lane["events"]) == 2
+
+
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
