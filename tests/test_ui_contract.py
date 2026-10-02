@@ -493,6 +493,8 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         self.assertIn("event.distance", JS)
         self.assertIn("event.objective", JS)
         self.assertIn("event.evidence", JS)
+        self.assertIn("event.read", JS)
+        self.assertIn("event.failed", JS)
         block = CSS.split(".drift .laneEventHit{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:all", block)
 

@@ -102,10 +102,13 @@ def _events(rows: list, a: int, b: int, kind: str) -> list[dict]:
         elif kind == "BLIND_WRITE":
             base.update({"title": "只讀未寫",
                          "why": f"這一輪讀取 {r.get('read') or 0} 次、寫入 {r.get('write') or 0} 次",
+                         "read": r.get("read") or 0,
+                         "write": r.get("write") or 0,
                          "evidence": semantic.get("evidence") or ""})
         elif kind == "TOOL_FAIL":
             base.update({"title": "工具執行失敗",
                          "why": f"這一輪記錄到 {r.get('failed') or 0} 個失敗動作",
+                         "failed": r.get("failed") or 0,
                          "evidence": semantic.get("evidence") or ""})
         out.append({k: v for k, v in base.items() if v not in (None, "")})
     return out

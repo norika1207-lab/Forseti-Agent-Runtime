@@ -331,6 +331,20 @@ def test_drift_lane_nodes_keep_each_turns_judgment_and_direction():
     assert [e["distance"] for e in drift_lane["events"]] == [.2, .4]
 
 
+def test_non_drift_lane_nodes_keep_structured_per_turn_activity():
+    rows = [
+        {"n": 1, "read": 2, "write": 0, "failed": 1, "goal": {"distance": 0}},
+        {"n": 2, "read": 4, "write": 0, "failed": 2, "goal": {"distance": 0}},
+        {"n": 3, "read": 1, "write": 0, "failed": 0, "goal": {"distance": 0}},
+    ]
+    got = session_surface.lanes.lanes(rows)
+    tool = next(x for x in got if x["kind"] == "TOOL_FAIL")
+    blind = next(x for x in got if x["kind"] == "BLIND_WRITE")
+    assert [(e["n"], e["failed"]) for e in tool["events"]] == [(1, 1), (2, 2)]
+    assert [(e["n"], e["read"], e["write"]) for e in blind["events"]] == [
+        (1, 2, 0), (2, 4, 0), (3, 1, 0)]
+
+
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))

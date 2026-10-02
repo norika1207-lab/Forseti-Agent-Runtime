@@ -1642,6 +1642,9 @@ function showLaneEvent(e, it, event, pinned = false) {
       `距離 ${Math.round(Number(event.distance || 0) * 100)}% · ` +
       `證據覆蓋 ${Math.round(Number(event.coverage || 0) * 100)}%`
     : "";
+  const activity = event.read != null
+    ? `讀取 ${event.read} 次 · 寫入 ${event.write || 0} 次`
+    : event.failed != null ? `失敗動作 ${event.failed} 個` : "";
   const direction = event.objective
     ? `當時方向 v${event.goal_version || "?"}：${event.objective}` : "";
   pop.dataset.lane = "1";
@@ -1652,6 +1655,7 @@ function showLaneEvent(e, it, event, pinned = false) {
     (claim ? `<div class="laneEventClaim">${esc(claim)}</div>` : "") +
     `<div class="laneTipWhy">${esc(event.why || LANE_REASON[it.kind] || "這一輪建立了問題軌道。")}</div>` +
     (metrics ? `<div class="laneEventMetrics">${esc(metrics)}</div>` : "") +
+    (activity ? `<div class="laneEventMetrics">${esc(activity)}</div>` : "") +
     (direction ? `<div class="laneEventDirection">${esc(direction)}</div>` : "") +
     (event.evidence ? `<blockquote>${esc(event.evidence)}</blockquote>` : "") +
     (target ? `<div class="laneEventTarget">${esc(target)}</div>` : "") +
