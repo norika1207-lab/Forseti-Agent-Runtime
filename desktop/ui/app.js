@@ -1749,7 +1749,7 @@ function drawDrift() {
   const lane = $("lane");
   if (!lane) return;
   lane.querySelector(".drift")?.remove();
-  lane.querySelectorAll(".laneButton").forEach((el) => el.remove());
+  lane.querySelectorAll(".laneButton,.laneEventButton").forEach((el) => el.remove());
   const guts = [...lane.querySelectorAll(".st .gut")];
   if (guts.length < 2) return;
 
@@ -1790,6 +1790,7 @@ function drawDrift() {
     .sort((p, q) => p.from_n - q.from_n);
   const packed = packLanes(raw);
   const laneRegions = [];
+  const laneEventRegions = [];
 
   packed.forEach((it) => {
     const A = yOf.get(it.from_n), B = yOf.get(it.to_n);
@@ -1877,6 +1878,7 @@ function drawDrift() {
         }
       });
       svg.appendChild(eventHit);
+      laneEventRegions.push({it, event, x, y: cy});
     });
   });
 
@@ -1986,6 +1988,24 @@ function drawDrift() {
   });
 
   lane.appendChild(svg);
+  // WKWebView does not consistently expose transparent SVG circles as real
+  // pointer targets. Keep the SVG for drawing, but put a visible HTML button
+  // above every event so a point can never fall through to the lane summary.
+  laneEventRegions.forEach(({it, event, x, y}) => {
+    const button = document.createElement("button");
+    button.className = `laneEventButton ${LANE_CLS[it.kind] || "ld"}`;
+    button.type = "button";
+    button.setAttribute("aria-label",
+      `第 ${event.n} 輪，${event.title || it.label || "問題紀錄"}，點擊查看單獨狀態`);
+    button.title = `第 ${event.n} 輪：查看單獨狀態`;
+    button.style.left = `${x - 7}px`;
+    button.style.top = `${y - 7}px`;
+    button.addEventListener("click", (e) => {
+      e.stopPropagation();
+      showLaneEvent(e, it, event, true);
+    });
+    lane.appendChild(button);
+  });
   laneRegions.forEach(({it, x, y0, y1}) => {
     const button = document.createElement("button");
     button.className = "laneButton";

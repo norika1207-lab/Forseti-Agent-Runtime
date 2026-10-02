@@ -1356,6 +1356,14 @@ button{font:inherit;cursor:pointer;color:inherit}
   border:1px solid currentColor;border-radius:50%;background:var(--bg);color:var(--ink-3);
   font:600 9px/12px var(--sans);cursor:help}
 .laneButton:focus-visible{outline:2px solid var(--blue);outline-offset:1px;border-radius:4px}
+.laneEventButton{position:absolute;z-index:4;width:14px;height:14px;min-height:14px;
+  padding:0;border:2px solid var(--bg);border-radius:50%;cursor:pointer;color:transparent}
+.laneEventButton.ld{background:var(--amber)}
+.laneEventButton.lb{background:var(--red)}
+.laneEventButton.lf{background:var(--blue)}
+.laneEventButton.lw{background:var(--violet)}
+.laneEventButton.lc{background:var(--ink-3)}
+.laneEventButton:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 
 /* 動作按鈕。會改帳本的東西，樣式要克制但按得到。 */
 .wk .acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;

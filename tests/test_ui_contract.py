@@ -502,6 +502,13 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         self.assertIn("chain.successor", JS)
         block = CSS.split(".drift .laneEventHit{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:all", block)
+        self.assertIn("const laneEventRegions = []", JS)
+        self.assertIn("laneEventRegions.push({it, event, x, y: cy})", JS)
+        self.assertIn('button.className = `laneEventButton ${LANE_CLS[it.kind] || "ld"}`', JS)
+        self.assertIn("showLaneEvent(e, it, event, true)", JS)
+        button = CSS.split(".laneEventButton{", 1)[1].split("}", 1)[0]
+        self.assertIn("z-index:4", button)
+        self.assertIn("cursor:pointer", button)
 
     def test_large_turn_endpoints_explain_start_and_end(self):
         self.assertIn('class="cap s${bigCap}" type="button"', JS)
