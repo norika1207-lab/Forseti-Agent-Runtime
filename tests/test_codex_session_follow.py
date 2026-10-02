@@ -176,6 +176,66 @@ def test_codex_foreground_switch_beats_stale_deploy_hint(tmp_path, monkeypatch):
     assert focused in session_surface.resolve_requested("", logs_root=logs).name
 
 
+def test_newer_claude_focus_beats_older_codex_focus(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_sid = "01a0d313-019d-7413-be90-99e70e8e2906"
+    claude_sid = "3455d40e-fae1-46fc-a453-3a8ff8adec98"
+    _write(tmp_path / ".codex" / "sessions" / "2026" / "10"
+           / f"rollout-{codex_sid}.jsonl", [])
+    claude = (tmp_path / ".claude" / "projects" / "-project"
+              / f"{claude_sid}.jsonl")
+    _write(claude, [])
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "codex.log").write_text(
+        "2026-10-02T06:00:00.000Z info thread_stream_view_activity_changed "
+        f"active=true conversationId={codex_sid} rendererWindowAppearance=primary "
+        "rendererWindowFocused=true rendererWindowVisible=true\n",
+        encoding="utf-8")
+    metadata = tmp_path / "claude-meta"
+    meta = metadata / "account" / "org" / "local_test.json"
+    meta.parent.mkdir(parents=True)
+    meta.write_text(json.dumps({
+        "cliSessionId": claude_sid,
+        "lastFocusedAt": 1790924400000,
+        "isArchived": False,
+    }), encoding="utf-8")
+
+    selected = session_surface.resolve_requested(
+        "", logs_root=logs, claude_meta_root=metadata)
+    assert selected == claude
+
+
+def test_newer_codex_focus_beats_older_claude_focus(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    codex_sid = "01a0d313-019d-7413-be90-99e70e8e2906"
+    claude_sid = "3455d40e-fae1-46fc-a453-3a8ff8adec98"
+    codex = (tmp_path / ".codex" / "sessions" / "2026" / "10"
+             / f"rollout-{codex_sid}.jsonl")
+    _write(codex, [])
+    _write(tmp_path / ".claude" / "projects" / "-project"
+           / f"{claude_sid}.jsonl", [])
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    (logs / "codex.log").write_text(
+        "2026-10-02T08:00:00.000Z info thread_stream_view_activity_changed "
+        f"active=true conversationId={codex_sid} rendererWindowAppearance=primary "
+        "rendererWindowFocused=true rendererWindowVisible=true\n",
+        encoding="utf-8")
+    metadata = tmp_path / "claude-meta"
+    meta = metadata / "account" / "org" / "local_test.json"
+    meta.parent.mkdir(parents=True)
+    meta.write_text(json.dumps({
+        "cliSessionId": claude_sid,
+        "lastFocusedAt": 1790917200000,
+        "isArchived": False,
+    }), encoding="utf-8")
+
+    selected = session_surface.resolve_requested(
+        "", logs_root=logs, claude_meta_root=metadata)
+    assert selected == codex
+
+
 def test_codex_sidebar_owner_sync_beats_previous_activity_event(tmp_path):
     previous = "01a0f665-8995-7dd1-bebf-eb1ec7c58137"
     selected = "01a0c213-35e3-7053-95fc-36a449c5d676"

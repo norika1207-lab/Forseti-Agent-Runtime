@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import owner as owner_classifier
@@ -55,7 +56,7 @@ _SESSION_ID_RE = re.compile(
 )
 
 
-def latest_codex_focused_session(root: Path | None = None) -> str:
+def latest_codex_focus(root: Path | None = None) -> tuple[float, str]:
     """Return the last Session the owner actually brought to the foreground.
 
     Codex writes this event on a task switch even when that transcript receives
@@ -65,13 +66,13 @@ def latest_codex_focused_session(root: Path | None = None) -> str:
     """
     logs = root or (Path.home() / "Library" / "Logs" / "com.openai.codex")
     if not logs.is_dir():
-        return ""
+        return (0, "")
     try:
         candidates = sorted(
             logs.rglob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True
         )[:12]
     except OSError:
-        return ""
+        return (0, "")
     best: tuple[str, str] | None = None
     for path in candidates:
         try:
@@ -86,7 +87,38 @@ def latest_codex_focused_session(root: Path | None = None) -> str:
                      or _CODEX_OWNER_ROUTE_RE.search(line))
             if match and (best is None or match.group(1) > best[0]):
                 best = (match.group(1), match.group(2))
-    return best[1] if best else ""
+    if not best:
+        return (0, "")
+    try:
+        at = datetime.fromisoformat(best[0].replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        at = 0
+    return (at, best[1])
+
+
+def latest_codex_focused_session(root: Path | None = None) -> str:
+    return latest_codex_focus(root)[1]
+
+
+def latest_claude_focus(root: Path | None = None) -> tuple[float, str]:
+    """Return Claude Desktop's most recently focused CLI session."""
+    metadata = root or (Path.home() / "Library" / "Application Support"
+                        / "Claude" / "claude-code-sessions")
+    if not metadata.is_dir():
+        return (0, "")
+    best: tuple[float, str] = (0, "")
+    for path in metadata.rglob("local_*.json"):
+        try:
+            row = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        sid = str(row.get("cliSessionId") or "")
+        if not sid or row.get("isArchived"):
+            continue
+        focused = float(row.get("lastFocusedAt") or 0) / 1000
+        if focused > best[0]:
+            best = (focused, sid)
+    return best
 
 
 def _find_session(requested: str, roots: list[Path]) -> Path | None:
@@ -102,16 +134,18 @@ def _find_session(requested: str, roots: list[Path]) -> Path | None:
     return None
 
 
-def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | None:
+def resolve_requested(value: str, *, logs_root: Path | None = None,
+                      claude_meta_root: Path | None = None) -> Path | None:
     requested = value.strip()
     roots = [Path.home() / ".codex" / "sessions",
              Path.home() / ".claude" / "projects"]
     if requested:
         return _find_session(requested, roots)
 
-    focused = latest_codex_focused_session(logs_root)
-    if focused:
-        target = _find_session(focused, roots)
+    focused = max(latest_codex_focus(logs_root),
+                  latest_claude_focus(claude_meta_root), key=lambda item: item[0])
+    if focused[1]:
+        target = _find_session(focused[1], roots)
         if target is not None:
             return target
 
@@ -354,13 +388,14 @@ def main(argv: list[str]) -> int:
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)
     session = id_match.group(1) if id_match else target.stem
-    followed = latest_codex_focused_session()
+    _focused_at, followed = max(latest_codex_focus(), latest_claude_focus(),
+                                key=lambda item: item[0])
     session_title = ""
     if provider == "codex":
         from codex_session_inventory import title_for
         session_title = title_for(
             session, Path.home() / ".codex" / "session_index.jsonl")
-    picked_by = ("跟著 Codex 前景" if followed == session
+    picked_by = (f"跟著 {provider.title()} 前景" if followed == session
                  else f"鎖定 {provider.title()} Session")
     advice = _surface_advice(rows)
     snap.update({
