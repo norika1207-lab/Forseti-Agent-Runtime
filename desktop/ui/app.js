@@ -1791,6 +1791,22 @@ function drawDrift() {
   const packed = packLanes(raw);
   const laneRegions = [];
   const laneEventRegions = [];
+  const showNearestLaneEvent = (e, it) => {
+    const candidates = (it.events || [])
+      .map((event) => ({event, point: yOf.get(Number(event.n))}))
+      .filter((item) => item.point);
+    if (!candidates.length) {
+      showLaneReason(e, it, true);
+      return;
+    }
+    const localY = e.clientY - laneTop;
+    const nearest = candidates.sort((a, b) => {
+      const ay = (a.point.y0 + a.point.y1) / 2;
+      const by = (b.point.y0 + b.point.y1) / 2;
+      return Math.abs(ay - localY) - Math.abs(by - localY);
+    })[0];
+    showLaneEvent(e, it, nearest.event, true);
+  };
 
   packed.forEach((it) => {
     const A = yOf.get(it.from_n), B = yOf.get(it.to_n);
@@ -1840,7 +1856,7 @@ function drawDrift() {
       });
       hit.addEventListener("click", (e) => {
         e.stopPropagation();
-        showLaneReason(e, it, true);
+        showNearestLaneEvent(e, it);
       });
       hit.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") showLaneReason(e, it, true);
@@ -1893,7 +1909,7 @@ function drawDrift() {
       .sort((a, b) => Math.abs(a.x - px) - Math.abs(b.x - px))[0];
     if (!nearest || Math.abs(nearest.x - px) > 9) return;
     e.stopPropagation();
-    showLaneReason(e, nearest.it, true);
+    showNearestLaneEvent(e, nearest.it);
   });
 
   /* 主線。一輪一段，顏色跟著那一輪走。 */
