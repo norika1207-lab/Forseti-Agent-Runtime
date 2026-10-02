@@ -469,6 +469,15 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         root = CSS.split(".drift{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:auto", root)
 
+    def test_each_conversation_dot_opens_its_semantic_evidence(self):
+        self.assertIn('setAttribute("class", "nodeHit")', JS)
+        self.assertIn('hit.setAttribute("role", "button")', JS)
+        self.assertIn('openNode(row)', JS)
+        self.assertIn('semantic.meaning', JS)
+        block = CSS.split(".drift .nodeHit{", 1)[1].split("}", 1)[0]
+        self.assertIn("pointer-events:all", block)
+        self.assertIn("cursor:pointer", block)
+
 
 class NoShadowedDefinitions(unittest.TestCase):
     """同一個模組裡不准有兩個同名的頂層定義。

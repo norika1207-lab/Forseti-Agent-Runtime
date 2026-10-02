@@ -1794,6 +1794,34 @@ function drawDrift() {
     c.setAttribute("r", String(r));
     c.setAttribute("fill", colorOf(p.k, p.d));
     add(c, "node");
+
+    // The visible dot is deliberately small, so give every conversation turn
+    // a stable keyboard-accessible target. It opens the same evidence sheet as
+    // the turn card, including the reason and evidence in path_semantics.
+    const row = rows.find((item) => Number(item.n) === p.n);
+    if (row) {
+      const semantic = row.path_semantics || {};
+      const hit = document.createElementNS(NS, "circle");
+      hit.setAttribute("cx", String(MAIN));
+      hit.setAttribute("cy", String(cy));
+      hit.setAttribute("r", String(Math.max(8, r + 4)));
+      hit.setAttribute("class", "nodeHit");
+      hit.setAttribute("tabindex", "0");
+      hit.setAttribute("role", "button");
+      hit.setAttribute("aria-label",
+        `第 ${p.n} 輪，${semantic.label || "資料不足"}，點擊查看原因`);
+      hit.addEventListener("click", (e) => {
+        e.stopPropagation();
+        openNode(row);
+      });
+      hit.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openNode(row);
+        }
+      });
+      svg.appendChild(hit);
+    }
   });
 
   lane.appendChild(svg);
@@ -2196,6 +2224,7 @@ function openNode(s) {
   verdict.className = `nodeVerdict ${semantic.state || "neutral"}`;
   verdict.innerHTML = `<b>${esc(semantic.label || "資料不足")}</b>` +
     `<span>${esc(semantic.actor ? `責任：${semantic.actor}` : "")}</span>` +
+    (semantic.meaning ? `<p>${esc(semantic.meaning)}</p>` : "") +
     `<p>${esc(semantic.why || "尚無足夠證據")}</p>` +
     (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "");
   $("forkOut").hidden = true;
