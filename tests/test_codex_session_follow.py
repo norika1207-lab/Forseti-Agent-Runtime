@@ -140,6 +140,7 @@ def test_latest_codex_session_returns_a_distinct_newest_file(tmp_path):
 def test_native_watcher_includes_both_session_providers():
     source = (ROOT / "desktop" / "src-tauri" / "src" / "main.rs").read_text()
     assert 'home.join(".claude/projects")' in source
+    assert 'home.join("Library/Application Support/Claude/claude-code-sessions")' in source
     assert 'home.join(".codex/sessions")' in source
     assert 'home.join("Library/Logs/com.openai.codex")' in source
     assert "spawn_codex_focus_watcher(app.handle().clone())" in source

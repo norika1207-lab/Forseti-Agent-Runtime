@@ -261,6 +261,10 @@ fn spawn_watcher(app: tauri::AppHandle) {
         let mut targets = vec![repo.join(".forseti")];
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             targets.push(home.join(".claude/projects"));
+            // Claude Desktop stores the selected conversation separately from
+            // its transcript files. Watch that metadata so switching an idle
+            // conversation refreshes the followed surface immediately.
+            targets.push(home.join("Library/Application Support/Claude/claude-code-sessions"));
             targets.push(home.join(".codex/sessions"));
             // Codex records a task switch in its desktop log even when the
             // selected transcript itself is idle.  Watching JSONL alone can
