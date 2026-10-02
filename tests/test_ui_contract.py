@@ -133,6 +133,12 @@ class DomContract(unittest.TestCase):
         self.assertLess(panel.index('id="cards"'), panel.index('id="vitals"'))
         self.assertIn(".top{max-height:min(74vh,640px)}", CSS)
 
+    def test_new_suggestions_open_once_and_have_a_readable_control(self):
+        self.assertIn('>建議</button>', HTML)
+        self.assertIn('mt.textContent = cards.length ? `建議 ${', JS)
+        self.assertIn("signature !== lastAutoOpenedSuggestion", JS)
+        self.assertIn("togglePanel(true)", JS)
+
     def test_follow_button_unlocks_manual_session_and_tracks_foreground(self):
         start = JS.index('$("followBtn").addEventListener("click"')
         end = JS.index("\n});", start) + len("\n});")

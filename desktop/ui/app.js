@@ -39,6 +39,7 @@ let follow = true;
 let view = "tree";
 /* 最後一次 snapshot。drill-down 展開時不必再打一次後端。 */
 let lastSnap = null;
+let lastAutoOpenedSuggestion = "";
 let dismissed = new Set();      // 關掉的卡片，§5.1 留點可以重開
 let lastCount = 0;
 
@@ -310,6 +311,26 @@ function togglePanel(force) {
   if (open) { renderVitals(lastSnap || {}); renderCards(lastSnap || {}); }
 }
 
+function suggestionSignature(d) {
+  return (d.cards || []).slice(0, 3)
+    .map((card) => [card.key, card.title, card.say].join("\u241f"))
+    .join("\u241e");
+}
+
+function revealNewSuggestions(d) {
+  const cards = d.cards || [];
+  const mt = $("miniT");
+  if (mt) {
+    mt.textContent = cards.length ? `建議 ${Math.min(cards.length, 3)}` : "狀態";
+    mt.title = cards.length ? `有 ${Math.min(cards.length, 3)} 個建議` : "展開目前狀態";
+  }
+  const signature = suggestionSignature(d);
+  if (signature && signature !== lastAutoOpenedSuggestion) {
+    lastAutoOpenedSuggestion = signature;
+    togglePanel(true);
+  }
+}
+
 function renderVitals(d) {
   const t = d.temp || {};
   const el = $("vTemp"), band = $("vBand");
@@ -328,7 +349,6 @@ function renderVitals(d) {
 
   const mt = $("miniT");
   if (mt) {
-    mt.textContent = t.c == null ? "--" : t.c.toFixed(1);
     mt.className = "miniT" + (t.band === "WATCH" ? " warm"
       : (t.band === "HOT" || t.band === "CRITICAL") ? " hot" : "");
   }
@@ -4182,6 +4202,7 @@ async function tick() {
     lastSnap = d;
     renderVitals(d);
     renderCards(d);
+    revealNewSuggestions(d);
     renderRescue(d);
     if (document.querySelector(".dims.open")) {
       renderDims(d); renderHealthCurve(d); renderBlast(d); renderGate(d);
