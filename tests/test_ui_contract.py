@@ -477,6 +477,9 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         block = CSS.split(".drift .nodeHit{", 1)[1].split("}", 1)[0]
         self.assertIn("pointer-events:all", block)
         self.assertIn("cursor:pointer", block)
+        self.assertIn("當時生效方向", JS)
+        self.assertIn("active_goal_objective", JS)
+        self.assertIn("active_goal_from_n", JS)
 
 
 class NoShadowedDefinitions(unittest.TestCase):

@@ -155,11 +155,32 @@ def main(argv: list[str]) -> int:
             row["betrayals"] = hits
     goal_changes = vitals.owner_goal_change_candidates(rows)
     goal_change_by_n = {item.get("n"): item for item in goal_changes}
+    # Reconstruct the direction that was active at each historical turn.  The
+    # fast transcript surface cannot read repository state, so it must not
+    # repaint every old node with today's goal.  Explicit owner change phrases
+    # are retained as observed evidence; they start a new historical epoch and
+    # later turns inherit that epoch until another owner change appears.
+    direction_version = 1
+    direction_objective = ""
+    direction_from_n = None
     for row in rows:
         candidate = goal_change_by_n.get(row.get("n"))
         if candidate:
             row["owner_goal_change_candidate"] = True
             row["owner_goal_change_state"] = candidate.get("kind")
+            direction_version += 1
+            direction_objective = str(candidate.get("evidence") or
+                                      row.get("owner_text") or "").strip()
+            direction_from_n = row.get("n")
+            row["direction_decision"] = {
+                "kind": candidate.get("kind"),
+                "why": candidate.get("why"),
+                "objective": direction_objective,
+                "epistemic": "OBSERVED_OWNER_TEXT",
+            }
+        row["active_goal_version"] = direction_version
+        row["active_goal_objective"] = direction_objective
+        row["active_goal_from_n"] = direction_from_n
     for row, goal in zip(rows, vitals.goal_support(rows)):
         row["goal"] = goal
     # Keep the fast foreground-follow path visually equivalent to the full

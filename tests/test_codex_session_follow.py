@@ -316,7 +316,46 @@ def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(
     assert data["session"].endswith(sid)
     assert data["picked_by"] == "鎖定 Codex Session"
     assert data["rows"][0]["path_semantics"]["state"] == "direction_candidate"
+    assert data["rows"][0]["active_goal_version"] == 2
+    assert data["rows"][0]["active_goal_objective"] == "改成新的方向"
+    assert data["rows"][0]["active_goal_from_n"] == 1
+    assert data["rows"][0]["direction_decision"]["epistemic"] == "OBSERVED_OWNER_TEXT"
     assert data["semantic_surface"]["unknown_is_not_aligned"] is True
+
+
+def test_fast_surface_preserves_historical_owner_direction_per_turn(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "01a0-direction-history"
+    transcript = (tmp_path / ".codex" / "sessions" / "2026" / "09"
+                  / f"rollout-{sid}.jsonl")
+    _write(transcript, [
+        {"timestamp": "2026-09-29T05:00:00Z", "type": "response_item",
+         "payload": {"type": "message", "id": "u1", "role": "user",
+                     "content": [{"type": "input_text", "text": "先檢查資料"}]}},
+        {"timestamp": "2026-09-29T05:00:01Z", "type": "response_item",
+         "payload": {"type": "message", "id": "u2", "role": "user",
+                     "content": [{"type": "input_text", "text": "改成先修復節點"}]}},
+        {"timestamp": "2026-09-29T05:00:02Z", "type": "response_item",
+         "payload": {"type": "message", "id": "u3", "role": "user",
+                     "content": [{"type": "input_text", "text": "繼續驗證"}]}},
+    ])
+    hint = tmp_path / ".forseti" / "current-session-id"
+    hint.parent.mkdir(parents=True)
+    hint.write_text(sid, encoding="utf-8")
+
+    assert session_surface.main(["session_surface.py"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    before, changed, inherited = data["rows"]
+    assert before["active_goal_version"] == 1
+    assert before["active_goal_objective"] == ""
+    assert changed["active_goal_version"] == 2
+    assert changed["active_goal_objective"] == "改成先修復節點"
+    assert changed["active_goal_from_n"] == changed["n"]
+    assert changed["path_semantics"]["state"] == "new_direction"
+    assert inherited["active_goal_version"] == 2
+    assert inherited["active_goal_objective"] == "改成先修復節點"
+    assert inherited["active_goal_from_n"] == changed["n"]
 
 
 def test_fast_surface_evaluates_ai_output_and_attributes_drift_to_ai(

@@ -2220,13 +2220,22 @@ function openNode(s) {
   $("nodeAI").textContent = flat(s.ai_text).slice(0, 1200) ||
     (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
   const semantic = s.path_semantics || {};
+  const direction = flat(s.active_goal_objective).slice(0, 600);
+  const directionMeta = direction
+    ? `<div class="nodeDirection"><b>當時生效方向 v${esc(s.active_goal_version || "?")}</b>` +
+      `<p>${esc(direction)}</p>` +
+      `<span>從第 ${esc(s.active_goal_from_n ?? s.n)} 輪開始` +
+      `${s.direction_decision ? " · 本輪由使用者指令換向" : ""}</span></div>`
+    : `<div class="nodeDirection unknown"><b>當時生效方向</b>` +
+      `<p>這一輪之前沒有可還原的明確換向指令。</p></div>`;
   const verdict = $("nodeVerdict");
   verdict.className = `nodeVerdict ${semantic.state || "neutral"}`;
   verdict.innerHTML = `<b>${esc(semantic.label || "資料不足")}</b>` +
     `<span>${esc(semantic.actor ? `責任：${semantic.actor}` : "")}</span>` +
     (semantic.meaning ? `<p>${esc(semantic.meaning)}</p>` : "") +
     `<p>${esc(semantic.why || "尚無足夠證據")}</p>` +
-    (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "");
+    (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "") +
+    directionMeta;
   $("forkOut").hidden = true;
   $("forkOut").textContent = "";
   $("actFork").disabled = false;
