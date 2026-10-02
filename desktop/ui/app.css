@@ -1238,6 +1238,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .halo{opacity:.16}
 .drift .nodeHit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}
 .drift .nodeHit:focus{outline:none;stroke:var(--blue);stroke-width:1.5}
+.drift .endpointHit{fill:transparent;stroke:transparent;pointer-events:all;cursor:pointer}
+.drift .endpointHit:focus{outline:none;stroke:var(--blue);stroke-width:1.5}
 
 .drift text{fill:var(--ink-4);font:500 9.5px/1 var(--sans)}
 .drift text.back{fill:var(--green)}

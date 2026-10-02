@@ -1874,6 +1874,34 @@ function drawDrift() {
         }
       });
       svg.appendChild(hit);
+
+      // The DOM start/end caps sit below this SVG layer. WebKit therefore
+      // resolves a real pointer hit to the SVG even though the button exists.
+      // Mirror both endpoint targets inside the top layer so the large visible
+      // circles are genuinely clickable, not merely wired in the DOM.
+      [["start", p.y0], ["end", p.y1]].forEach(([phase, y]) => {
+        if (phase === "end" && row.growing) return;
+        const endpoint = document.createElementNS(NS, "circle");
+        endpoint.setAttribute("cx", String(MAIN));
+        endpoint.setAttribute("cy", String(y));
+        endpoint.setAttribute("r", "9");
+        endpoint.setAttribute("class", "endpointHit");
+        endpoint.setAttribute("tabindex", "0");
+        endpoint.setAttribute("role", "button");
+        endpoint.setAttribute("aria-label",
+          `第 ${p.n} 輪${phase === "start" ? "開始，查看當時方向" : "結束，查看當時判定"}`);
+        endpoint.addEventListener("click", (e) => {
+          e.stopPropagation();
+          showPointJudgment(e, row, phase, true);
+        });
+        endpoint.addEventListener("keydown", (e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            showPointJudgment(e, row, phase, true);
+          }
+        });
+        svg.appendChild(endpoint);
+      });
     }
   });
 

@@ -492,6 +492,13 @@ class BranchLaneReasonsStayInspectable(unittest.TestCase):
         self.assertIn("DIVERGENCE_LABEL", JS)
         cap = CSS.split(".gut .cap{", 1)[1].split("}", 1)[0]
         self.assertIn("cursor:pointer", cap)
+        # The visible caps are below the absolute SVG in WebKit. Real mouse
+        # input must be caught by matching targets in that topmost layer.
+        self.assertIn('endpoint.setAttribute("class", "endpointHit")', JS)
+        self.assertIn('showPointJudgment(e, row, phase, true)', JS)
+        endpoint = CSS.split(".drift .endpointHit{", 1)[1].split("}", 1)[0]
+        self.assertIn("pointer-events:all", endpoint)
+        self.assertIn("cursor:pointer", endpoint)
 
 
 class NoShadowedDefinitions(unittest.TestCase):
