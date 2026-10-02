@@ -77,6 +77,40 @@ def _runs(rows: list, pred, *, min_len: int = 1) -> list[tuple[int, int, bool]]:
     return out
 
 
+def _events(rows: list, a: int, b: int, kind: str) -> list[dict]:
+    """Keep the per-turn evidence that a rendered lane node must explain."""
+    out = []
+    for r in rows:
+        n = _n(r)
+        if n < a or n > b:
+            continue
+        semantic = r.get("path_semantics") or {}
+        goal = r.get("goal") or {}
+        base = {"n": n, "kind": kind}
+        if kind == "DRIFT":
+            base.update({
+                "title": semantic.get("label") or "偏離目標",
+                "why": semantic.get("why") or
+                       f"目標支持率 {round(float(goal.get('support') or 0) * 100)}%，"
+                       f"距離 {round(float(goal.get('distance') or 0) * 100)}%",
+                "evidence": semantic.get("evidence") or "",
+                "support": goal.get("support"), "distance": goal.get("distance"),
+                "coverage": goal.get("coverage"),
+                "goal_version": r.get("active_goal_version"),
+                "objective": r.get("active_goal_objective") or "",
+            })
+        elif kind == "BLIND_WRITE":
+            base.update({"title": "只讀未寫",
+                         "why": f"這一輪讀取 {r.get('read') or 0} 次、寫入 {r.get('write') or 0} 次",
+                         "evidence": semantic.get("evidence") or ""})
+        elif kind == "TOOL_FAIL":
+            base.update({"title": "工具執行失敗",
+                         "why": f"這一輪記錄到 {r.get('failed') or 0} 個失敗動作",
+                         "evidence": semantic.get("evidence") or ""})
+        out.append({k: v for k, v in base.items() if v not in (None, "")})
+    return out
+
+
 def lanes(rows: list) -> list[dict]:
     """把一條線上所有沒收回來的問題算成軌道。
 
@@ -88,19 +122,19 @@ def lanes(rows: list) -> list[dict]:
 
     for a, b, openish in _runs(rows, lambda r: (r.get("failed") or 0) > 0):
         out.append({"kind": "TOOL_FAIL", "from_n": a, "to_n": b, "open": openish,
-                    "events": [{"n": a, "why": "這一輪有工具執行失敗"}]})
+                    "events": _events(rows, a, b, "TOOL_FAIL")})
 
     for a, b, openish in _runs(
             rows, lambda r: ((r.get("goal") or {}).get("distance") or 0) > DRIFT_ON):
         out.append({"kind": "DRIFT", "from_n": a, "to_n": b, "open": openish,
-                    "events": [{"n": a, "why": "目標距離在這一輪超過門檻"}]})
+                    "events": _events(rows, a, b, "DRIFT")})
 
     for a, b, openish in _runs(
             rows,
             lambda r: (r.get("read") or 0) > 0 and (r.get("write") or 0) == 0,
             min_len=BLIND_MIN):
         out.append({"kind": "BLIND_WRITE", "from_n": a, "to_n": b, "open": openish,
-                    "events": [{"n": a, "why": "從這一輪起連續只有讀取、沒有寫入"}]})
+                    "events": _events(rows, a, b, "BLIND_WRITE")})
 
     # 白點:那一輪說了沒做。收回來的條件是後面真的有寫入動作 ——
     # 「宣稱終於落地」。找不到就是一路開著。

@@ -1637,6 +1637,13 @@ function showLaneEvent(e, it, event, pinned = false) {
   const title = event.title || it.label || it.kind || "問題紀錄";
   const claim = event.hit ? `當時宣稱：「${event.hit}」` : "";
   const target = event.target ? `查核標的：${event.target}` : "";
+  const metrics = event.distance != null
+    ? `支持率 ${Math.round(Number(event.support || 0) * 100)}% · ` +
+      `距離 ${Math.round(Number(event.distance || 0) * 100)}% · ` +
+      `證據覆蓋 ${Math.round(Number(event.coverage || 0) * 100)}%`
+    : "";
+  const direction = event.objective
+    ? `當時方向 v${event.goal_version || "?"}：${event.objective}` : "";
   pop.dataset.lane = "1";
   pop.dataset.point = "0";
   pop.dataset.pinned = pinned ? "1" : "0";
@@ -1644,6 +1651,9 @@ function showLaneEvent(e, it, event, pinned = false) {
     `<div class="laneTipTitle">第 ${esc(event.n)} 輪 · ${esc(title)}</div>` +
     (claim ? `<div class="laneEventClaim">${esc(claim)}</div>` : "") +
     `<div class="laneTipWhy">${esc(event.why || LANE_REASON[it.kind] || "這一輪建立了問題軌道。")}</div>` +
+    (metrics ? `<div class="laneEventMetrics">${esc(metrics)}</div>` : "") +
+    (direction ? `<div class="laneEventDirection">${esc(direction)}</div>` : "") +
+    (event.evidence ? `<blockquote>${esc(event.evidence)}</blockquote>` : "") +
     (target ? `<div class="laneEventTarget">${esc(target)}</div>` : "") +
     (event.advice ? `<div class="laneEventAdvice">判定後建議：${esc(event.advice)}</div>` : "") +
     `<div class="laneTipMeta">這是單筆紀錄 · 軌道總覽為第 ${it.from_n} 至 ${it.to_n} 輪` +

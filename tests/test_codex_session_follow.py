@@ -280,6 +280,11 @@ def test_fast_surface_keeps_problem_branch_lanes(
     assert "latency" in data
     assert "notes" in data
     assert "checkpoints" in data
+    drift_events = [e for lane in data["lanes"]["lanes"]
+                    if lane["kind"] == "DRIFT"
+                    for e in lane.get("events", [])]
+    for event in drift_events:
+        assert event.get("why")
 
 
 def test_overlapping_same_kind_findings_share_one_visual_lane():
@@ -307,6 +312,23 @@ def test_lane_issue_count_counts_findings_not_only_turns():
                          if x["kind"] == "BETRAYAL")
     assert betrayal_lane["issues"] == 2
     assert len(betrayal_lane["events"]) == 2
+
+
+def test_drift_lane_nodes_keep_each_turns_judgment_and_direction():
+    rows = [
+        {"n": 1, "goal": {"support": .8, "distance": .2, "coverage": .5},
+         "path_semantics": {"label": "可能偏離", "why": "第一輪理由", "evidence": "第一輪證據"},
+         "active_goal_version": 3, "active_goal_objective": "方向甲"},
+        {"n": 2, "goal": {"support": .6, "distance": .4, "coverage": .9},
+         "path_semantics": {"label": "確認偏離", "why": "第二輪理由", "evidence": "第二輪證據"},
+         "active_goal_version": 4, "active_goal_objective": "方向乙"},
+    ]
+    drift_lane = next(x for x in session_surface.lanes.lanes(rows)
+                      if x["kind"] == "DRIFT")
+    assert [e["n"] for e in drift_lane["events"]] == [1, 2]
+    assert [e["why"] for e in drift_lane["events"]] == ["第一輪理由", "第二輪理由"]
+    assert [e["objective"] for e in drift_lane["events"]] == ["方向甲", "方向乙"]
+    assert [e["distance"] for e in drift_lane["events"]] == [.2, .4]
 
 
 def test_fast_surface_pins_current_session_and_never_paints_unknown_as_aligned(

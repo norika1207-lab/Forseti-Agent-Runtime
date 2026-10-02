@@ -186,8 +186,11 @@ def main(argv: list[str]) -> int:
     # Keep the fast foreground-follow path visually equivalent to the full
     # surface.  The SVG renderer can only draw branch tracks when this contract
     # is present; omitting it reduced every session to a straight main line.
-    snap["lanes"] = lanes.summary(rows)
     source_tree_schema.annotate_rows(rows)
+    # Lane nodes need the per-turn semantic judgment, not only aggregate
+    # metrics. Build them after annotation so adjacent orange/yellow nodes can
+    # explain different evidence instead of repeating the line summary.
+    snap["lanes"] = lanes.summary(rows)
 
     # Node details are part of the primary evidence surface.  The fast follow
     # path used to omit these fields, leaving clickable nodes with no record of
