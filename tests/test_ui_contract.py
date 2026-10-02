@@ -127,6 +127,12 @@ class DomContract(unittest.TestCase):
         missing = sorted(ids - have)
         self.assertEqual(missing, [], f"app.js 找的 id 不在 index.html 裡：{missing}")
 
+    def test_direction_cards_are_first_in_the_expanded_panel(self):
+        panel = HTML[HTML.index('<div class="panel" id="panel"'):]
+        panel = panel[:panel.index("</header>")]
+        self.assertLess(panel.index('id="cards"'), panel.index('id="vitals"'))
+        self.assertIn(".top{max-height:min(74vh,640px)}", CSS)
+
     def test_follow_button_unlocks_manual_session_and_tracks_foreground(self):
         start = JS.index('$("followBtn").addEventListener("click"')
         end = JS.index("\n});", start) + len("\n});")

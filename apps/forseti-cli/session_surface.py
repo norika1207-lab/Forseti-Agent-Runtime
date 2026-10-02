@@ -127,6 +127,93 @@ def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | No
     return max(candidates, key=lambda p: p.stat().st_mtime) if candidates else None
 
 
+def _surface_advice(rows: list[dict]) -> dict:
+    """Return one evidence-backed suggestion without loading repository state."""
+    for row in reversed(rows):
+        for finding in row.get("betrayals") or []:
+            target = finding.get("target") or "那個成果"
+            return {
+                "text": finding.get("advice") or "核對宣稱與實際動作",
+                "why": f"第 {row.get('n')} 輪{finding.get('title', '')}",
+                "tone": "warn",
+                "n": row.get("n") or 0,
+                "say": (f"你先前宣稱已完成，但紀錄裡沒有對應動作。"
+                        f"請貼出 {target} 的實際內容與可重跑驗證；沒有就直說沒有。"),
+            }
+    for row in reversed(rows):
+        if row.get("owner_goal_change_candidate"):
+            objective = row.get("active_goal_objective") or row.get("owner_text") or "新方向"
+            return {
+                "text": "使用者已明確更換方向，後續應以新方向判定",
+                "why": f"第 {row.get('n')} 輪觀測到使用者方向變更：{objective}",
+                "tone": "info",
+                "n": row.get("n") or 0,
+                "say": (f"新的方向是：{objective}。先重述驗收條件，再只依這個方向執行；"
+                        "不要把偏離舊目標算成 AI 偏離。"),
+            }
+    for row in reversed(rows):
+        if row.get("corrected_by_owner"):
+            return {
+                "text": "使用者剛糾正了上一段輸出，請先核對再繼續",
+                "why": f"第 {row.get('n')} 輪包含明確糾正",
+                "tone": "warn",
+                "n": row.get("n") or 0,
+                "say": "先說明上一輪哪裡不符合指令、責任歸因與修正證據，再繼續執行。",
+            }
+    return {
+        "text": "正在跟隨目前 Session",
+        "why": "直接讀取 transcript；目前沒有足夠證據產生問題建議",
+        "tone": "info",
+        "n": 0,
+        "say": "重述目前目標、這一步的可驗收成果，以及仍缺少的證據。",
+    }
+
+
+def _direction_choice_cards(rows: list[dict]) -> list[dict]:
+    """Offer three distinct next actions for the latest observed goal change."""
+    changed = next((row for row in reversed(rows)
+                    if row.get("owner_goal_change_candidate")), None)
+    if not changed:
+        return []
+    n = changed.get("n") or 0
+    objective = changed.get("active_goal_objective") or changed.get("owner_text") or "新方向"
+    evidence = f"第 {n} 輪 owner 明確更換方向：{objective}"
+    return [
+        {
+            "key": "direction-acceptance",
+            "title": "先確認新方向的驗收條件",
+            "say": f"新的方向是：{objective}。請列出三條可驗收完成條件，再開始執行。",
+            "why_now": "方向剛換版，先固定完成定義可避免後續各自解讀",
+            "evidence": evidence,
+            "confidence": "高　方向變更來自 owner 原文",
+            "if_ignored": "AI 可能接受了新題目，卻用自己推測的完成條件交件",
+            "n": n,
+        },
+        {
+            "key": "direction-handoff",
+            "title": "把舊方向停在哪裡記清楚",
+            "say": ("方向已更換。請列出舊方向已完成、未完成與可安全擱置的項目，"
+                    "不要把未完成寫成已取消或已完成。"),
+            "why_now": "新方向開始時，舊方向的未完工作最容易從紀錄中消失",
+            "evidence": evidence,
+            "confidence": "高　新舊方向邊界可由同一輪 owner 原文定位",
+            "if_ignored": "之後無法分辨工作是被明確取消，還是被方向切換遺漏",
+            "n": n,
+        },
+        {
+            "key": "direction-proof",
+            "title": "下一輪只交新方向的實際證據",
+            "say": (f"接下來只依新方向執行：{objective}。下一輪請附實際動作、"
+                    "結果與可重跑驗證，不要只回覆收到。"),
+            "why_now": "方向已確認，下一個判斷點是 AI 是否真的沿新方向行動",
+            "evidence": evidence,
+            "confidence": "高　方向變更已觀測；執行結果仍待下一輪驗證",
+            "if_ignored": "只有口頭接受，仍無法確認 AI 是否真正切換工作方向",
+            "n": n,
+        },
+    ]
+
+
 def main(argv: list[str]) -> int:
     target = resolve_requested(argv[1] if len(argv) > 1 else "")
     if target is None:
@@ -275,22 +362,17 @@ def main(argv: list[str]) -> int:
             session, Path.home() / ".codex" / "session_index.jsonl")
     picked_by = ("跟著 Codex 前景" if followed == session
                  else f"鎖定 {provider.title()} Session")
+    advice = _surface_advice(rows)
     snap.update({
         "provider": provider,
         "session": session,
         "session_title": session_title,
         "ui_id": session,
         "picked_by": picked_by,
-        "advice": {
-            "text": "正在跟隨目前 Session",
-            "why": f"直接讀取 {provider} transcript；未以重複讀取充當驗證",
-            "tone": "info",
-            "n": 0,
-        },
+        "advice": advice,
         "temp": {"c": None, "band": "UNKNOWN", "coverage": 0,
                  "why": "首屏只讀 Session；深度語意分析尚未完成"},
         "progress": {"activity": 0, "task": 0},
-        "cards": [],
         "source_tree_schema": source_tree_schema.schema(),
         "semantic_surface": {
             "scope": "owner direction, AI answers, corrections, tool evidence, and explicit unknowns",
@@ -298,6 +380,10 @@ def main(argv: list[str]) -> int:
             "unknown_is_not_aligned": True,
         },
     })
+    # The native window calls this fast endpoint, not desktop_api.strands().
+    # Keep the recommendation contract on the path the owner actually sees.
+    direction_cards = _direction_choice_cards(rows)
+    snap["cards"] = direction_cards or vitals.cards(snap, advice)
     print(json.dumps(snap, ensure_ascii=False))
     return 0
 

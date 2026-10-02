@@ -113,7 +113,15 @@ def owner_goal_change_candidates(rows: list) -> list[dict]:
     out = []
     for row in rows or []:
         text = (row.get("owner_text") or "").strip()
-        if not text or not _OWNER_GOAL_CHANGE.search(text):
+        matches = list(_OWNER_GOAL_CHANGE.finditer(text)) if text else []
+        # A correction can mention direction-change words while explicitly
+        # denying the change ("不是換方向", "不要改成...").  Treating that
+        # quoted/negated phrase as a new North Star reverses responsibility.
+        matches = [match for match in matches
+                   if not re.search(
+                       r"(?:(?:不是|並非|沒有)(?:要)?|不要|別)\s*$",
+                       text[max(0, match.start() - 8):match.start()])]
+        if not matches:
             continue
         exploratory = bool(_EXPLORATORY.search(text))
         out.append({

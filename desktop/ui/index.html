@@ -36,6 +36,10 @@
          「A governance tool that continuously shouts is itself a
          productivity failure.」 -->
     <div class="panel" id="panel" hidden>
+    <!-- 方向建議必須是展開面板後的第一個可見內容。方向切換時，使用者
+         需要先看到三個可採取的下一步，而不是先穿過完整溫度明細。 -->
+    <div class="cards" id="cards"></div>
+
     <div class="vitals" id="vitals">
       <div class="vRow">
         <span class="vTemp" id="vTemp">--</span>
@@ -66,12 +70,6 @@
         <span class="rHist" id="rHist"></span>
       </div>
     </div>
-
-    <!-- 三張卡片。bible.md I-04：事前給三個選項不吵，事後跳警告才吵。
-         每張可展開 Vol3 §12 要求的五件事：為什麼是現在、證據、
-         信心、不理會會怎樣。點「用這句」把話複製走。 -->
-    <div class="cards" id="cards"></div>
-
 
     <!-- Context 是預警，不是統計，所以不擠進底下那排數字。
          壓縮發生後畫一個黑點是事後，這一條是事前。 -->

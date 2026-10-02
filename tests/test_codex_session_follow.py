@@ -2,6 +2,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "forseti-cli"))
@@ -9,6 +11,7 @@ sys.path.insert(0, str(ROOT / "apps" / "forseti-cli"))
 import desktop_api  # noqa: E402
 import session_surface  # noqa: E402
 import tracker  # noqa: E402
+import vitals  # noqa: E402
 
 
 def _write(path: Path, rows: list[dict]) -> None:
@@ -487,6 +490,101 @@ def test_fast_surface_owner_correction_marks_the_previous_ai_turn_red(
     assert correction["corrected_by_owner"] is True
     assert correction["path_semantics"]["actor"] == "未歸因"
     assert correction.get("owner_goal_change_candidate") is not True
+
+
+@pytest.mark.parametrize("case", range(100))
+def test_four_round_direction_attribution_matrix(case, tmp_path, monkeypatch, capsys):
+    """100 four-round sessions must not blame an explicit owner direction change."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = f"01a0-four-round-{case:03d}"
+    transcript = (tmp_path / ".codex" / "sessions" / "2026" / "10"
+                  / f"rollout-{sid}.jsonl")
+    items = []
+    for turn in range(1, 5):
+        owner_text = f"沿用原方向檢查資料，第 {turn} 輪"
+        ai_text = f"已完成原方向第 {turn} 輪檢查"
+        if turn == 4 and case < 25:
+            owner_text = f"改成新的方向：只檢查建議卡資料路徑，案例 {case}"
+            ai_text = "收到，改依新的方向檢查建議卡資料路徑"
+        elif turn == 4 and case < 50:
+            owner_text = "你上一輪做反了，我要的是檢查原方向，不是換方向"
+            ai_text = "收到，這是對上一輪的糾正"
+        elif turn == 4 and case < 75:
+            owner_text = "繼續原方向並提供實際證據"
+            ai_text = f"我已經寫好 `missing-{case}.json`。"
+        elif turn == 4:
+            owner_text = "先停一下，說明目前可以確認與不能確認的部分"
+            ai_text = "目前證據不足，不能確認責任歸因"
+        items.extend([
+            {"timestamp": f"2026-10-02T06:00:{turn * 2:02d}Z",
+             "type": "response_item", "payload": {"type": "message",
+             "id": f"u{turn}", "role": "user",
+             "content": [{"type": "input_text", "text": owner_text}]}},
+            {"timestamp": f"2026-10-02T06:00:{turn * 2 + 1:02d}Z",
+             "type": "response_item", "payload": {"type": "message",
+             "id": f"a{turn}", "role": "assistant",
+             "content": [{"type": "output_text", "text": ai_text}]}},
+        ])
+    _write(transcript, items)
+    hint = tmp_path / ".forseti" / "current-session-id"
+    hint.parent.mkdir(parents=True)
+    hint.write_text(sid, encoding="utf-8")
+
+    assert session_surface.main(["session_surface.py"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    fourth = data["rows"][3]
+    if case < 25:
+        assert fourth["path_semantics"]["state"] == "new_direction"
+        assert fourth["owner_goal_change_candidate"] is True
+        assert fourth["path_semantics"]["actor"] != "AI"
+        assert "新的方向" in data["cards"][0]["title"] or "方向" in data["cards"][0]["title"]
+    elif case < 50:
+        assert fourth["corrected_by_owner"] is True
+        assert fourth.get("owner_goal_change_candidate") is not True
+    elif case < 75:
+        assert fourth["path_semantics"]["actor"] == "AI"
+        assert fourth["betrayals"][0]["kind"] == "SAID_WROTE_DIDNT"
+    else:
+        assert fourth["path_semantics"]["actor"] != "AI"
+        assert fourth.get("owner_goal_change_candidate") is not True
+
+
+def test_fast_surface_returns_recommendation_cards(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "01a0-card-contract"
+    transcript = (tmp_path / ".codex" / "sessions" / "2026" / "10"
+                  / f"rollout-{sid}.jsonl")
+    _write(transcript, [
+        {"timestamp": "2026-10-02T06:00:00Z", "type": "response_item",
+         "payload": {"type": "message", "id": "u1", "role": "user",
+                     "content": [{"type": "input_text", "text": "改成檢查三張建議卡"}]}},
+        {"timestamp": "2026-10-02T06:00:01Z", "type": "response_item",
+         "payload": {"type": "message", "id": "a1", "role": "assistant",
+                     "content": [{"type": "output_text", "text": "收到新方向"}]}},
+    ])
+    hint = tmp_path / ".forseti" / "current-session-id"
+    hint.parent.mkdir(parents=True)
+    hint.write_text(sid, encoding="utf-8")
+
+    assert session_surface.main(["session_surface.py"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["cards"]
+    assert len(data["cards"]) == 3
+    assert len({card["key"] for card in data["cards"]}) == 3
+    card = data["cards"][0]
+    assert all(card.get(key) for key in
+               ("title", "say", "why_now", "evidence", "confidence", "if_ignored"))
+
+
+@pytest.mark.parametrize("text", [
+    "我不是要改成新目標，而是照原方向",
+    "我並非要換方向，只是在糾正你",
+    "不要換方向，繼續檢查原方向",
+])
+def test_negated_direction_language_does_not_change_north_star(text):
+    assert vitals.owner_goal_change_candidates([
+        {"n": 1, "owner_text": text},
+    ]) == []
 
 
 def test_primary_ui_renders_owner_and_ai_with_attributed_verdict():

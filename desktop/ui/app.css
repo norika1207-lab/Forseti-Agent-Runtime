@@ -1030,9 +1030,10 @@ button{font:inherit;cursor:pointer;color:inherit}
 /* Narrow viewport geometry. The panel stays in normal flow and gets its own
    scroll window; it may not paint over the graph/card scroll region. */
 @media (max-width:760px){
-  .top{max-height:min(52vh,460px)}
-  .panel:not([hidden]){max-height:calc(min(52vh,460px) - 64px);
-    overflow-y:auto;overscroll-behavior:contain}
+  .top{max-height:min(74vh,640px)}
+  .panel:not([hidden]){max-height:calc(min(74vh,640px) - 64px);
+    overflow-y:auto;overscroll-behavior:contain;pointer-events:auto}
+  .panel:not([hidden]) .vitals{pointer-events:auto}
   .cards{padding-left:12px;padding-right:12px}
   .card2{width:100%;min-width:0;overflow-wrap:anywhere}
   .card2 .row{flex-wrap:wrap}
