@@ -100,14 +100,26 @@ def latest_codex_focused_session(root: Path | None = None) -> str:
     return latest_codex_focus(root)[1]
 
 
-def latest_claude_focus(root: Path | None = None) -> tuple[float, str]:
-    """Return Claude Desktop's most recently focused CLI session."""
+def latest_claude_metadata(root: Path | None = None) -> dict:
+    """Return Claude Desktop's most recently focused session metadata.
+
+    Claude rewrites the selected session's metadata file when the owner switches
+    conversations.  There can be thousands of historical files, so rank cheap
+    filesystem metadata first and only parse the newest candidates.
+    """
     metadata = root or (Path.home() / "Library" / "Application Support"
                         / "Claude" / "claude-code-sessions")
     if not metadata.is_dir():
-        return (0, "")
-    best: tuple[float, str] = (0, "")
+        return {}
+    candidates: list[tuple[float, Path]] = []
     for path in metadata.rglob("local_*.json"):
+        try:
+            candidates.append((path.stat().st_mtime, path))
+        except OSError:
+            continue
+    candidates.sort(reverse=True)
+    best: tuple[float, dict] = (0, {})
+    for _mtime, path in candidates[:128]:
         try:
             row = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -117,8 +129,15 @@ def latest_claude_focus(root: Path | None = None) -> tuple[float, str]:
             continue
         focused = float(row.get("lastFocusedAt") or 0) / 1000
         if focused > best[0]:
-            best = (focused, sid)
-    return best
+            best = (focused, row)
+    return best[1]
+
+
+def latest_claude_focus(root: Path | None = None) -> tuple[float, str]:
+    """Return Claude Desktop's most recently focused CLI session."""
+    row = latest_claude_metadata(root)
+    return (float(row.get("lastFocusedAt") or 0) / 1000,
+            str(row.get("cliSessionId") or ""))
 
 
 def _find_session(requested: str, roots: list[Path]) -> Path | None:
@@ -395,6 +414,8 @@ def main(argv: list[str]) -> int:
         from codex_session_inventory import title_for
         session_title = title_for(
             session, Path.home() / ".codex" / "session_index.jsonl")
+    elif followed == session:
+        session_title = str(latest_claude_metadata().get("title") or "")
     picked_by = (f"跟著 {provider.title()} 前景" if followed == session
                  else f"鎖定 {provider.title()} Session")
     advice = _surface_advice(rows)

@@ -197,6 +197,7 @@ def test_newer_claude_focus_beats_older_codex_focus(tmp_path, monkeypatch):
     meta.parent.mkdir(parents=True)
     meta.write_text(json.dumps({
         "cliSessionId": claude_sid,
+        "title": "Forseti 開發 V1",
         "lastFocusedAt": 1790924400000,
         "isArchived": False,
     }), encoding="utf-8")
@@ -204,6 +205,7 @@ def test_newer_claude_focus_beats_older_codex_focus(tmp_path, monkeypatch):
     selected = session_surface.resolve_requested(
         "", logs_root=logs, claude_meta_root=metadata)
     assert selected == claude
+    assert session_surface.latest_claude_metadata(metadata)["title"] == "Forseti 開發 V1"
 
 
 def test_newer_codex_focus_beats_older_claude_focus(tmp_path, monkeypatch):
