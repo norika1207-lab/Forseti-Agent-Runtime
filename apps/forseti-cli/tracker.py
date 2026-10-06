@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -71,6 +72,25 @@ WRITE_TOOLS = frozenset({
 })
 
 KIND_READ, KIND_WRITE, KIND_OTHER = "read", "write", "other"
+
+# 回傳另一個 agent / session 觀測結果的工具。這些 receipt 不能算成
+# 當前 agent 親自取得的證據，否則 FP-03 永遠看不見 provenance collapse。
+OTHER_SOURCE_TOOLS = frozenset({"Agent", "Task", "TaskOutput", "wait_agent"})
+
+_EXPLICIT_COUNT = re.compile(
+    r"(?<![\d,])(\d{1,3}(?:,\d{3})*|\d+)\s*"
+    r"(?:條|份|個|項|筆|檔|files?|tests?|records?)", re.I)
+
+
+def explicit_claimed_count(text: str) -> int | None:
+    """只取文字明寫的「數字 + 單位」，沒有就不猜。
+
+    一句可能同時寫「抽查 25/全部 589 條」，宣稱的母體是較大的那個；
+    這裡只做結構抽取，不從「全部」自行臆測總數。
+    """
+    found = [int(m.group(1).replace(",", ""))
+             for m in _EXPLICIT_COUNT.finditer(str(text or ""))]
+    return max(found) if found else None
 
 
 def tool_kind(name: str) -> str:
@@ -124,6 +144,14 @@ class Strand:
     dots: list[Dot] = field(default_factory=list)
     compaction: bool = False     # 這一輪裡發生過壓縮，§6
     compaction_meta: dict = field(default_factory=dict)
+    # overclaim detector 的結構化資料契約。0 是量過而且沒有；None 是沒來源。
+    own_receipts: int | None = 0
+    other_source_observations: int | None = 0
+    claimed_count: int | None = None
+    verified_count: int | None = 0
+    claim_scope: dict | None = None
+    evidence_scopes: list[dict] | None = None
+    support: list[dict] = field(default_factory=list)
 
     @property
     def growing(self) -> bool:
@@ -188,6 +216,11 @@ class Strand:
             "gaps": [[round(a, 2), round(b, 2)] for a, b in self.gaps()],
             "compaction": self.compaction,
             "compaction_meta": self.compaction_meta,
+            "own_receipts": self.own_receipts,
+            "other_source_observations": self.other_source_observations,
+            "claimed_count": self.claimed_count,
+            "verified_count": self.verified_count,
+            "support": self.support,
         }
 
 
@@ -230,6 +263,9 @@ class Tracker:
         self.line_no = 0
         self.strands: list[Strand] = []
         self._pending_tools: dict[str, Dot] = {}   # tool_use_id -> Dot
+        # uuid -> 指紋。壓縮前的重播要靠它認出來，見 `_replay_seen()`。
+        self._seen: dict[str, str] = {}
+        self.replayed = 0                          # 這份檔案裡跳過幾行
 
     # -- 內部 ---------------------------------------------------------
 
@@ -254,7 +290,48 @@ class Tracker:
             return
         cur.dots.append(dot)
 
+    def _replay_seen(self, rec: dict) -> bool:
+        """這一行是不是「同一則訊息又寫了一次」。
+
+        【2026-09-19 在真實資料上量出來的】Claude Code 在做對話壓縮
+        之前，會把要保留的那一段歷史訊息**重新寫進同一份 jsonl**。
+        第二次那一批帶著原本的舊時間戳，而檔案位置在後面 ——
+        於是 tracker 看到的是「時間往回跳」。
+
+        12 份 transcript 全部有這個形狀，而且**每一份**重播區段的
+        最後一行，下一行就是 `compact_boundary`（差 1，12/12）。
+
+        `uuid` 是那份 jsonl 自己的主鍵，所以「同一則」不用猜。
+        357 組重複配對逐欄比對過，tracker 會讀的五個欄位
+        （type / timestamp / message / isSidechain / isCompactSummary）
+        **全部相同**；差的只有 `slug`（339 組多帶一個）與
+        `toolUseResult` / `parentUuid` / `cwd` / `promptId` / `version`。
+
+        **指紋不同就不跳過。** 同一個 uuid 帶著不同的內容回來，
+        那不是重播，是別的東西 —— 這裡不認識它，就不准靜默吞掉。
+        不編一個「大概也是重播」的判斷（§8.3）。
+
+        沒有 uuid 的記錄（例如 `type=mode`）一律照常處理。
+        """
+        u = rec.get("uuid")
+        if not u:
+            return False
+        fp = json.dumps(
+            [rec.get("type"), rec.get("timestamp"), rec.get("message"),
+             rec.get("isSidechain"), rec.get("isCompactSummary")],
+            sort_keys=True, ensure_ascii=False, default=str)
+        prev = self._seen.get(u)
+        if prev is None:
+            self._seen[u] = fp
+            return False
+        if prev == fp:
+            self.replayed += 1
+            return True
+        return False
+
     def _handle(self, rec: dict, line_no: int) -> None:
+        if self._replay_seen(rec):
+            return
         t = rec.get("type")
         at = _ts(rec)
         msg = rec.get("message") or {}
@@ -304,6 +381,7 @@ class Tracker:
                     txt = b.get("text") or ""
                     if txt.strip():
                         cur.ai_text = (cur.ai_text + "\n\n" + txt).strip()
+                        cur.claimed_count = explicit_claimed_count(cur.ai_text)
                 elif b.get("type") == "tool_use":
                     name = b.get("name") or "?"
                     dot = Dot(at=at, label=name, kind=tool_kind(name),
@@ -394,6 +472,89 @@ class Tracker:
             return
         if block.get("is_error") is True:
             dot.failed = True
+            return
+
+        # tool_result 到了才算 receipt；只有 tool_use、還沒拿到結果的不算證據。
+        cur = self._current()
+        if cur is None:
+            return
+        short = dot.label.rsplit(".", 1)[-1]
+        if short in OTHER_SOURCE_TOOLS:
+            cur.other_source_observations = (
+                (cur.other_source_observations or 0) + 1)
+        else:
+            cur.own_receipts = (cur.own_receipts or 0) + 1
+            cur.verified_count = (cur.verified_count or 0) + 1
+
+    def _support_records(self) -> list[dict]:
+        """Read Claude sidechain transcripts without merging their provenance.
+
+        Claude stores Agent/Task work beside the parent transcript.  The parent
+        tracker used to count only the Agent tool call, so the visible card said
+        that support was requested but showed none of the support's work.
+        Sidechains are deliberately summarized as child records and remain
+        separate from the parent's answer text.
+        """
+        if self.path.suffix != ".jsonl":
+            return []
+        folders = [self.path.parent / self.path.stem / "subagents",
+                   self.path.parent / "subagents"]
+        folder = next((item for item in folders if item.is_dir()), None)
+        if folder is None:
+            return []
+        out = []
+        for path in sorted(folder.glob("*.jsonl"), key=lambda p: p.stat().st_mtime):
+            owner = []
+            answer = []
+            first = last = None
+            dots = 0
+            try:
+                lines = path.open(encoding="utf-8")
+            except OSError:
+                continue
+            with lines:
+                for raw in lines:
+                    try:
+                        rec = json.loads(raw)
+                    except ValueError:
+                        continue
+                    ts = rec.get("timestamp")
+                    if first is None and ts:
+                        first = ts
+                    if ts:
+                        last = ts
+                    msg = rec.get("message") or {}
+                    content = msg.get("content") if isinstance(msg, dict) else None
+                    blocks = content if isinstance(content, list) else []
+                    if rec.get("type") == "user":
+                        text = content if isinstance(content, str) else " ".join(
+                            str(b.get("text", "")) for b in blocks
+                            if isinstance(b, dict) and b.get("type") == "text")
+                        if text.strip():
+                            owner.append(text.strip())
+                    elif rec.get("type") == "assistant":
+                        for block in blocks:
+                            if not isinstance(block, dict):
+                                continue
+                            if block.get("type") == "text" and block.get("text"):
+                                answer.append(str(block["text"]).strip())
+                            elif block.get("type") == "tool_use":
+                                dots += 1
+            if not owner and not answer and not dots:
+                continue
+            child = {
+                "id": path.stem,
+                "path": str(path),
+                "status": "active" if last and first == last else "completed",
+                "started_at": first,
+                "ended_at": last,
+                "request": owner[0][:500] if owner else "(support 未提供請求)",
+                "response": "\n\n".join(answer)[-1200:],
+                "tool_count": dots,
+                "source": "claude.sidechain",
+            }
+            out.append(child)
+        return out
 
     # -- 對外 ---------------------------------------------------------
 
@@ -411,26 +572,33 @@ class Tracker:
             self.line_no = 0
             self.strands = []
             self._pending_tools = {}
+            self._seen = {}
+            self.replayed = 0
         if size == self.offset:
             return 0
 
         read = 0
         with self.path.open("rb") as fh:
             fh.seek(self.offset)
-            data = fh.read()
-            # 最後一行可能寫到一半。留到下次。
-            cut = data.rfind(b"\n")
-            if cut < 0:
-                return 0
-            chunk = data[:cut + 1]
-            self.offset += len(chunk)
-            for raw in chunk.decode("utf-8", errors="replace").splitlines():
-                self.line_no += 1
-                raw = raw.strip()
+            while True:
+                line_start = fh.tell()
+                raw = fh.readline()
                 if not raw:
+                    break
+                # 最後一行可能仍在寫。不要推進 offset，下一次從這行
+                # 的開頭重讀；否則半行會永遠消失。
+                if not raw.endswith(b"\n"):
+                    fh.seek(line_start)
+                    break
+                self.offset = fh.tell()
+                self.line_no += 1
+                # JSONL 的分隔只有位元組 \n。逐行讀也因此不會把訊息
+                # 內合法的 U+2028 / U+2029 誤當成新紀錄。
+                text = raw[:-1].decode("utf-8", errors="replace").strip()
+                if not text:
                     continue
                 try:
-                    rec = json.loads(raw)
+                    rec = json.loads(text)
                 except ValueError:
                     continue
                 self._handle(rec, self.line_no)
@@ -446,6 +614,24 @@ class Tracker:
         rows = self.strands[-tail:]
         total_dots = sum(len(s.dots) for s in self.strands)
         total_failed = sum(s.failed_dots for s in self.strands)
+        # 壓縮點是全量的事實,不是視窗的事實。§6
+        #
+        # 【2026-09-19 量出來的】`rows` 只有最後 `tail` 條,所以壓縮點
+        # 落在視窗之前的時候,下游看到的是「一個壓縮點都沒有」,
+        # 跟「這段對話從來沒被壓縮過」長得一模一樣。真實資料裡發生過:
+        # session `167f9751` 721 輪、壓縮 7 次(最後一次第 491 輪),
+        # tail=180 的視窗從第 542 輪開始,於是 `rehydration_packet()`
+        # 與 `rehydrate_state()` 兩處都回「這段對話還沒被壓縮過」。
+        #
+        # 這兩個欄位讓下游分得出「沒發生過」與「我看不到」。
+        # 不把視窗外的內容搬進來 —— 那是另一件事,而且會讓這份
+        # 每 1 到 3 秒送一次的快照變重。
+        comp_ns = [s.n for s in self.strands if s.compaction]
+        support = self._support_records()
+        if support and rows:
+            # A sidechain belongs to the parent command's latest visible card.
+            # Keep it structured so the UI can show the causal child record.
+            rows[-1].support = support
         return {
             "path": str(self.path),
             "lines_read": self.line_no,
@@ -453,8 +639,114 @@ class Tracker:
             "shown": len(rows),
             "total_dots": total_dots,
             "total_failed": total_failed,
+            "compaction_total": len(comp_ns),
+            "compaction_last_n": comp_ns[-1] if comp_ns else None,
             "rows": [s.to_dict() for s in rows],
+            "support_total": len(support),
         }
+
+
+class CodexTracker(Tracker):
+    """Incremental adapter for Codex rollout JSONL.
+
+    Codex stores UI messages and tool calls inside ``payload`` records instead
+    of Claude's top-level ``user`` / ``assistant`` records.  Normalize only the
+    fields Tracker already understands so every downstream semantic check keeps
+    one implementation.
+    """
+
+    @staticmethod
+    def _message_text(content: object) -> str:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        return "\n".join(
+            str(block.get("text") or "")
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") in {"input_text", "output_text", "text"}
+        )
+
+    @staticmethod
+    def _owner_display_text(text: str) -> str:
+        """Remove Codex desktop context envelopes from the owner's words."""
+        marker = "\n## My request:\n"
+        if marker in text:
+            text = text.split(marker, 1)[1]
+        text = "\n".join(
+            line for line in text.splitlines()
+            if not line.strip().startswith("<image ")
+            and line.strip() != "</image>"
+        )
+        return text.strip()
+
+    def _handle(self, rec: dict, line_no: int) -> None:
+        payload = rec.get("payload")
+        if not isinstance(payload, dict):
+            if rec.get("type") == "compacted":
+                self._mark_compaction({"isCompactSummary": True},
+                                      _ts(rec), line_no)
+            return
+        if rec.get("type") != "response_item":
+            return
+
+        kind = payload.get("type")
+        at = rec.get("timestamp")
+        identity = payload.get("id") or payload.get("call_id")
+        if kind == "message" and payload.get("role") in {"user", "assistant"}:
+            text = self._message_text(payload.get("content"))
+            if not text.strip():
+                return
+            if payload.get("role") == "user":
+                content: object = self._owner_display_text(text)
+            else:
+                content = [{"type": "text", "text": text}]
+            super()._handle({
+                "type": payload.get("role"),
+                "timestamp": at,
+                "uuid": identity,
+                "message": {"content": content},
+            }, line_no)
+            return
+
+        if kind in {"custom_tool_call", "function_call"}:
+            super()._handle({
+                "type": "assistant",
+                "timestamp": at,
+                "uuid": identity,
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": payload.get("call_id") or identity,
+                    "name": payload.get("name") or "tool",
+                    "input": payload.get("input")
+                    if isinstance(payload.get("input"), dict) else {},
+                }]},
+            }, line_no)
+            return
+
+        if kind in {"custom_tool_call_output", "function_call_output"}:
+            # Codex output records do not carry a trustworthy cross-tool error
+            # boolean.  Close the call as an observed receipt without guessing
+            # success from prose or exit-code-looking text.
+            super()._handle({
+                "type": "user",
+                "timestamp": at,
+                "uuid": identity,
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": payload.get("call_id") or identity,
+                    "is_error": payload.get("status") == "failed",
+                }]},
+            }, line_no)
+
+
+def tracker_for(path: Path | str) -> Tracker:
+    """Return the parser matching a known transcript provider."""
+    target = Path(path)
+    if ".codex" in target.parts and "sessions" in target.parts:
+        return CodexTracker(target)
+    return Tracker(target)
 
 
 def _tool_detail(block: dict) -> str:

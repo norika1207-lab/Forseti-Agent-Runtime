@@ -15,11 +15,20 @@ window.addEventListener("error", (e) => {
   document.body && document.body.appendChild(box);
 });
 window.addEventListener("unhandledrejection", (e) => {
+  const reason = String(e.reason || "");
+  // Tauri's drag-region handler returns a Promise. A capability regression
+  // must never replace the entire product with the diagnostic overlay: the
+  // native title bar remains usable and the rest of Forseti can keep running.
+  if (/start[_-]dragging/i.test(reason)) {
+    e.preventDefault();
+    console.warn("Forseti window drag was rejected", e.reason);
+    return;
+  }
   const box = document.createElement("pre");
   box.style.cssText = "position:fixed;inset:0;z-index:99999;margin:0;padding:12px;"
     + "background:#1C1C1E;color:#FFCC80;font:11px/1.5 ui-monospace,monospace;"
     + "white-space:pre-wrap;overflow:auto";
-  box.textContent = "有一個 Promise 沒有人接\n\n" + String(e.reason)
+  box.textContent = "有一個 Promise 沒有人接\n\n" + reason
     + "\n\n" + ((e.reason && e.reason.stack) || "");
   document.body && document.body.appendChild(box);
 });
@@ -30,6 +39,7 @@ window.addEventListener("unhandledrejection", (e) => {
 // 規格 `.forseti/WIDGET_SPEC.md`。
 
 const invoke = window.__TAURI__?.core?.invoke;
+const listen = window.__TAURI__?.event?.listen;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => { const d = document.createElement("div"); d.textContent = s ?? ""; return d.innerHTML; };
 const flat = (s) => (s || "").split(/\s+/).filter(Boolean).join(" ");
@@ -41,6 +51,8 @@ let view = "tree";
 let lastSnap = null;
 let dismissed = new Set();      // 關掉的卡片，§5.1 留點可以重開
 let lastCount = 0;
+// 輪次編號只在 session 內唯一；不能讓上一條線的「不用」污染下一條線。
+const dismissKey = (kind, n) => `${kind}:${currentSession || "unknown"}:${n}`;
 
 // 空轉多短才值得標。
 //
@@ -1443,17 +1455,38 @@ let cardsOpen = false;
 /* 展開過的卡片。renderCards 每次 tick 會重建 innerHTML，
    不記住的話她點開的東西兩秒後就自己關上。 */
 const cardsWhy = new Set();
+const northstarPending = new Set();
 
 function renderCards(d) {
   const box = $("cards");
   if (!box) return;
   const cs = d.cards || [];
   if (!cs.length) { box.innerHTML = ""; return; }
-  const show = cardsOpen ? cs : cs.slice(0, 1);
+  // 三個槽位是同一組 proposal，不再把第二、第三張藏在「還有 N 個」
+  // 後面；窄螢幕由 CSS 堆疊。這不改 state，也不代表 owner 採納任何一張。
+  const show = cs.slice(0, 3);
+  const SLOT_NAMES = {
+    rewrite_prompt: "改寫指令",
+    add_context: "補強指令",
+    delegate_to_forseti: "交給 Forseti 協助",
+  };
   box.innerHTML = show.map((c, i) => `
-    <div class="card2${i === 0 ? " hot" : ""}" data-k="${esc(c.key)}">
+    <div class="card2${i === 0 ? " hot" : ""}" data-k="${esc(c.key)}" ` +
+      `data-slot="${esc(c.slot || c.kind || "delegate_to_forseti")}">
+      <div class="slot">${esc(SLOT_NAMES[c.slot || c.kind] || "建議")}</div>
       <div class="t">${esc(c.title)}</div>
       ${c.say ? `<p class="say">${esc(c.say)}</p>` : ""}
+      ${c.key === "north_star_change" ? `
+        <textarea class="nsObjective" rows="2" maxlength="1000" placeholder="如果真的改變了，請寫新的北極星">${esc(c.evidence || "")}</textarea>
+        <input class="nsScopeAccept" maxlength="500" placeholder="允許範圍（用逗號分隔，可留空）">
+        <input class="nsScopeReject" maxlength="500" placeholder="排除範圍（用逗號分隔，可留空）">
+        <input class="nsCriteria" maxlength="500" placeholder="成功條件（用逗號分隔，可留空）">
+        <div class="nsActions">
+          <button class="nsConfirm" type="button">確認新北極星</button>
+          <button class="nsExplore" type="button">只是探索</button>
+          <button class="nsIgnore" type="button">先不用</button>
+        </div>
+        <span class="nsOut" aria-live="polite"></span>` : ""}
       <div class="row">
         ${c.say ? '<button class="use" type="button">用這句</button>' : ""}
         <button class="why" type="button">為什麼是現在</button>
@@ -1465,11 +1498,7 @@ function renderCards(d) {
         <li><span class="k">信心</span><span>${esc(c.confidence || "")}</span></li>
         <li><span class="k">不理會</span><span>${esc(c.if_ignored || "")}</span></li>
       </ul>
-    </div>`).join("") +
-    (cs.length > 1
-      ? `<button class="more" type="button">${
-          cardsOpen ? "收起" : `還有 ${cs.length - 1} 個建議`}</button>`
-      : "");
+    </div>`).join("");
 
   box.querySelectorAll(".card2").forEach((el, i) => {
     const k = el.dataset.k;
@@ -1486,10 +1515,48 @@ function renderCards(d) {
       catch { e.target.textContent = "複製不了，請手動選取"; }
       setTimeout(() => { e.target.textContent = "用這句"; }, 1800);
     });
-  });
-  box.querySelector(".more")?.addEventListener("click", () => {
-    cardsOpen = !cardsOpen;
-    renderCards(lastSnap || d);
+    const ns = el.querySelector(".nsActions");
+    if (ns) {
+      const card = show[i];
+      const objective = () => (el.querySelector(".nsObjective")?.value || "").trim();
+      const csv = (selector) => (el.querySelector(selector)?.value || "").split(",").map(x => x.trim()).filter(Boolean);
+      const out = el.querySelector(".nsOut");
+      const decide = async (action, button) => {
+        const obj = objective();
+        if ((action === "confirm" || action === "explore") && !obj) {
+          out.textContent = "請先寫新的目標"; return;
+        }
+        const id = `${card.key}:${action}`;
+        const preview = action === "confirm" && !northstarPending.has(id);
+        button.disabled = true; out.textContent = preview ? "先預覽…" : "存中…";
+        try {
+          const raw = await invoke("north_star_change", {
+            action: preview ? "preview_confirm" : action,
+            objective: obj,
+            why: "OWNER 明確審核方向候選",
+            candidateN: card.n || null,
+            session: currentSession || "",
+            eventId: `owner-goal:${currentSession || "unknown"}:${card.n || "none"}`,
+            acceptedScope: csv(".nsScopeAccept"),
+            rejectedScope: csv(".nsScopeReject"),
+            successCriteria: csv(".nsCriteria"),
+          });
+          const r = typeof raw === "string" ? JSON.parse(raw) : raw;
+          if (!r.ok) { out.textContent = r.why || "做不了"; }
+          else if (preview) {
+            northstarPending.add(id);
+            out.textContent = "預覽完成；再按一次確認才會換版";
+          } else {
+            out.textContent = action === "confirm" ? `已建立第 ${r.version} 版` : (action === "explore" ? "已記為探索分支" : "已忽略這次候選");
+            northstarPending.delete(id);
+          }
+        } catch (e) { out.textContent = String(e); }
+        button.disabled = false;
+      };
+      el.querySelector(".nsConfirm")?.addEventListener("click", (e) => decide("confirm", e.currentTarget));
+      el.querySelector(".nsExplore")?.addEventListener("click", (e) => decide("explore", e.currentTarget));
+      el.querySelector(".nsIgnore")?.addEventListener("click", (e) => decide("ignore", e.currentTarget));
+    }
   });
 }
 
@@ -1555,6 +1622,18 @@ function packLanes(items) {
   });
 }
 
+function lineTip(el, info) {
+  if (!el || !info) return el;
+  el.setAttribute("data-line-tip", "1");
+  el.setAttribute("data-tip-title", info.label || "這條線");
+  el.setAttribute("data-tip-meaning", info.meaning || "");
+  el.setAttribute("data-tip-why", info.why || "");
+  el.setAttribute("data-tip-evidence", info.evidence || "");
+  el.setAttribute("data-tip-epistemic", info.epistemic || "UNKNOWN");
+  if (info.round != null) el.setAttribute("data-tip-round", String(info.round));
+  return el;
+}
+
 function drawDrift() {
   const lane = $("lane");
   if (!lane) return;
@@ -1566,6 +1645,7 @@ function drawDrift() {
   const MAIN = 10;
   const GAP = 8;
   const laneTop = lane.getBoundingClientRect().top;
+  const semanticByN = new Map((rows || []).map((row) => [Number(row.n), row.path_semantics || {}]));
 
   const pts = guts.map((g) => {
     const r = g.getBoundingClientRect();
@@ -1574,6 +1654,9 @@ function drawDrift() {
       n: Number(st?.dataset.n ?? -1),
       d: Number(st?.dataset.dist || 0),
       k: st?.dataset.klass || "UNKNOWN",
+      failed: Number(st?.dataset.failed || 0),
+      exploratory: st?.dataset.exploratory === "1",
+      semantic: semanticByN.get(Number(st?.dataset.n ?? -1)) || {},
       acts: Number(st?.dataset.acts || 0),
       y0: r.top - laneTop,
       y1: r.bottom - laneTop,
@@ -1586,6 +1669,14 @@ function drawDrift() {
   svg.setAttribute("class", "drift");
   svg.setAttribute("height", String(lane.scrollHeight));
   const add = (el, cls) => { el.setAttribute("class", cls); svg.appendChild(el); return el; };
+  const addHit = (visible, info) => {
+    const hit = visible.cloneNode(false);
+    hit.removeAttribute("style");
+    hit.removeAttribute("stroke");
+    lineTip(hit, info);
+    add(hit, "lineHit");
+    return hit;
+  };
 
   /* 問題軌道。裁到可見範圍再配置，不然畫面外的長軌道會把
      所有短的擠到很右邊。 */
@@ -1602,6 +1693,15 @@ function drawDrift() {
     if (!A || !B) return;
     const x = MAIN + GAP * (it.lane + 1);
     const cls = "lane " + (LANE_CLS[it.kind] || "ld") + (it.open ? " open" : "");
+    const laneSpec = ((((lastSnap || {}).source_tree_schema || {}).lanes || {})[it.kind] || {});
+    const laneInfo = {
+      label: it.open ? "尚未解決的問題軌道" : "已收回的問題軌道",
+      meaning: laneSpec.meaning || "這條旁線表示一段可追蹤的問題。",
+      why: `第 ${it.from_n} 輪開始${it.open ? "，目前仍開著" : `，第 ${it.to_n} 輪收回`}`,
+      evidence: it.kind || "UNKNOWN",
+      epistemic: "OBSERVED",
+      round: it.from_n,
+    };
     const bend = 14;
 
     const out = document.createElementNS(NS, "path");
@@ -1609,11 +1709,13 @@ function drawDrift() {
       `M ${MAIN} ${A.y0} C ${MAIN} ${A.y0 + bend * .6}, ` +
       `${x} ${A.y0 + bend * .4}, ${x} ${A.y0 + bend}`);
     add(out, cls);
+    addHit(out, laneInfo);
 
     if (B.y1 > A.y0 + bend) {
       const run = document.createElementNS(NS, "path");
       run.setAttribute("d", `M ${x} ${A.y0 + bend} L ${x} ${B.y1 - (it.open ? 0 : bend)}`);
       add(run, cls);
+      addHit(run, laneInfo);
     }
     // 收回來的才畫回收曲線。一路開著的就讓它走到底 ——
     // 沒解決的問題不會自己回到主線。
@@ -1623,6 +1725,7 @@ function drawDrift() {
         `M ${x} ${B.y1 - bend} C ${x} ${B.y1 - bend * .4}, ` +
         `${MAIN} ${B.y1 - bend * .6}, ${MAIN} ${B.y1}`);
       add(back, cls);
+      addHit(back, laneInfo);
     }
   });
 
@@ -1634,31 +1737,75 @@ function drawDrift() {
       Math.round(d * 180)}%, var(--green))`;
     return "var(--green)";
   };
+  const schema = (lastSnap || {}).source_tree_schema || {};
+  const lineSpec = (state) => ((schema.lines || {})[state] || {});
+  const pathState = (p) => {
+    if (p.semantic && p.semantic.state) return p.semantic.state;
+    if (p.k === "CONFLICTING") return "confirmed";
+    if (p.failed > 0) return "tool_fail";
+    if (p.k === "UNKNOWN") return "neutral";
+    if (p.exploratory) return "suspected";
+    if (p.d > 0.08) return "suspected";
+    return "aligned";
+  };
+  // North Star reference: once the actual path leaves the accepted route,
+  // keep the old canonical route visible as a green dashed epistemic
+  // reference. It is not the self-recovery latency marker below.
+  const firstOff = pts.findIndex((p) => ["suspected", "confirmed", "exploratory"].includes(pathState(p)));
+  if (firstOff > 0) {
+    const ref = document.createElementNS(NS, "path");
+    const start = pts[firstOff - 1], end = pts[pts.length - 1];
+    ref.setAttribute("d", `M ${MAIN - 3} ${start.y1} L ${MAIN - 3} ${end.y1}`);
+    ref.setAttribute("data-reference", "north-star");
+    add(ref, "reference northstar-reference");
+    addHit(ref, {
+      label: "原本的 North Star 參照",
+      meaning: "實際路徑分開後，這條虛線保留當時仍有效的主線作比較。",
+      why: `實際路徑自第 ${pts[firstOff].n} 輪開始離開參照線`,
+      evidence: "active North Star version chain",
+      epistemic: "OBSERVED",
+      round: pts[firstOff].n,
+    });
+  }
   for (let i = 0; i < pts.length; i++) {
     const p = pts[i], prev = i ? pts[i - 1] : null;
+    const state = pathState(p);
+    const spec = lineSpec(state);
     const seg = document.createElementNS(NS, "path");
     seg.setAttribute("d", prev
       ? `M ${MAIN} ${prev.y1} L ${MAIN} ${p.y1}`
       : `M ${MAIN} ${p.y0} L ${MAIN} ${p.y1}`);
-    seg.setAttribute("stroke", colorOf(p.k, p.d));
-    add(seg, "main");
+    seg.setAttribute("stroke", spec.css_var ? `var(${spec.css_var})` : colorOf(p.k, p.d));
+    seg.setAttribute("data-path-state", state);
+    add(seg, spec.class_name || "main");
+    addHit(seg, Object.assign({
+      label: spec.label || "這段路徑",
+      meaning: spec.meaning || "",
+      round: p.n,
+    }, p.semantic || {}));
   }
 
   /* 節點。半徑吃那一輪的動作數 —— 每個點一樣大的話，
      再多點也只是一條虛線。 */
   pts.forEach((p) => {
+    const state = pathState(p);
+    const spec = lineSpec(state);
     const r = Math.max(2.2, Math.min(6.5, 2.2 + Math.sqrt(p.acts) * 0.85));
     const cy = (p.y0 + p.y1) / 2;
     const halo = document.createElementNS(NS, "circle");
     halo.setAttribute("cx", String(MAIN)); halo.setAttribute("cy", String(cy));
     halo.setAttribute("r", String(r + 3.2));
-    halo.setAttribute("fill", colorOf(p.k, p.d));
-    add(halo, "halo");
+    halo.setAttribute("fill", spec.css_var ? `var(${spec.css_var})` : colorOf(p.k, p.d));
+    halo.setAttribute("data-path-state", state);
+    lineTip(halo, Object.assign({label: spec.label, meaning: spec.meaning, round: p.n}, p.semantic || {}));
+    add(halo, "halo " + (spec.class_name || "").replace("main ", ""));
     const c = document.createElementNS(NS, "circle");
     c.setAttribute("cx", String(MAIN)); c.setAttribute("cy", String(cy));
     c.setAttribute("r", String(r));
-    c.setAttribute("fill", colorOf(p.k, p.d));
-    add(c, "node");
+    c.setAttribute("fill", spec.css_var ? `var(${spec.css_var})` : colorOf(p.k, p.d));
+    c.setAttribute("data-path-state", state);
+    lineTip(c, Object.assign({label: spec.label, meaning: spec.meaning, round: p.n}, p.semantic || {}));
+    add(c, "node " + (spec.class_name || "").replace("main ", ""));
   });
 
   lane.appendChild(svg);
@@ -1720,6 +1867,13 @@ function renderTree() {
     wrap.dataset.acts = String((s.dots || []).length);
     wrap.dataset.dist = String((s.goal && s.goal.distance) || 0);
     wrap.dataset.klass = (s.goal && s.goal.klass) || "UNKNOWN";
+    wrap.dataset.failed = String(s.failed || 0);
+    wrap.dataset.exploratory = s.exploratory_branch ? "1" : "0";
+    wrap.dataset.pathState = (s.path_semantics && s.path_semantics.state) || (wrap.dataset.klass === "CONFLICTING"
+      ? "confirmed"
+      : (s.failed || 0) > 0 ? "tool_fail"
+        : wrap.dataset.klass === "UNKNOWN" ? "neutral"
+          : Number(s.goal && s.goal.distance || 0) > 0.08 ? "suspected" : "aligned");
     if (s.corrected_by_owner) wrap.dataset.corrected = "1";
 
     // 紫點的框。§5.4 三條件同時成立才跳，而且壓在線上不是躺在側邊，
@@ -1743,7 +1897,31 @@ function renderTree() {
     body.className = "body";
     body.title = "點一下看這一輪能做什麼";
     body.addEventListener("click", () => openNode(s));
-    body.innerHTML = `<div class="txt">${esc(flat(s.owner_text).slice(0, 110) || "(無)")}</div>`;
+    const semantic = s.path_semantics || {};
+    const requestText = flat(s.owner_text).slice(0, 180) || "(沒有使用者要求)";
+    const answerText = flat(s.ai_text).slice(0, 300) ||
+      (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
+    body.innerHTML =
+      `<div class="turnPart request"><span>你</span><div class="txt">${esc(requestText)}</div></div>` +
+      `<div class="turnPart answer"><span>AI</span><div class="txt">${esc(answerText)}</div></div>` +
+      `<div class="turnVerdict ${esc(semantic.state || "neutral")}">` +
+      `<b>${esc(semantic.label || "資料不足")}</b>` +
+      `<span>${esc(semantic.actor ? `責任：${semantic.actor} · ${semantic.why || ""}` : (semantic.why || ""))}</span>` +
+      `</div>`;
+
+    const support = s.support || [];
+    if (support.length) {
+      const child = document.createElement("div");
+      child.className = "supportTrail";
+      child.innerHTML = "<b>支援工作 " + support.length + " 筆</b>" +
+        support.slice(-3).map((x) =>
+          "<div class=\"supportItem\"><span>" + esc(x.status === "active" ? "進行中" : "已回報") +
+          "</span><strong>" + esc(flat(x.request).slice(0, 90)) +
+          "</strong><p>" + esc(flat(x.response).slice(-220) || "等待 support 回報") +
+          "</p></div>"
+        ).join("");
+      body.appendChild(child);
+    }
 
     const bts = s.betrayals || [];
     // 白點常常正好落在「那一輪一個工具都沒叫」的線上,
@@ -1903,28 +2081,28 @@ function renderTree() {
     // 文字寫成「下一句該講什麼」，不是描述問題 ——
     // 一個看得懂卻不知道要做什麼的提醒，跟沒有提醒差不多。
     bts.forEach((b, i) => {
-      const key = "b" + s.n + "-" + i;
-      if (dismissed.has(key)) return;
+      if (dismissed.has(dismissKey("b", s.n) + ":" + i)) return;
       const c = document.createElement("div");
       c.className = "card warn";
-      c.style.setProperty("--linkcol", col);   // 線穿過卡片時顏色要接得上
+      c.dataset.round = String(s.n);
       // 層級:結論 → 標的 → 證據 → 下一句該講什麼。
       // 每一層講一件不重複的事。
       c.innerHTML =
         `<button class="x" aria-label="關閉">×</button>` +
+        `<span class="round">第 ${esc(s.n)} 輪 · AI 違規</span>` +
         `<b>${esc(b.title || b.fp_name)}</b>` +
         (b.target ? `<div class="tg">${esc(b.target)}</div>` : "") +
         `<div class="ev">${esc(b.why)}</div>` +
         `<div class="adv">${esc(b.advice)}` +
         `<span class="fp">${esc(b.fp)}</span></div>`;
       c.querySelector(".x").addEventListener("click", () => {
-        dismissed.add(key); renderTree();
+        dismissed.add(dismissKey("b", s.n) + ":" + i); renderTree();
       });
       lane.appendChild(c);
     });
 
     // §6 壓縮的黑點卡片。它是錨，不只是警告。
-    if (s.compaction && !dismissed.has("c" + s.n)) {
+    if (s.compaction && !dismissed.has(dismissKey("c", s.n))) {
       const m = s.compaction_meta || {};
       const c = document.createElement("div");
       c.className = "card black-note";
@@ -1941,7 +2119,7 @@ function renderTree() {
         `<div class="adv">錨在全量紀錄第 <span class="num">${m.line || "?"}</span> 行。` +
         `之後有問題，回頭看這一行之前。</div>`;
       c.querySelector(".x").addEventListener("click", () => {
-        dismissed.add("c" + s.n); renderTree();
+        dismissed.add(dismissKey("c", s.n)); renderTree();
       });
       lane.appendChild(c);
     }
@@ -1950,7 +2128,7 @@ function renderTree() {
   lane.querySelectorAll('.st[data-drift="1"]').forEach((st) => {
     const s = rows.find((x) => String(x.n) === st.dataset.n);
     const a = s && s.drift_alert;
-    if (!a || st.querySelector(".driftBox")) return;
+    if (!a || dismissed.has(dismissKey("d", s.n)) || st.querySelector(".driftBox")) return;
     const body = st.querySelector(".body");
     if (!body) return;
     const box = document.createElement("div");
@@ -1973,6 +2151,7 @@ function renderTree() {
     });
     box.querySelector(".dNo").addEventListener("click", (e) => {
       e.stopPropagation();
+      dismissed.add(dismissKey("d", s.n));
       box.remove();
       st.dataset.drift = "0";   // 關掉之後這一輪不再跳
     });
@@ -1999,6 +2178,21 @@ function openNode(s) {
   nodeN = s.n;
   $("nodeTitle").textContent = `第 ${s.n} 輪`;
   $("nodeSaid").textContent = flat(s.owner_text).slice(0, 160) || "(沒有文字)";
+  $("nodeAI").textContent = flat(s.ai_text).slice(0, 1200) ||
+    (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
+  const semantic = s.path_semantics || {};
+  const verdict = $("nodeVerdict");
+  verdict.className = `nodeVerdict ${semantic.state || "neutral"}`;
+  verdict.innerHTML = `<b>${esc(semantic.label || "資料不足")}</b>` +
+    `<span>${esc(semantic.actor ? `責任：${semantic.actor}` : "")}</span>` +
+    `<p>${esc(semantic.why || "尚無足夠證據")}</p>` +
+    (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "");
+  const support = s.support || [];
+  if (support.length) {
+    $("nodeAI").textContent += "\n\n支援工作（" + support.length + " 筆）：\n" +
+      support.map((x) => "【" + (x.status === "active" ? "進行中" : "已回報") + "】" +
+        flat(x.request).slice(0, 240) + "\n" + flat(x.response).slice(-700)).join("\n\n");
+  }
   $("forkOut").hidden = true;
   $("forkOut").textContent = "";
   $("actFork").disabled = false;
@@ -2153,6 +2347,37 @@ async function openInApp() {
 
 /* ── List：§12 事件是事故類型，不是時間區段 ──── */
 
+const INC_RANK = {C: 3, B: 2, A: 1};
+function incidentRootKey(x) {
+  return String(x?.resource || x?.synthetic_claim_ref || x?.task_id ||
+                x?.file || x?.path || x?.target || x?.fp || "unknown");
+}
+function incidentFamily(a, b) {
+  return (INC_RANK[b || "A"] > INC_RANK[a || "A"]) ? b : (a || "A");
+}
+function incidentSummary(found) {
+  const byKey = new Map();
+  found.forEach((it) => {
+    const x = it.x || {};
+    const key = incidentRootKey(x);
+    if (!byKey.has(key)) {
+      byKey.set(key, {key, family: x.family || "A", hits: [], primitives: new Set()});
+    }
+    const inc = byKey.get(key);
+    inc.family = incidentFamily(inc.family, x.family || "A");
+    inc.hits.push(it);
+    inc.primitives.add(x.fp || x.primitive_id || "unknown");
+  });
+  const rows = Array.from(byKey.values()).map((inc) => ({
+    ...inc,
+    primitives: Array.from(inc.primitives).sort(),
+  }));
+  rows.sort((a, b) => (INC_RANK[b.family || "A"] - INC_RANK[a.family || "A"]) ||
+                       (b.hits.length - a.hits.length) ||
+                       a.key.localeCompare(b.key));
+  return rows;
+}
+
 function renderList() {
   const lane = $("lane");
   lane.textContent = "";
@@ -2180,13 +2405,51 @@ function renderList() {
     (s.betrayals || []).forEach((b) => found.push({s, x: b}));
     (s.overclaims || []).forEach((o) => found.push({s, x: o}));
   });
+  const incidents = incidentSummary(found);
 
   const head = document.createElement("div");
   head.className = "famHead";
+  const overclaimGap = Number(lastSnap?.overclaim_data_gaps || 0);
   head.innerHTML = found.length
-    ? `<span>照嚴重度分三格。點開看是哪一條，編號對得回規格 §21</span>`
-    : `<span>目前沒有查到帶編號的發現。查不到不等於沒有</span>`;
+    ? `<span>先收斂成 root incident，再保留下面的嚴重度 drill-down。` +
+      `這裡防的是 warning flood，不是把每個 detector hit 都推給你</span>`
+    : `<span>目前沒有查到帶編號的發現。` +
+      (overclaimGap
+        ? `其中宣稱大於證據有 ${overclaimGap} 個判定缺結構化資料，不能算成沒命中`
+        : `查不到不等於沒有`) + `</span>`;
   lane.appendChild(head);
+
+  const sum = document.createElement("div");
+  sum.className = "incSum";
+  const comp = found.length ? incidents.length / found.length : null;
+  sum.innerHTML =
+    `<div class="incTop"><span class="incBig">${incidents.length}</span>` +
+    `<span class="incText">件 root incident</span>` +
+    `<span class="incMeta">${found.length} 個 detector hit` +
+    (comp === null ? "" : `　壓縮率 ${Math.round(comp * 100)}%`) +
+    `</span></div>`;
+  if (!incidents.length) {
+    sum.insertAdjacentHTML("beforeend",
+      '<div class="none">沒有可聚合的 incident。不是保證乾淨，是這份資料沒命中</div>');
+  } else {
+    const ul = document.createElement("ul");
+    incidents.slice(0, 5).forEach((inc) => {
+      const first = inc.hits[0];
+      const li = document.createElement("li");
+      li.className = "inc sev" + (inc.family || "A");
+      li.innerHTML =
+        `<span class="incFam">${esc(inc.family || "A")}</span>` +
+        `<span class="incName">${esc(first.x.title || first.x.name || inc.key)}</span>` +
+        `<span class="incHits">${inc.hits.length} hit</span>`;
+      li.title = `${inc.key} / ${inc.primitives.join(", ")}`;
+      li.addEventListener("click", () => {
+        view = "tree"; syncView(); jump(first.s.n);
+      });
+      ul.appendChild(li);
+    });
+    sum.appendChild(ul);
+  }
+  lane.appendChild(sum);
 
   FAM.forEach((f) => {
     const mine = found.filter((it) => (it.x.family || "") === f.k);
@@ -2243,8 +2506,10 @@ function renderList() {
       if (d.failed) fails.push({s, d});
       if (d.label === "對話壓縮") compacts.push({s, d});
     });
-    s.gaps.forEach((g) => {
-      if (g[1] - g[0] >= GAP_SHOW) stalls.push({s, sec: g[1] - g[0]});
+    // `seg` 是這一段在 `gaps()` 裡的索引。後端 `stalls()` 也是對同一支
+    // `gaps()`(不帶參數)逐段 enumerate,所以兩端的索引指的是同一段。
+    s.gaps.forEach((g, i) => {
+      if (g[1] - g[0] >= GAP_SHOW) stalls.push({s, sec: g[1] - g[0], seg: i});
     });
   });
 
@@ -2274,14 +2539,91 @@ function renderList() {
         (it) => `<span>${esc(it.d.label || "")}</span>` +
                 `<span class="ct">#${it.s.n}</span>`,
         "執行層的事，不是 FP。一次非零退出是誠實的失敗");
+  /* 【2026-09-19】這一格原本只有計時器。F05 的正式判定一直算得出來
+     （`desktop_api.stalls()`，掛在 `row.stall`），但**一次都沒有出現過**：
+     `stalls()` 把 `Strand.gaps` 當屬性讀，而它是方法，整支在
+     `for g in gaps` 炸掉被 `_safe()` 吞了，於是 `stall_total` 恆 0。
+     修好之後那份判定才真的有值，接在這裡：同一段時間，左邊是量到多久，
+     右邊是四個因子相乘之後判成什麼。
+
+     【2026-09-19 第三修】先前只有最長那一段有判定（`stalls()` 每條線
+     只取 worst 那一段），其餘段落沒被判過，所以這裡不標 ——
+     **沒有被判過跟判成沒事不一樣**，那條原則不變，變的是現在
+     `stalls()` 逐段判，所以後端送的是 `row.stalls` 一段一筆。
+     這裡照 `seg` 對上去，對不上的仍然不標。 */
+  const stallTag = (it) => {
+    /* `row.stalls` 是逐段的清單，`row.stall` 是其中 risk 最高的那一段。
+       兩個都讀：清單在的時候用清單，只有舊形狀的時候退回單筆 ——
+       退回不是相容性禮貌，是**不要在資料形狀換掉的那一版整格空白**，
+       而空白在這一格讀起來會像「沒有判定」。 */
+    const list = Array.isArray(it.s.stalls) ? it.s.stalls
+               : (it.s.stall ? [it.s.stall] : []);
+    /* 【2026-09-19 審讀修掉】先前用秒數配對:`Math.floor(it.sec)` 對
+       後端的 `int(dur)`。兩端算的秒數來源不同(前端吃 to_dict() 裡
+       round 過的 gaps,後端吃原始 float),round 邊界會對不上,對不上的
+       段落就沒有標籤,而註解卻寫著「照 seg 對上去」。現在真的照 seg。 */
+    const a = list.find((x) => x && x.seg === it.seg);
+    if (!a) return "";
+    /* `esc()` 不轉雙引號（它走 textContent），而這裡要進 title 屬性。 */
+    const live = Array.isArray(a.factors_live) ? a.factors_live : [];
+    /* 四個因子裡這一刻量得到幾個。標出來的理由跟後端 `factors_why`
+       同一條：不標的話，那個 risk 讀起來像四個因子合議出來的。 */
+    const why = esc([a.why || "", a.factors_why || ""]
+                    .filter(Boolean).join("　")).replace(/"/g, "&quot;");
+    return `<span class="stallV${a.suspect ? " bad" : ""}" title="${why}">` +
+           `${a.suspect ? "可疑" : "還在動"}　風險 ${a.risk}` +
+           `<i class="stallF">因子 ${live.length}/4</i></span>`;
+  };
   plain("長時間沒動作", stalls,
-        (it) => `<span>${dur(it.sec)}</span>` +
+        (it) => `<span>${dur(it.sec)}</span>` + stallTag(it) +
                 `<span class="ct">#${it.s.n}</span>`,
-        "實線是有動作的時間，淡的是什麼都沒發生的時間");
+        "實線是有動作的時間，淡的是什麼都沒發生的時間。"
+        + "每一段過得了門檻的沉默各自標一次 F05 的判定。"
+        + "有動作不是把風險乘成 0，是把長沉默切成好幾段短的。"
+        + "「因子 1/4」是說這一刻四個因子只有一個量得到，"
+        + "滑上去看它為什麼這樣判、以及另外三個缺什麼");
   plain("對話壓縮", compacts,
         (it) => `<span>這裡之後它記不得前面</span>` +
                 `<span class="ct">#${it.s.n}</span>`,
         "不是問題，是一條分界線");
+
+  // R07 shared trace graph: view filters and stable-node navigation.
+  const graph = lastSnap?.trace_graph;
+  if (graph && Array.isArray(graph.nodes)) {
+    const panel = document.createElement("div");
+    panel.className = "fam traceGraphPanel";
+    panel.innerHTML = `<h3>共享追溯圖<em>${graph.nodes.length} nodes / ${graph.edges?.length || 0} edges</em></h3>` +
+      `<p class="sevWhy">八個視圖共用同一批穩定節點；未知邊保持 UNKNOWN，不代表沒有發生</p>`;
+    const nav = document.createElement("div");
+    nav.className = "traceViews";
+    const list = document.createElement("div");
+    list.className = "traceNodeList";
+    Object.entries(graph.views || {}).forEach(([name, viewInfo]) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = `${name} (${(viewInfo.node_ids || []).length})`;
+      b.addEventListener("click", () => {
+        list.textContent = "";
+        (viewInfo.node_ids || []).map((id) => graph.nodes.find((n) => n.id === id))
+          .filter(Boolean).slice(0, 40).forEach((n) => {
+            const li = document.createElement("button");
+            li.type = "button";
+            li.className = "traceNode";
+            li.textContent = `${n.kind} · ${n.source_id} · ${n.state}`;
+            li.addEventListener("click", () => {
+              const m = String(n.source_id || "").match(/^strand:(\d+)$/);
+              if (m) { view = "tree"; syncView(); jump(Number(m[1])); }
+              else { $("stat").textContent = `${n.kind} ${n.source_id}：${n.state}`; }
+            });
+            list.appendChild(li);
+          });
+      });
+      nav.appendChild(b);
+    });
+    panel.appendChild(nav);
+    panel.appendChild(list);
+    lane.appendChild(panel);
+  }
 }
 
 /* ── 功能自檢 §33 ─────────────────────────────
@@ -2463,7 +2805,7 @@ function wireActs(box) {
    【2026-09-17 實測抓到的，症狀是三顆動作鈕完全按不動】
    `wireActs` 是兩段式的：第一下把鈕改成「再按一次確定」，
    第二下才真的送出。那個確認窗是 5 秒（`app.js` 同一支的 setTimeout）。
-   而輪詢是這個檔案最底下那個 tick 的 setInterval，兩秒一輪，
+   而當時的輪詢是這個檔案最底下每兩秒呼叫 tick 的計時器，
    每一輪 `renderWork()` 第一行
    `lane.textContent = ""` 把整塊清掉重建 —— 重建出來的是新的節點、
    新的 closure，`armed` 就沒了。
@@ -2923,28 +3265,69 @@ function jump(n) {
 
 const pop = $("pop");
 let tipDot = null;
+function nearestLineTip(clientX, clientY) {
+  const drift = $("lane")?.querySelector(".drift");
+  if (!drift) return null;
+  const area = drift.getBoundingClientRect();
+  if (clientX < area.left - 8 || clientX > area.right + 8 ||
+      clientY < area.top || clientY > area.bottom) return null;
+  let best = null;
+  let bestDistance = Infinity;
+  drift.querySelectorAll("[data-line-tip]").forEach((candidate) => {
+    const r = candidate.getBoundingClientRect();
+    const dx = clientX < r.left ? r.left - clientX
+      : clientX > r.right ? clientX - r.right : 0;
+    const dy = clientY < r.top ? r.top - clientY
+      : clientY > r.bottom ? clientY - r.bottom : 0;
+    const distance = Math.hypot(dx, dy);
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  });
+  return bestDistance <= 12 ? best : null;
+}
 document.addEventListener("pointerover", (e) => {
-  const d = e.target.closest(".d");
-  if (!d || !d.dataset.tip) { tipDot = null; pop.hidden = true; return; }
+  const d = e.target.closest(".d[data-tip], .drift [data-line-tip]") ||
+    nearestLineTip(e.clientX, e.clientY);
+  if (!d || (!d.dataset.tip && !d.dataset.lineTip)) {
+    tipDot = null; pop.hidden = true; return;
+  }
   // Pointer movement inside one dot produces many mouseover-equivalent
   // events. Do not rebuild the tooltip or rescan siblings until the target
   // actually changes; this keeps hover from becoming an event/render storm.
   if (d === tipDot) return;
   tipDot = d;
-  const host = d.closest(".dots");
-  const sibs = [...host.querySelectorAll(".d")].filter((x) => x.dataset.tip);
-  // 同一時間點擠了很多工具 → 一列一列像漢堡疊起來
-  const list = sibs.length > 1 ? sibs : [d];
-  pop.innerHTML = list.slice(0, 14).map((x) =>
-    `<div class="r"><i style="background:${getComputedStyle(x).backgroundColor}"></i>` +
-    `<span>${esc(x.dataset.tip)}</span></div>`).join("");
+  if (d.dataset.lineTip) {
+    const row = (label, value, cls = "") => value
+      ? `<div class="lineTipRow ${cls}"><span>${label}</span><b>${esc(value)}</b></div>` : "";
+    pop.classList.add("linePop");
+    pop.innerHTML =
+      `<div class="lineTipTitle">${esc(d.dataset.tipTitle || "這條線")}` +
+      `${d.dataset.tipRound ? `<em>第 ${esc(d.dataset.tipRound)} 輪</em>` : ""}</div>` +
+      `<p>${esc(d.dataset.tipMeaning || "")}</p>` +
+      row("原因", d.dataset.tipWhy) +
+      row("證據", d.dataset.tipEvidence) +
+      row("等級", d.dataset.tipEpistemic, "epistemic");
+  } else {
+    pop.classList.remove("linePop");
+    const host = d.closest(".dots");
+    const sibs = host ? [...host.querySelectorAll(".d")].filter((x) => x.dataset.tip) : [d];
+    // 同一時間點擠了很多工具 → 一列一列像漢堡疊起來
+    const list = sibs.length > 1 ? sibs : [d];
+    pop.innerHTML = list.slice(0, 14).map((x) =>
+      `<div class="r"><i style="background:${getComputedStyle(x).backgroundColor}"></i>` +
+      `<span>${esc(x.dataset.tip)}</span></div>`).join("");
+  }
   pop.hidden = false;
   const r = d.getBoundingClientRect();
-  pop.style.left = Math.max(6, Math.min(window.innerWidth - 290, r.left - 8)) + "px";
-  pop.style.top = (r.bottom + 6) + "px";
+  const anchorX = d.dataset.lineTip ? e.clientX + 12 : r.left - 8;
+  const anchorY = d.dataset.lineTip ? e.clientY + 12 : r.bottom + 6;
+  pop.style.left = Math.max(6, Math.min(window.innerWidth - 326, anchorX)) + "px";
+  pop.style.top = Math.max(6, Math.min(window.innerHeight - 210, anchorY)) + "px";
 });
 document.addEventListener("pointerout", (e) => {
-  if (!e.relatedTarget || !e.relatedTarget.closest(".pop, .d")) {
+  if (!e.relatedTarget || !e.relatedTarget.closest(".pop, .d, [data-line-tip]")) {
     tipDot = null;
     pop.hidden = true;
   }
@@ -2964,10 +3347,24 @@ document.addEventListener("pointerout", (e) => {
 
 const LEGEND = [
   ["這條線", [
-    ['<span class="swatch"><i class="lgLine" style="background:linear-gradient(var(--green),var(--green))"></i></span>',
-     "一個來回", "你發一次話，到它回完為止。線的長度就是那一輪花了多久，它還在跑的時候會一直長"],
-    ['<span class="swatch"><i class="lgLine" style="background:linear-gradient(var(--green),var(--amber))"></i></span>',
-     "線變橘", "那一輪工具失敗的比例越高，線越往橘走。綠到橘是連續的，不是分級"],
+    ['<span class="swatch"><i class="lgLine path-aligned" data-schema-key="aligned"></i></span>',
+     "綠色實線", "目前實際路徑對 active North Star 有足夠支持"],
+    ['<span class="swatch"><i class="lgLine path-suspected" data-schema-key="suspected"></i></span>',
+     "橘色分支", "可能偏離或目標尚未確認；這不是錯誤判決"],
+    ['<span class="swatch"><i class="lgLine path-new-direction" data-schema-key="new_direction"></i></span>',
+     "紫色實線", "你已確認新的 North Star；這是方向換版，不是 AI 偏離"],
+    ['<span class="swatch"><i class="lgLine path-direction-candidate" data-schema-key="direction_candidate"></i></span>',
+     "紫色虛線", "語意像是在改方向，但還沒確認成新的 North Star"],
+    ['<span class="swatch"><i class="lgLine path-exploratory" data-schema-key="exploratory"></i></span>',
+     "橘色虛線", "你明確保留的探索旁支；不改主線，也不算 drift"],
+    ['<span class="swatch"><i class="lgLine path-confirmed" data-schema-key="confirmed"></i></span>',
+     "紅色分支", "已有 deterministic 或 owner-confirmed contradiction"],
+    ['<span class="swatch"><i class="lgLine path-tool-fail" data-schema-key="tool_fail"></i></span>',
+     "藍色分支", "工具或 runtime 失敗；這是誠實失敗，不等於 drift"],
+    ['<span class="swatch"><i class="lgLine path-neutral" data-schema-key="neutral"></i></span>',
+     "中性色分支", "未知、壓縮或資料覆蓋不足；不歸責"],
+    ['<span class="swatch"><i class="lgLine northstar-reference" data-schema-key="northstar-reference"></i></span>',
+     "綠色虛線參照", "偏離後仍保留的舊北極星路徑；不是 self-recovery latency"],
     ['<span class="swatch"><i class="d" style="background:var(--green);width:8px;height:8px"></i></span>',
      "線頭線尾的圓點", "那一輪的起點跟終點。還在跑的那一輪沒有終點"],
     ['<span class="swatch"><i class="d big"></i></span>',
@@ -3138,7 +3535,7 @@ function choose(id) {
   closePicker();
   rows = [];
   lastCount = 0;
-  tick();
+  requestRefresh();
 }
 
 async function openPicker() {
@@ -3165,7 +3562,7 @@ addEventListener("keydown", (e) => {
   if (e.key === "Escape" && !picker.hidden) closePicker();
 });
 
-/* ── 輪詢 §13 1 到 3 秒 ──────────────────────── */
+/* ── 事件驅動刷新 ────────────────────────────── */
 
 // 量不到就說出來，而且要說在看得見的地方。
 //
@@ -3186,7 +3583,7 @@ function fatal(title, detail) {
   $("adviceWhy").textContent = detail;
 }
 
-/* 上一輪還沒回來就跳過這一輪。
+/* 上一次讀取還沒回來時，把後續事件合併成一次 trailing refresh。
 
    【2026-09-18 事故】輪詢是兩秒一輪（那一行在這個檔最底下），而
    `strands` 在真實資料上要 17.6 秒（冷）／6.7 秒（熱）。
@@ -3198,22 +3595,55 @@ function fatal(title, detail) {
    `fatal()` 沒被觸發，因為 invoke 既沒成功也沒拋錯，它還在跑。
    實測 ps:App 跑了 5 分 50 秒，而它底下的 Python 子行程只有 8 秒大。
 
-   這個旗標治的是「重疊」。真正的 17.6 秒要另外治，
+   `forseti://changed` 由 Rust watcher 合併檔案事件。前端仍要守住
+   「事件在 Python 執行中到達」：不能遺失，也不能再開一個子行程。
+
+   這組旗標治的是「重疊與事件合併」。真正的 17.6 秒要另外治，
    那是 `_meta_rows` 2.4 秒、四次 subprocess 1.4 秒、
    `claims.verify` 36 次 1 秒、`blast.summary` 0.9 秒加起來的。 */
 let inFlight = false;
+let refreshPending = false;
+let refreshScheduled = false;
+let foundationPending = false;
+let foundationInFlight = null;
 let slowSince = 0;
+let slowTimer = null;
+let stopChangedListener = null;
+let refreshReady = false;
+let lastForegroundRefreshAt = 0;
+
+function invalidateBackendCaches() {
+  workCache = null;
+  machCache = null;
+  featCache = null;
+  auditCache = null;
+  specCache = null;
+}
+
+function requestRefresh({ invalidateCaches = false, refreshFoundation = false } = {}) {
+  if (invalidateCaches) invalidateBackendCaches();
+  if (refreshFoundation) foundationPending = true;
+  refreshPending = true;
+  if (inFlight || refreshScheduled) return;
+
+  refreshScheduled = true;
+  queueMicrotask(() => {
+    refreshScheduled = false;
+    if (refreshPending && !inFlight) void tick();
+  });
+}
+
+function refreshFoundationInBackground() {
+  if (foundationInFlight) return foundationInFlight;
+  foundationInFlight = loadFoundation().finally(() => {
+    foundationInFlight = null;
+  });
+  return foundationInFlight;
+}
 
 async function tick() {
   if (inFlight) {
-    // 等太久要讓人看得出它在跑，不是死了。
-    // 一片黑加一個小字「啟動中」，跟當掉長得一模一樣。
-    if (slowSince && Date.now() - slowSince > 4000) {
-      const s = $("stat");
-      if (s) {
-        s.textContent = `讀取中 ${Math.round((Date.now() - slowSince) / 1000)}s`;
-      }
-    }
+    refreshPending = true;
     return;
   }
   if (!invoke) {
@@ -3223,10 +3653,17 @@ async function tick() {
     return;
   }
   inFlight = true;
-  if (!slowSince) slowSince = Date.now();
+  refreshPending = false;
+  const refreshFoundation = foundationPending;
+  foundationPending = false;
+  slowSince = Date.now();
+  slowTimer = setTimeout(() => {
+    if (!inFlight) return;
+    const s = $("stat");
+    if (s) s.textContent = `讀取中 ${Math.round((Date.now() - slowSince) / 1000)}s`;
+  }, 4000);
   try {
     const raw = await invoke("strands", { session: picked });
-    slowSince = 0;
     const d = JSON.parse(raw);
     if (d.error) throw new Error(d.error);
     rows = d.rows || [];
@@ -3269,6 +3706,12 @@ async function tick() {
     if (follow && view === "tree")
       $("scroll").scrollTop = $("scroll").scrollHeight;
     $("stat").textContent = `${d.strands} 線 · ${d.total_dots} 點`;
+    // Session content is the primary surface. Starting the specification scan
+    // at the same time makes two Python processes contend for the external
+    // drive and can leave the first screen waiting indefinitely. Render the
+    // transcript first, then let the independent audit continue in background.
+    if (refreshFoundation && view === "spec")
+      void refreshFoundationInBackground();
   } catch (e) {
     // 量不到要說出來，不是畫一個綠燈。
     fatal("讀不到 transcript", String(e).slice(0, 200));
@@ -3279,9 +3722,54 @@ async function tick() {
     //
     // （這裡刻意不用另外四個字描述那個狀態,
     //   `test_sot` 禁止這個檔出現它們 —— 沒量到不等於沒事。）
+    if (slowTimer) clearTimeout(slowTimer);
+    slowTimer = null;
+    slowSince = 0;
     inFlight = false;
+    if (refreshPending) requestRefresh();
   }
 }
+
+function repositoryChanged() {
+  requestRefresh({ invalidateCaches: true, refreshFoundation: true });
+}
+
+function foregroundChanged() {
+  if (!refreshReady || document.visibilityState !== "visible") return;
+  const now = Date.now();
+  if (now - lastForegroundRefreshAt < 1000) return;
+  lastForegroundRefreshAt = now;
+  requestRefresh({ invalidateCaches: true, refreshFoundation: true });
+}
+
+addEventListener("focus", foregroundChanged);
+document.addEventListener("visibilitychange", foregroundChanged);
+
+async function startRefresh() {
+  if (!invoke) {
+    requestRefresh();
+    return;
+  }
+  if (!listen) {
+    fatal("拿不到 Tauri 事件",
+      "window.__TAURI__.event.listen 不存在。無法安全改用 .forseti 檔案事件，" +
+      "因此不啟動背景輪詢。");
+    return;
+  }
+  try {
+    stopChangedListener = await listen("forseti://changed", repositoryChanged);
+    lastForegroundRefreshAt = Date.now();
+    refreshReady = true;
+    requestRefresh({ refreshFoundation: true });
+  } catch (e) {
+    fatal("接不上 Tauri 事件", String(e).slice(0, 200));
+  }
+}
+
+addEventListener("pagehide", () => {
+  if (stopChangedListener) stopChangedListener();
+  stopChangedListener = null;
+});
 
 function syncView() {
   // 換分頁一定回到頂端。
@@ -3345,8 +3833,6 @@ $("followBtn").addEventListener("click", () => {
   if (follow) $("scroll").scrollTop = $("scroll").scrollHeight;
 });
 
-// 根基先算。線色要用它,所以要在第一次畫線之前拿到。§40
-loadFoundation().then(tick);
-setInterval(tick, 2000);
-// 讀文件的狀態會隨著我實際去讀而變,每分鐘重算一次。
-setInterval(loadFoundation, 60000);
+// Rust watcher 已把 .forseti 的連續寫入合併成一個事件；前端先訂閱，
+// 再做唯一一次初始讀取。之後沒有 timer/polling loop。§40 / F04
+startRefresh();
