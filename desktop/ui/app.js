@@ -3448,9 +3448,14 @@ addEventListener("keydown", (e) => {
    而判準只能從檔案痕跡推。與其猜，不如讓她自己指。
    自動仍然是預設 —— 選擇器第一項就是它。 */
 
-const PICK_KEY = "forseti.session";
+// A manual pick is a temporary inspection mode.  The old key made a stopped
+// session win forever, even after the user switched Claude/Codex in front.
+const PICK_KEY = "forseti.session.v2";
 let picked = null;        // null = 跟著最新
-try { picked = localStorage.getItem(PICK_KEY) || null; } catch (e) { picked = null; }
+try {
+  localStorage.removeItem("forseti.session");
+  picked = localStorage.getItem(PICK_KEY) || null;
+} catch (e) { picked = null; }
 
 let allSessions = [];
 const picker = $("picker");
