@@ -31,6 +31,7 @@ F08 §2 那句是整個模組的理由：
 
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import asdict, dataclass, field
 
@@ -222,6 +223,70 @@ def build(*, goal: str, task: str, fragments: list[Fragment],
     p.original_fragments = kept
     p.provenance_refs = [f.provenance for f in kept]
     return p
+
+
+def recover_original_interval(*, source_rows: list[dict] | None,
+                              start_round: int, compaction_round: int,
+                              goal: str, task: str,
+                              limit: int = PACKET_LIMIT) -> dict:
+    """Prepare an inspectable pre-compaction packet from caller-supplied originals.
+
+    Every round in [start_round, compaction_round) must have exactly one
+    original-source row with a durable source_ref. This does not read a session
+    or inject text into an AI. An incomplete or oversized interval is UNKNOWN,
+    never a truncated packet presented as recovered context.
+    """
+    def unknown(reason: str) -> dict:
+        return {"status": "UNKNOWN", "reason": reason, "packet": None,
+                "auto_inject": False}
+
+    if (type(start_round) is not int or type(compaction_round) is not int
+            or start_round < 1 or compaction_round <= start_round):
+        return unknown("invalid_round_range")
+    if type(limit) is not int or limit < 1:
+        return unknown("invalid_capacity")
+    if not source_rows:
+        return unknown("missing_source")
+
+    by_round: dict[int, dict] = {}
+    for row in source_rows:
+        if not isinstance(row, dict) or type(row.get("n")) is not int:
+            return unknown("invalid_source_row")
+        n = row["n"]
+        if not start_round <= n < compaction_round:
+            continue
+        if n in by_round:
+            return unknown("duplicate_source_round")
+        if (row.get("source_type") != ORIGINAL
+                or not isinstance(row.get("source_ref"), str)
+                or not row["source_ref"].strip()):
+            return unknown("missing_original_source")
+        for key in ("owner_text", "ai_text"):
+            if not isinstance(row.get(key), str):
+                return unknown("missing_original_text")
+        by_round[n] = row
+
+    if len(by_round) != compaction_round - start_round:
+        return unknown("missing_source_round")
+
+    fragments = []
+    for n in range(start_round, compaction_round):
+        row = by_round[n]
+        for key in ("owner_text", "ai_text"):
+            if row[key]:
+                fragments.append(Fragment(
+                    text=row[key], source=ORIGINAL,
+                    provenance=f"{row['source_ref']}#{n}:{key}",
+                    why=f"Original {key} from pre-compaction round {n}"))
+    if not fragments:
+        return unknown("empty_original_interval")
+
+    packet = build(goal=goal, task=task, fragments=fragments, limit=limit)
+    serialized = json.dumps(packet.to_dict(), ensure_ascii=False)
+    if packet.dropped_for_budget or len(serialized) > limit:
+        return unknown("capacity_overflow")
+    return {"status": "READY", "reason": "source_complete",
+            "packet": packet.to_dict(), "auto_inject": False}
 
 
 # ---------------------------------------------------------------------------
