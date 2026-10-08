@@ -3533,6 +3533,8 @@ function renderPicker() {
 
 function choose(id) {
   picked = id;
+  visibleTail = 180;
+  loadingOlder = false;
   try {
     if (id) localStorage.setItem(PICK_KEY, id);
     else localStorage.removeItem(PICK_KEY);
@@ -3616,6 +3618,8 @@ let slowTimer = null;
 let stopChangedListener = null;
 let refreshReady = false;
 let lastForegroundRefreshAt = 0;
+let visibleTail = 180;
+let loadingOlder = false;
 
 function invalidateBackendCaches() {
   workCache = null;
@@ -3668,7 +3672,7 @@ async function tick() {
     if (s) s.textContent = `讀取中 ${Math.round((Date.now() - slowSince) / 1000)}s`;
   }, 4000);
   try {
-    const raw = await invoke("strands", { session: picked });
+    const raw = await invoke("strands", { session: picked, tail: visibleTail });
     const d = JSON.parse(raw);
     if (d.error) throw new Error(d.error);
     rows = d.rows || [];
@@ -3831,6 +3835,17 @@ $("scroll").addEventListener("scroll", () => {
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   if (!atBottom && follow) { follow = false; $("followBtn").setAttribute("aria-pressed", "false"); }
   if (atBottom && !follow) { follow = true; $("followBtn").setAttribute("aria-pressed", "true"); }
+  if (el.scrollTop < 120 && !loadingOlder && lastSnap?.window?.older_available) {
+    loadingOlder = true;
+    visibleTail += 180;
+    const indicator = $("olderLoad");
+    if (indicator) indicator.hidden = false;
+    requestRefresh();
+    setTimeout(() => {
+      loadingOlder = false;
+      if (indicator) indicator.hidden = true;
+    }, 1200);
+  }
 });
 $("followBtn").addEventListener("click", () => {
   follow = !follow;

@@ -162,6 +162,11 @@ button{font:inherit;cursor:pointer;color:inherit}
   color:var(--ink-2);font:590 11.5px var(--sans);line-height:20px;
   transition:background .18s var(--ease),color .18s var(--ease)}
 .help:hover{background:var(--ink-3);color:#fff}
+.olderLoad{position:absolute;left:50%;top:5px;transform:translateX(-50%);
+  font-size:10px;color:var(--ink-3);display:inline-flex;align-items:center;gap:4px}
+.olderLoad i{width:9px;height:9px;border:1.5px solid var(--ink-3);
+  border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 
 /* 建議本身是主角。 */
 /* 建議整塊可點，點了跳到它在講的那一輪。

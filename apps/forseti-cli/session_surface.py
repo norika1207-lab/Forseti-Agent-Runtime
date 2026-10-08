@@ -192,7 +192,11 @@ def main(argv: list[str]) -> int:
 
     parser = tracker_for(target)
     parser.poll()
-    snap = parser.snapshot(tail=180)
+    try:
+        tail = max(60, min(1200, int(argv[2]))) if len(argv) > 2 else 180
+    except ValueError:
+        tail = 180
+    snap = parser.snapshot(tail=tail)
     rows = snap.get("rows") or []
     betrayals_by_n: dict[int, list[dict]] = {}
     for finding in betrayal.scan(parser.strands):
@@ -239,6 +243,7 @@ def main(argv: list[str]) -> int:
             "n": 0,
         },
         "cards": [],
+        "window": {"tail": tail, "older_available": len(parser.strands) > len(rows)},
         "source_tree_schema": source_tree_schema.schema(),
         "semantic_surface": {
             "scope": "owner direction, AI answers, corrections, tool evidence, and explicit unknowns",
