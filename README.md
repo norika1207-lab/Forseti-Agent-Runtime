@@ -142,7 +142,7 @@ causal links, cross-session behavior, or native end-to-end verification.
 | Support and subagent records | Keep a support worker's work visible beyond one summary | Partial; sidechains can be read, but exact linkage to the initiating turn still needs source evidence |
 | Advice cards | Surface a useful question or verification step | UI entry point and generation logic exist; timing, presentation, and advice quality need real-session acceptance |
 | Reading coverage and context recovery | See what was read and what may be missing after compaction | Partial; coverage is not understanding, and first-step revalidation after handoff lacks full E2E |
-| Independent raw-session archive | Preserve source bytes for later verification and bounded recovery | In development; encrypted-at-rest storage and rollback protection must pass security and native-path acceptance before use |
+| Independent raw-session archive | Preserve source bytes for later verification and bounded recovery | In development; this checkout can schedule unencrypted raw chunks. Security gate: **FAIL**. Do not deploy it as a secure backup |
 | Task ledger and acceptance receipts | Separate assigned, submitted, independently verified, and completed | Engine and views exist; long-running multi-agent dispatch still needs sustained verification |
 | Claude Code project hook | Ask before conflicting writes in the same project | Installed per project; internal errors fail open, so it cannot block every collision |
 | Reusable JS runtime | Let hosts adopt capture, cost, handoff, and admission functions | Core modules can be used independently; hosts must supply events and implement actions |
@@ -199,7 +199,7 @@ is only a candidate interpretation.
 - **Not one magic score.** Temperature is a visual cue. Activity, tasks, goals, evidence coverage, and unknown sources must stay distinct.
 - **Still under construction.** Precise cross-session causality, support-to-parent links, the full Goal Acceptance Contract, native E2E for every view, and calibration reports are not complete.
 - **Local-data caution.** The UI reads local records; the public screenshot uses synthetic data. Review any real transcript, token, or path before sharing it.
-- **Archive security gate.** A development archive is not an accepted secure backup until encryption, key protection, rollback detection, and source-deletion recovery are independently verified on the target filesystem.
+- **Archive security gate: FAIL.** This checkout can schedule an unencrypted raw archive on the external drive. Do not deploy or rely on that path as a secure backup; encryption, key protection, rollback detection, and source-deletion recovery still need independent verification.
 
 ## Development and verification
 
@@ -551,7 +551,7 @@ The empty-beat counter is persisted. Reset it on restart and the loop can never 
 
 A fuel gauge answers how much room is left. This answers something else: of what is in context right now, how much was checked and how much did the model write itself.
 
-**This measurement only works at runtime, and the reason it fails otherwise is the point.** I tried computing it after the fact from transcripts. Native transcripts may retain more than the live context, but source coverage varies; Forseti cannot assume every tool output was recorded. The live context is a compacted subset, so a retrospective transcript ratio can look healthy while the live window has already changed.
+**This measurement only works at runtime, and the reason it fails otherwise is the point.** I tried computing it after the fact from transcripts. Native transcripts may retain more than the live context, but source coverage varies; Forseti cannot assume every tool output was recorded. After compaction, the model's live context can differ from saved transcripts, so a retrospective transcript ratio may not reflect what remained in the context window.
 
 Why the number matters is the same line that drives `provenance.js`: *I have no reliable boundary between what I actually checked and what I generated.* If that boundary does not exist internally, then the proportion of real evidence on hand determines what gets picked up as evidence. When it falls, the model does not notice. The thermometer does.
 
