@@ -2,11 +2,13 @@
 
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "apps" / "forseti-cli"))
 
-from provider_recovery import recover_provider_interval
+from provider_recovery import recover_archived_interval, recover_provider_interval
+from source_archive import sync_source
 
 
 def _write(path, records):
@@ -131,3 +133,36 @@ def test_malformed_assistant_content_fails_closed(tmp_path):
         compaction_ordinal=1, goal="保留", task="回取")
     assert result["status"] == "UNKNOWN"
     assert result["packet"] is None
+
+
+def test_recover_from_verified_archive_after_original_is_removed():
+    with tempfile.TemporaryDirectory(dir="/Volumes/NewDrive") as folder:
+        base = Path(folder)
+        source = base / "codex.jsonl"
+        _write(source, [
+            {"type": "response_item", "timestamp": "2026-10-08T10:00:00Z",
+             "payload": {"type": "message", "role": "user",
+                         "content": [{"type": "input_text", "text": "完整保留這段原文"}]}},
+            {"type": "response_item", "timestamp": "2026-10-08T10:00:01Z",
+             "payload": {"type": "message", "role": "assistant",
+                         "content": [{"type": "output_text", "text": "原文仍可回取"}]}},
+            {"type": "compacted", "timestamp": "2026-10-08T10:00:02Z",
+             "payload": {"window_number": 2}},
+        ])
+        kwargs = {"source_path": source,
+                  "archive_root": base / ".forseti" / "session_archive",
+                  "provider": "codex", "session_id": "source-deletion-test"}
+        archive = None
+        for _ in range(5):
+            archive = sync_source(**kwargs)
+            if archive["status"] == "READY":
+                break
+        assert archive["status"] == "READY"
+        source.unlink()
+        recovered = recover_archived_interval(
+            manifest_path=archive["manifest_path"], start_round=1,
+            compaction_ordinal=1, goal="保留", task="回取")
+        assert recovered["status"] == "READY"
+        assert recovered["auto_inject"] is False
+        assert "完整保留這段原文" in json.dumps(recovered["packet"], ensure_ascii=False)
+        assert archive["manifest_path"] in recovered["compaction_source_ref"]

@@ -49,41 +49,71 @@ def recover_provider_interval(*, source_path: str, provider: str,
                               start_round: int, compaction_ordinal: int,
                               goal: str, task: str,
                               limit: int = PACKET_LIMIT) -> dict:
-    """Return an inspectable packet with untruncated text and source line ranges.
+    """Recover from one native transcript without modifying or injecting it."""
+    if not isinstance(source_path, str) or not source_path.strip():
+        return _unknown("missing_source")
+    path = Path(source_path)
+    if not path.is_file():
+        return _unknown("missing_source")
+    return _recover_records([path], str(path.resolve()), provider,
+                            start_round, compaction_ordinal, goal, task, limit)
 
-    The native transcript or its byte-identical archive is read-only. No
-    recovered text is injected into an AI without a separate owner action.
-    """
+
+def recover_archived_interval(*, manifest_path: str, start_round: int,
+                              compaction_ordinal: int, goal: str, task: str,
+                              limit: int = PACKET_LIMIT) -> dict:
+    """Recover from verified ordered chunks after the original is gone."""
+    from source_archive import verified_chunks
+
+    verified = verified_chunks(manifest_path)
+    if verified["status"] != "READY":
+        return _unknown("archive_" + verified["reason"])
+    result = _recover_records(
+        [Path(p) for p in verified["chunk_paths"]],
+        verified["manifest_path"], verified["provider"], start_round,
+        compaction_ordinal, goal, task, limit)
+    after = verified_chunks(manifest_path)
+    if (after["status"] != "READY"
+            or after["chain_sha256"] != verified["chain_sha256"]):
+        return _unknown("archive_changed_during_recovery")
+    return result
+
+
+def _unknown(reason: str) -> dict:
+    return {"status": "UNKNOWN", "reason": reason, "packet": None,
+            "auto_inject": False}
+
+
+def _raw_lines(paths: list[Path]):
+    for path in paths:
+        with path.open("rb") as source:
+            yield from source
+
+
+def _recover_records(paths: list[Path], source_ref: str, provider: str,
+                     start_round: int, compaction_ordinal: int,
+                     goal: str, task: str, limit: int) -> dict:
+    """Use physical line numbers; never serialize display-truncated rows."""
     def unknown(reason: str) -> dict:
-        return {"status": "UNKNOWN", "reason": reason, "packet": None,
-                "auto_inject": False}
+        return _unknown(reason)
 
     if provider not in {"claude", "codex"}:
         return unknown("unknown_provider")
     if type(compaction_ordinal) is not int or compaction_ordinal < 1:
         return unknown("invalid_compaction_ordinal")
-    if not isinstance(source_path, str) or not source_path.strip():
-        return unknown("missing_source")
-    path = Path(source_path)
-    if not path.is_file():
-        return unknown("missing_source")
-
     # Tracker intentionally tolerates corrupt unrelated lines for the live UI.
     # Recovery cannot claim a complete source interval if the source is corrupt.
+    parser = CodexTracker(source_ref) if provider == "codex" else Tracker(source_ref)
     try:
-        with path.open("rb") as source:
-            for raw in source:
-                if not raw.endswith(b"\n"):
-                    return unknown("incomplete_source_line")
-                if not isinstance(json.loads(raw), dict):
-                    return unknown("invalid_source_row")
+        for line_no, raw in enumerate(_raw_lines(paths), 1):
+            if not raw.endswith(b"\n"):
+                return unknown("incomplete_source_line")
+            rec = json.loads(raw)
+            if not isinstance(rec, dict):
+                return unknown("invalid_source_row")
+            parser._handle(rec, line_no)
     except (OSError, UnicodeError, ValueError):
         return unknown("unreadable_source")
-
-    parser = CodexTracker(path) if provider == "codex" else Tracker(path)
-    parser.poll()
-    if parser.offset != path.stat().st_size:
-        return unknown("incomplete_source_line")
     if provider == "codex":
         boundaries = [event["line"] for event in parser.compaction_events]
     else:
@@ -97,18 +127,17 @@ def recover_provider_interval(*, source_path: str, provider: str,
 
     # Reparse only records physically before this anchor. A turn can continue
     # after compaction, so whole-turn ai_text would include future words.
-    prefix = CodexTracker(path) if provider == "codex" else Tracker(path)
+    prefix = CodexTracker(source_ref) if provider == "codex" else Tracker(source_ref)
     messages = {}
     try:
-        with path.open("rb") as source:
-            for line_no, raw in enumerate(source, 1):
-                if line_no >= cutoff:
-                    break
-                rec = json.loads(raw)
-                message = _native_message(rec, provider)
-                if message is not None:
-                    messages[line_no] = message
-                prefix._handle(rec, line_no)
+        for line_no, raw in enumerate(_raw_lines(paths), 1):
+            if line_no >= cutoff:
+                break
+            rec = json.loads(raw)
+            message = _native_message(rec, provider)
+            if message is not None:
+                messages[line_no] = message
+            prefix._handle(rec, line_no)
     except (OSError, UnicodeError, ValueError):
         return unknown("unreadable_source")
 
@@ -130,7 +159,7 @@ def recover_provider_interval(*, source_path: str, provider: str,
         end_line = max([strand.owner_line] + answer_lines)
         rows.append({
             "n": strand.n, "source_type": ORIGINAL,
-            "source_ref": f"{path.resolve()}:{strand.owner_line}-{end_line}",
+            "source_ref": f"{source_ref}:{strand.owner_line}-{end_line}",
             "owner_text": owner_message[1],
             "ai_text": "\n\n".join(messages[line][1] for line in answer_lines),
         })
@@ -143,5 +172,5 @@ def recover_provider_interval(*, source_path: str, provider: str,
     if result["status"] == "READY":
         result["reason"] = "conversation_text_complete_pre_anchor"
         result["scope"] = "owner_and_ai_text_not_tool_payloads"
-        result["compaction_source_ref"] = f"{path.resolve()}:{cutoff}"
+        result["compaction_source_ref"] = f"{source_ref}:{cutoff}"
     return result
