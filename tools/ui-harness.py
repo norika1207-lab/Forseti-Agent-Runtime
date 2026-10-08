@@ -55,7 +55,7 @@ window.__TAURI__ = { core: { invoke: async (cmd, args) => {
       why: "harness fixture 沒有預先算這一個(只算了排行榜上那幾個)" });
   }
   return JSON.stringify(v ?? {});
-} } };
+} }, event: { listen: async () => () => {} } };
 </script>
 <script src="app.js"></script>'''
 
