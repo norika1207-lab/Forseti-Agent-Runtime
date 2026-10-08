@@ -2,7 +2,10 @@
 
 import os
 import sys
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "apps", "forseti-cli"))
@@ -73,6 +76,41 @@ class OriginalIntervalTest(unittest.TestCase):
         result = self.recover(rows, limit=450)
         self.assertEqual(result["reason"], "capacity_overflow")
         self.assertIsNone(result["packet"])
+
+    def test_jsonl_source_ref_comes_from_physical_file_line(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "original.jsonl"
+            records = [row(1, owner="Owner correction"),
+                       row(2, ai="Original reason")]
+            path.write_text("\n".join(json.dumps(r) for r in records) + "\n",
+                            encoding="utf-8")
+            result = R.recover_original_jsonl_interval(
+                source_path=str(path), start_round=1, compaction_round=3,
+                goal="Ship Forseti", task="Check reason")
+            self.assertEqual(result["status"], "READY")
+            self.assertFalse(result["auto_inject"])
+            refs = result["packet"]["provenance_refs"]
+            self.assertEqual(refs, [f"{path.resolve()}:1#1:owner_text",
+                                    f"{path.resolve()}:2#2:ai_text"])
+
+    def test_missing_or_corrupt_jsonl_source_is_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "original.jsonl"
+            kwargs = {"source_path": str(path), "start_round": 1,
+                      "compaction_round": 3, "goal": "Goal", "task": "Task"}
+            self.assertEqual(R.recover_original_jsonl_interval(**kwargs)["reason"],
+                             "missing_source")
+            path.write_text('{broken json}\n', encoding="utf-8")
+            result = R.recover_original_jsonl_interval(**kwargs)
+            self.assertEqual(result["status"], "UNKNOWN")
+            self.assertEqual(result["reason"], "unreadable_source")
+            self.assertIsNone(result["packet"])
+
+    def test_invalid_round_range_does_not_read_source(self):
+        result = R.recover_original_jsonl_interval(
+            source_path="/does/not/exist", start_round="1",
+            compaction_round=3, goal="Goal", task="Task")
+        self.assertEqual(result["reason"], "invalid_round_range")
 
 
 if __name__ == "__main__":

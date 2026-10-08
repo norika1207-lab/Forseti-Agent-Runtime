@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # F08 §5 的 Context Coverage（與 Vol2 §4 同一張表）
@@ -287,6 +288,49 @@ def recover_original_interval(*, source_rows: list[dict] | None,
         return unknown("capacity_overflow")
     return {"status": "READY", "reason": "source_complete",
             "packet": packet.to_dict(), "auto_inject": False}
+
+
+def recover_original_jsonl_interval(*, source_path: str,
+                                    start_round: int, compaction_round: int,
+                                    goal: str, task: str,
+                                    limit: int = PACKET_LIMIT) -> dict:
+    """Read an original-row JSONL file and prepare a bounded review packet.
+
+    The file must contain rows with n, source_type=ORIGINAL, owner_text and
+    ai_text. The source reference is derived from the file and physical line,
+    not accepted from the row. No session mutation or AI injection occurs.
+    """
+    unknown = lambda reason: {"status": "UNKNOWN", "reason": reason,
+                              "packet": None, "auto_inject": False}
+    if (type(start_round) is not int or type(compaction_round) is not int
+            or start_round < 1 or compaction_round <= start_round):
+        return unknown("invalid_round_range")
+    if not isinstance(source_path, str) or not source_path.strip():
+        return unknown("missing_source")
+    path = Path(source_path)
+    if not path.is_file():
+        return unknown("missing_source")
+    rows = []
+    try:
+        with path.open("r", encoding="utf-8") as source:
+            for line_no, line in enumerate(source, 1):
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                if not isinstance(row, dict):
+                    return unknown("invalid_source_row")
+                n = row.get("n")
+                if type(n) is not int:
+                    return unknown("invalid_source_row")
+                if start_round <= n < compaction_round:
+                    row = dict(row)
+                    row["source_ref"] = f"{path.resolve()}:{line_no}"
+                    rows.append(row)
+    except (OSError, UnicodeError, ValueError):
+        return unknown("unreadable_source")
+    return recover_original_interval(
+        source_rows=rows, start_round=start_round,
+        compaction_round=compaction_round, goal=goal, task=task, limit=limit)
 
 
 # ---------------------------------------------------------------------------
