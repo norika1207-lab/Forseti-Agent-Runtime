@@ -129,6 +129,8 @@ def build(out: Path, fake: bool, session: str = "") -> None:
     fixture = {"strands": data, "snapshot": D.snapshot(),
                "blast_detail": blast_rows,
                "sessions": D.sessions(), "work": D.work(),
+               "north_star_change": {"state": "UNAVAILABLE",
+                                     "why": "read-only UI harness"},
                "machine": D.machine(), "features": D.features(),
                "selftest": D.selftest(), "audit": D.audit(),
                "spec_reading": D.spec_reading(),
