@@ -72,3 +72,14 @@ def test_archive_metadata_rejects_unrelated_jsonl(tmp_path, monkeypatch, capsys)
     ]) == 0
     data = json.loads(capsys.readouterr().out)
     assert "_archive_source_path" not in data
+
+
+def test_archive_launcher_keeps_session_metadata_out_of_process_argv():
+    rust = (ROOT / "desktop" / "src-tauri" / "src" / "main.rs").read_text()
+    launcher = rust.split("fn schedule_raw_archive(", 1)[1].split("\nfn ", 1)[0]
+    assert '.arg("launch-fd")' in launcher
+    assert '.arg("--request-fd").arg("0")' in launcher
+    assert '.stdin(Stdio::piped())' in launcher
+    assert 'stdin.write_all(&payload)' in launcher
+    for sensitive_flag in ('--source', '--session-id', '--archive-root', '--provider'):
+        assert f'.arg("{sensitive_flag}")' not in launcher

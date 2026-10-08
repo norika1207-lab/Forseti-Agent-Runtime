@@ -14,7 +14,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -239,17 +239,25 @@ fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_i
     let Some(py) = find_python() else { return };
     let archive_root = "/Volumes/NewDrive/AI Project/Forseti/.forseti/session_archive";
     let spawned = Command::new(py)
-        .arg("-B").arg(script).arg("launch")
-        .arg("--source").arg(source)
-        .arg("--archive-root").arg(archive_root)
-        .arg("--provider").arg(provider)
-        .arg("--session-id").arg(session_id)
+        .arg("-B").arg(script).arg("launch-fd")
+        .arg("--request-fd").arg("0")
         .env_remove("__CFBundleIdentifier")
         .env("PYTHONDONTWRITEBYTECODE", "1")
-        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+        .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn();
     if let Ok(mut child) = spawned {
-        seen.insert(key, Instant::now());
+        let request = serde_json::json!({
+            "source": source, "archive_root": archive_root,
+            "provider": provider, "session_id": session_id,
+        });
+        let sent = child.stdin.take().is_some_and(|mut stdin| {
+            serde_json::to_vec(&request).is_ok_and(|payload| stdin.write_all(&payload).is_ok())
+        });
+        if sent {
+            seen.insert(key, Instant::now());
+        } else {
+            let _ = child.kill();
+        }
         std::thread::spawn(move || { let _ = child.wait(); });
     }
 }
