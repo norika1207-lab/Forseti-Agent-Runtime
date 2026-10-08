@@ -15,10 +15,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::io::{Read, Seek, SeekFrom};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{mpsc::channel, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 use notify::{RecursiveMode, Watcher};
@@ -198,12 +199,58 @@ fn run_session_surface(session: Option<String>, tail: Option<u32>) -> Result<Str
     cmd.arg(session.unwrap_or_default());
     cmd.arg(tail.unwrap_or(180).to_string());
     cmd.arg(current_provider_hint());
+    cmd.arg("archive-meta-v1");
     let out = cmd.output().map_err(|e| format!("Session runtime 跑不起來:{e}"))?;
     if !out.status.success() {
         return Err(format!("Session runtime 失敗:{}",
                            String::from_utf8_lossy(&out.stderr)));
     }
-    Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("Session runtime 回傳無效 JSON:{e}"))?;
+    let source = snapshot.get("_archive_source_path")
+        .and_then(serde_json::Value::as_str).map(str::to_owned);
+    if let Some(object) = snapshot.as_object_mut() {
+        object.remove("_archive_source_path");
+    }
+    if let (Some(source), Some(provider), Some(session_id)) = (
+        source,
+        snapshot.get("provider").and_then(serde_json::Value::as_str),
+        snapshot.get("session").and_then(serde_json::Value::as_str),
+    ) {
+        schedule_raw_archive(&contents, &source, provider, session_id);
+    }
+    serde_json::to_string(&snapshot).map_err(|e| format!("Session JSON 無法序列化:{e}"))
+}
+
+static ARCHIVE_LAUNCHES: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+
+fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_id: &str) {
+    if !matches!(provider, "codex" | "claude") || session_id.is_empty() {
+        return;
+    }
+    let key = format!("{provider}:{session_id}");
+    let launches = ARCHIVE_LAUNCHES.get_or_init(|| Mutex::new(HashMap::new()));
+    let Ok(mut seen) = launches.lock() else { return };
+    if seen.get(&key).is_some_and(|at| at.elapsed() < Duration::from_secs(20)) {
+        return;
+    }
+    let script = contents.join("Resources/forseti-cli/archive_worker.py");
+    if !script.is_file() { return; }
+    let Some(py) = find_python() else { return };
+    let archive_root = "/Volumes/NewDrive/AI Project/Forseti/.forseti/session_archive";
+    let spawned = Command::new(py)
+        .arg("-B").arg(script).arg("launch")
+        .arg("--source").arg(source)
+        .arg("--archive-root").arg(archive_root)
+        .arg("--provider").arg(provider)
+        .arg("--session-id").arg(session_id)
+        .env_remove("__CFBundleIdentifier")
+        .env("PYTHONDONTWRITEBYTECODE", "1")
+        .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+        .spawn();
+    if spawned.is_ok() {
+        seen.insert(key, Instant::now());
+    }
 }
 
 static LAST_PROVIDER: OnceLock<Mutex<String>> = OnceLock::new();

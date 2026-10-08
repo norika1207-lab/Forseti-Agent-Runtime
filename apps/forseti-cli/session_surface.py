@@ -345,6 +345,8 @@ def main(argv: list[str]) -> int:
             "unknown_is_not_aligned": True,
         },
     })
+    if len(argv) > 4 and argv[4] == "archive-meta-v1":
+        snap["_archive_source_path"] = str(target)
     print(json.dumps(snap, ensure_ascii=False))
     return 0
 

@@ -36,3 +36,27 @@ def test_auto_session_with_tail_preserves_empty_session_slot(tmp_path, monkeypat
     rust = (ROOT / "desktop" / "src-tauri" / "src" / "main.rs").read_text()
     assert "cmd.arg(session.unwrap_or_default());" in rust
     assert "cmd.arg(tail.unwrap_or(180).to_string());" in rust
+
+
+def test_archive_metadata_is_internal_only(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "88f5fa15-b2a4-42b2-b99f-916a97e51113"
+    transcript = tmp_path / ".claude" / "projects" / "demo" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "hello"}}) + "\n", encoding="utf-8")
+
+    assert session_surface.main(["session_surface.py", sid, "180", "claude"]) == 0
+    public = json.loads(capsys.readouterr().out)
+    assert "_archive_source_path" not in public
+
+    assert session_surface.main([
+        "session_surface.py", sid, "180", "claude", "archive-meta-v1",
+    ]) == 0
+    internal = json.loads(capsys.readouterr().out)
+    assert internal["_archive_source_path"] == str(transcript)
+
+    rust = (ROOT / "desktop" / "src-tauri" / "src" / "main.rs").read_text()
+    assert 'object.remove("_archive_source_path")' in rust
+    assert 'cmd.arg("archive-meta-v1")' in rust
+    assert 'schedule_raw_archive(&contents, &source, provider, session_id)' in rust

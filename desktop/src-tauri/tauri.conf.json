@@ -28,6 +28,9 @@
   },
   "bundle": {
     "active": true,
+    "resources": {
+      "../../apps/forseti-cli/*.py": "forseti-cli/"
+    },
     "targets": [
       "app",
       "dmg"
