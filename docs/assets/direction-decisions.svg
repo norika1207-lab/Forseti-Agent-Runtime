@@ -4,7 +4,7 @@
   <rect width="1200" height="470" fill="#101214"/>
   <g font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif">
     <text x="48" y="64" fill="#f7f8f7" font-size="30" font-weight="700">方向變了，先問「誰改的？」</text>
-    <text x="48" y="101" fill="#a4adb1" font-size="18">橘色是可能偏離的起點，不是對 AI 的自動定罪</text>
+    <text x="48" y="101" fill="#a4adb1" font-size="18">開發中判讀流程示意；橘色是可能偏離的起點，不是對 AI 的自動定罪</text>
     <path d="M48 189H320" stroke="#61d6a1" stroke-width="4"/>
     <circle cx="78" cy="189" r="10" fill="#61d6a1"/>
     <circle cx="174" cy="189" r="10" fill="#61d6a1"/>
@@ -13,7 +13,7 @@
     <text x="238" y="148" fill="#f3b64a" font-size="19">插入新工作</text>
     <path d="M320 189H460" stroke="#f3b64a" stroke-width="3" stroke-dasharray="8 7"/>
     <rect x="460" y="140" width="254" height="99" rx="8" fill="#24201a" stroke="#f3b64a"/>
-    <text x="485" y="180" fill="#fff" font-size="21" font-weight="700">Forseti 主動提問</text>
+    <text x="485" y="180" fill="#fff" font-size="21" font-weight="700">候選提問（開發中）</text>
     <text x="485" y="211" fill="#e5be7f" font-size="17">暫時、探索，還是換目標？</text>
     <path d="M714 189H757M757 189V318M757 189V142" fill="none" stroke="#8a9296" stroke-width="2"/>
     <path d="M757 142H780M757 227H780M757 318H780" stroke="#8a9296" stroke-width="2"/>

@@ -1,16 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
   <title id="title">Forseti 壓縮後的脈絡恢復</title>
-  <desc id="desc">完整本機紀錄保留原文與行號；壓縮後從過去範圍選取有來源的節錄，組成有上限的回填包供人核對與貼回 AI，而非自動注入。</desc>
+  <desc id="desc">開發中的回填流程從來源實際保存的紀錄選取有出處的節錄；來源缺漏不可補造，回填包須由人核對與貼回 AI，而非自動注入。</desc>
   <rect width="1200" height="440" fill="#101214"/>
   <g font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif">
     <text x="48" y="65" fill="#f7f8f7" font-size="30" font-weight="700">對話被壓縮，原本的做法不該憑空消失</text>
-    <text x="48" y="101" fill="#a4adb1" font-size="18">從原始紀錄找回脈絡；每一段都留著出處</text>
+    <text x="48" y="101" fill="#a4adb1" font-size="18">開發中回填流程示意；只從來源實際保存的紀錄找回脈絡</text>
     <rect x="48" y="145" width="276" height="209" rx="8" fill="#1e2223" stroke="#65d7a3"/>
-    <text x="72" y="181" fill="#65d7a3" font-size="19" font-weight="700">完整本機紀錄</text>
+    <text x="72" y="181" fill="#65d7a3" font-size="19" font-weight="700">已保存的本機紀錄</text>
     <text x="72" y="222" fill="#e8eeee" font-size="18">第 7 輪　原始第 93 行</text>
     <text x="72" y="257" fill="#e8eeee" font-size="18">第 8 輪　原始第 106 行</text>
     <text x="72" y="292" fill="#e8eeee" font-size="18">第 9 輪　原始第 121 行</text>
-    <text x="72" y="327" fill="#889498" font-size="17">…一直保留到來源盡頭</text>
+    <text x="72" y="327" fill="#889498" font-size="17">…來源缺漏時不可補造</text>
     <path d="M324 248H423" stroke="#768186" stroke-width="2"/>
     <path d="M415 242l10 6-10 6" fill="none" stroke="#768186" stroke-width="2"/>
     <circle cx="461" cy="248" r="39" fill="#26211a" stroke="#f3b64a" stroke-width="2"/>
