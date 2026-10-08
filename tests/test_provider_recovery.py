@@ -31,13 +31,14 @@ def test_codex_original_text_survives_snapshot_limits(tmp_path):
     ])
     result = recover_provider_interval(
         source_path=str(source), provider="codex", start_round=1,
-        compaction_round=2, goal="保留", task="回取")
+        compaction_ordinal=1, goal="保留", task="回取")
     assert result["status"] == "READY"
     assert result["auto_inject"] is False
     serialized = json.dumps(result["packet"], ensure_ascii=False)
     assert owner in serialized and ending in serialized
     assert reply in serialized and "最後一段 AI 回覆也在" in serialized
     assert f"{source.resolve()}:1-2" in serialized
+    assert result["compaction_source_ref"] == f"{source.resolve()}:3"
 
 
 def test_claude_original_text_and_line_range(tmp_path):
@@ -54,7 +55,7 @@ def test_claude_original_text_and_line_range(tmp_path):
     ])
     result = recover_provider_interval(
         source_path=str(source), provider="claude", start_round=1,
-        compaction_round=2, goal="保留", task="回取")
+        compaction_ordinal=1, goal="保留", task="回取")
     assert result["status"] == "READY"
     serialized = json.dumps(result["packet"], ensure_ascii=False)
     assert "保留原始指令" in serialized and "會保留" in serialized
@@ -66,6 +67,30 @@ def test_corrupt_native_line_fails_closed(tmp_path):
     source.write_text('{"type":"response_item"}\n{broken}\n', encoding="utf-8")
     result = recover_provider_interval(
         source_path=str(source), provider="codex", start_round=1,
-        compaction_round=2, goal="g", task="t")
+        compaction_ordinal=1, goal="g", task="t")
     assert result["status"] == "UNKNOWN"
     assert result["packet"] is None
+
+
+def test_assistant_after_compaction_is_not_in_pre_compaction_packet(tmp_path):
+    source = tmp_path / "codex.jsonl"
+    _write(source, [
+        {"type": "response_item", "timestamp": "2026-10-08T10:00:00Z",
+         "payload": {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "保留原始指令"}]}},
+        {"type": "response_item", "timestamp": "2026-10-08T10:00:01Z",
+         "payload": {"type": "message", "role": "assistant",
+                     "content": [{"type": "output_text", "text": "壓縮前回覆"}]}},
+        {"type": "compacted", "timestamp": "2026-10-08T10:00:02Z",
+         "payload": {"window_number": 2}},
+        {"type": "response_item", "timestamp": "2026-10-08T10:00:03Z",
+         "payload": {"type": "message", "role": "assistant",
+                     "content": [{"type": "output_text", "text": "壓縮後回覆不得混入"}]}},
+    ])
+    result = recover_provider_interval(
+        source_path=str(source), provider="codex", start_round=1,
+        compaction_ordinal=1, goal="保留", task="回取")
+    assert result["status"] == "READY"
+    text = json.dumps(result["packet"], ensure_ascii=False)
+    assert "壓縮前回覆" in text
+    assert "壓縮後回覆不得混入" not in text

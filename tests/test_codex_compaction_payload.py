@@ -23,7 +23,7 @@ def test_native_compacted_event_with_payload_is_visible(tmp_path):
     parser = CodexTracker(transcript)
     assert parser.poll() == 2
     assert parser.snapshot()["compaction_total"] == 1
-    assert parser.strands[-1].compaction_meta["line"] == 2
+    assert parser.strands[0].compaction_meta["line"] == 2
 
 
 def test_each_native_compaction_has_its_own_source_anchor(tmp_path):
@@ -42,7 +42,10 @@ def test_each_native_compaction_has_its_own_source_anchor(tmp_path):
     parser = CodexTracker(transcript)
     assert parser.poll() == 3
     assert parser.snapshot()["compaction_total"] == 2
-    assert [s.compaction_meta["line"] for s in parser.strands if s.compaction] == [2, 3]
+    assert len(parser.strands) == 1
+    assert [e["line"] for e in parser.snapshot()["compaction_events"]] == [2, 3]
+    assert [e["label"] for e in parser.snapshot()["compaction_events"]] == [
+        "對話壓縮", "對話壓縮"]
 
 
 def test_assistant_activity_after_compaction_stays_on_owner_turn(tmp_path):
@@ -61,8 +64,7 @@ def test_assistant_activity_after_compaction_stays_on_owner_turn(tmp_path):
                           encoding="utf-8")
     parser = CodexTracker(transcript)
     parser.poll()
-    owner = next(s for s in parser.strands if not s.compaction)
-    compact = next(s for s in parser.strands if s.compaction)
+    owner = parser.strands[0]
     assert owner.ai_text == "Continuing the task"
-    assert compact.ai_text == ""
     assert [item["kind"] for item in owner.activity] == ["answer"]
+    assert parser.snapshot()["compaction_events"][0]["n"] == owner.n

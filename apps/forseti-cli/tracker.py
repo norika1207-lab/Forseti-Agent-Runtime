@@ -715,10 +715,25 @@ class CodexTracker(Tracker):
     one implementation.
     """
 
-    def _current(self) -> Strand | None:
-        # Native compaction events are inspectable nodes, not a new owner turn.
-        # The assistant may keep speaking after them without a fresh user turn.
-        return next((s for s in reversed(self.strands) if not s.compaction), None)
+    def __init__(self, path: Path | str):
+        super().__init__(path)
+        self.compaction_events: list[dict] = []
+
+    def poll(self) -> int:
+        try:
+            if self.path.stat().st_size < self.offset:
+                self.compaction_events = []
+        except OSError:
+            pass
+        return super().poll()
+
+    def snapshot(self, tail: int = 200) -> dict:
+        snap = super().snapshot(tail=tail)
+        snap["compaction_total"] = len(self.compaction_events)
+        snap["compaction_last_n"] = (self.compaction_events[-1]["n"]
+                                     if self.compaction_events else None)
+        snap["compaction_events"] = list(self.compaction_events)
+        return snap
 
     @staticmethod
     def _message_text(content: object) -> str:
@@ -749,19 +764,17 @@ class CodexTracker(Tracker):
     def _handle(self, rec: dict, line_no: int) -> None:
         if rec.get("type") == "compacted":
             at = _ts(rec)
-            strand = Strand(
-                n=len(self.strands) + 1, started_at=at,
-                owner_text="(對話壓縮)", owner_line=line_no,
-                ended_at=at, compaction=True,
-                compaction_meta={"pre_tokens": None, "post_tokens": None,
-                                 "trigger": None, "line": line_no},
-            )
-            strand.dots.append(Dot(
-                at=at, label="對話壓縮", kind=KIND_OTHER,
-                detail="AI 的記憶從這裡開始不完整",
-                line_no=line_no, size_override=6,
-            ))
-            self.strands.append(strand)
+            current = self._current()
+            event = {"ordinal": len(self.compaction_events) + 1,
+                     "n": current.n if current else None,
+                     "line": line_no, "at": at,
+                     "label": "對話壓縮", "size": 6}
+            self.compaction_events.append(event)
+            if current is None:
+                return
+            current.compaction = True
+            current.compaction_meta.setdefault("line", line_no)
+            current.compaction_meta.setdefault("events", []).append(event)
             return
         payload = rec.get("payload")
         if not isinstance(payload, dict):
