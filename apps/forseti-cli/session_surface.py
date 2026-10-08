@@ -22,7 +22,7 @@ import source_tree_schema
 import vitals
 from tracker import tracker_for
 
-_CLAUDE_FOCUS_CACHE: tuple[float, tuple[str, float]] = (0.0, ("", 0.0))
+_CLAUDE_FOCUS_CACHE: tuple[float, tuple[str, float]] = (-1e9, ("", 0.0))
 
 
 def latest_under(root: Path) -> Path | None:
@@ -86,13 +86,20 @@ def latest_codex_focused_session(root: Path | None = None) -> str:
 
 
 def latest_claude_focused_session() -> tuple[str, float]:
-    """Return Claude's last foreground session and its real focus timestamp."""
+    """Return Claude's best current session from its local session records.
+
+    Claude's local records do not always include ``lastFocusedAt``.  The
+    transcript remains directly readable in that case, so use its own update
+    metadata/file mtime as a fallback instead of treating missing focus data as
+    proof that Claude is unavailable.
+    """
     global _CLAUDE_FOCUS_CACHE
     if time.monotonic() - _CLAUDE_FOCUS_CACHE[0] < 3.0:
         return _CLAUDE_FOCUS_CACHE[1]
     root = (Path.home() / "Library" / "Application Support" / "Claude" /
             "claude-code-sessions")
     best = ("", 0.0)
+    named_best = ("", 0.0)
     if not root.is_dir():
         _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
         return best
@@ -105,8 +112,22 @@ def latest_claude_focused_session() -> tuple[str, float]:
         if item.get("isArchived") or not item.get("cliSessionId"):
             continue
         focused = float(item.get("lastFocusedAt") or 0) / 1000.0
-        if focused > best[1]:
-            best = (str(item["cliSessionId"]), focused)
+        updated = max(
+            float(item.get("updatedAt") or 0),
+            float(item.get("lastActivityAt") or 0),
+        ) / 1000.0
+        try:
+            record_time = path.stat().st_mtime
+        except OSError:
+            record_time = 0.0
+        candidate_time = max(focused, updated, record_time)
+        if candidate_time > best[1]:
+            best = (str(item["cliSessionId"]), candidate_time)
+        title = str(item.get("title") or "").strip()
+        if title and title != "Forseti 自動接續" and candidate_time > named_best[1]:
+            named_best = (str(item["cliSessionId"]), candidate_time)
+    if named_best[0]:
+        best = named_best
     _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
     return best
 
@@ -122,8 +143,29 @@ def claude_session_title(session: str) -> str:
         except (OSError, UnicodeDecodeError, ValueError):
             continue
         if item.get("cliSessionId") == session and not item.get("isArchived"):
-            return str(item.get("title") or "").strip()
+            title = str(item.get("title") or "").strip()
+            if title and title != session:
+                return title
     return ""
+
+
+def _claude_record(session: str) -> dict | None:
+    root = (Path.home() / "Library" / "Application Support" / "Claude" /
+            "claude-code-sessions")
+    for path in root.rglob("local_*.json") if root.is_dir() else []:
+        try:
+            item = json.loads(path.read_bytes())
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if item.get("cliSessionId") == session:
+            return item
+    return None
+
+
+def _claude_transcript_roots() -> list[Path]:
+    base = (Path.home() / "Library" / "Application Support" / "Claude" /
+            "local-agent-mode-sessions")
+    return [base, Path.home() / ".claude" / "projects"]
 
 
 def latest_codex_focus_timestamp(root: Path | None = None) -> float:
@@ -162,13 +204,18 @@ def _find_session(requested: str, roots: list[Path]) -> Path | None:
         for path in root.rglob("*.jsonl"):
             if requested in path.name:
                 return path
+    record = _claude_record(requested)
+    if record:
+        local_id = str(record.get("sessionId") or "")
+        for root in _claude_transcript_roots():
+            for path in root.glob(f"**/{local_id}/**/*.jsonl") if root.is_dir() else []:
+                return path
     return None
 
 
 def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | None:
     requested = value.strip()
-    roots = [Path.home() / ".codex" / "sessions",
-             Path.home() / ".claude" / "projects"]
+    roots = [Path.home() / ".codex" / "sessions", *_claude_transcript_roots()]
     if requested:
         return _find_session(requested, roots)
 
@@ -177,6 +224,14 @@ def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | No
     claude_id, claude_at = latest_claude_focused_session()
     codex_id = latest_codex_focused_session(logs_root)
     codex_at = latest_codex_focus_timestamp(logs_root)
+    # Claude's metadata is the direct session source.  When its focus event is
+    # absent, a named active Claude session is still stronger evidence than a
+    # stale Codex renderer event; users can explicitly choose Codex from the
+    # picker when that is what they want to inspect.
+    if claude_id and claude_session_title(claude_id):
+        target = _find_session(claude_id, roots)
+        if target is not None:
+            return target
     if claude_id and claude_at >= codex_at:
         target = _find_session(claude_id, roots)
         if target is not None:
@@ -244,13 +299,23 @@ def main(argv: list[str]) -> int:
     id_match = _SESSION_ID_RE.search(target.name)
     session = id_match.group(1) if id_match else target.stem
     session_title = claude_session_title(session) if provider == "claude" else ""
-    followed = latest_codex_focused_session()
-    picked_by = ("跟著 Codex 前景" if followed == session
-                 else f"鎖定 {provider.title()} Session")
+    requested = bool(argv[1].strip()) if len(argv) > 1 else False
+    if not requested:
+        # A persisted current-session hint is an explicit pin when no
+        # provider foreground signal exists (the test/headless path).
+        hint = Path.home() / ".forseti" / "current-session-id"
+        try:
+            requested = bool(hint.read_text(encoding="utf-8").strip()) and not (
+                latest_codex_focused_session() or latest_claude_focused_session()[0]
+            )
+        except OSError:
+            pass
+    picked_by = (f"鎖定 {provider.title()} Session" if requested
+                 else f"跟著 {provider.title()} 前景")
     snap.update({
         "provider": provider,
         "session": session,
-        "session_title": session_title or session,
+        "session_title": session_title or "未命名 session",
         "ui_id": session,
         "picked_by": picked_by,
         "advice": {
