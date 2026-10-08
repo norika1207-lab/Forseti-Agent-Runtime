@@ -129,7 +129,7 @@ def owner_goal_change_candidates(rows: list) -> list[dict]:
                      "OWNER_GOAL_CHANGE" if explicit else "OWNER_TASK_SWITCH"),
             "state": "CANDIDATE",
             "confidence": "HIGH" if explicit else "MEDIUM",
-            "evidence": text[:600],
+            "evidence": text,
             "why": ("owner marked this as exploratory" if exploratory else
                     "owner used an explicit goal-change phrase" if explicit else
                     "owner inserted work; confirm whether temporary or a new goal"),

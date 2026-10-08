@@ -30,6 +30,14 @@ class OwnerGoalChangeCandidatesTests(unittest.TestCase):
         self.assertEqual(found[0]["kind"], "EXPLORATORY_BRANCH")
         self.assertEqual(found[0]["state"], "CANDIDATE")
 
+    def test_long_owner_instruction_is_not_silently_truncated(self):
+        text = "新的方向是：" + "保留原始對話。" * 100 + "不得刪除原始資料"
+        found = vitals.owner_goal_change_candidates([
+            {"n": 7, "owner_text": text},
+        ])
+        self.assertEqual(found[0]["evidence"], text)
+        self.assertTrue(found[0]["evidence"].endswith("不得刪除原始資料"))
+
 
 if __name__ == "__main__":
     unittest.main()
