@@ -167,7 +167,9 @@ def test_recover_from_verified_archive_after_original_is_removed(tmp_path, monke
         assert not list(archive_dir.glob("*.jsonl"))
         for encrypted in archive_dir.glob("*.enc"):
             assert "完整保留這段原文".encode() not in encrypted.read_bytes()
-        assert str(source) not in Path(archive["manifest_path"]).read_text()
+        manifest_bytes = Path(archive["manifest_path"]).read_bytes()
+        assert str(source).encode() not in manifest_bytes
+        assert b"source-deletion-test" not in manifest_bytes
         assert source_archive._KEY_PATH.is_file()
         assert not source_archive._KEY_PATH.is_relative_to(base)
         source.unlink()
