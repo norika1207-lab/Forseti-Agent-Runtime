@@ -45,7 +45,7 @@ NO_FALLBACK = re.compile(r"var\(\s*(--[a-zA-Z0-9-]+)\s*\)")
 #   INTERACTIVE  刻意收回事件，因為它要被點（代價是那一塊不能拖）
 #
 # 兩邊都沒有的，就是一條會讓視窗推不動、而且誰也沒注意到的帶子。
-HEADER_KIDS_NEEDING_PASSTHROUGH = (".bar{", ".subs{", ".adviceBox{",
+HEADER_KIDS_NEEDING_PASSTHROUGH = (".bar{", ".sessionRow{", ".subs{", ".adviceBox{",
                                    ".ctx{", ".vitals{", ".cards{", ".panel{")
 HEADER_KIDS_INTERACTIVE = ()
 
@@ -200,6 +200,19 @@ class TauriWiring(unittest.TestCase):
         self.assertFalse((UI.parent / "src-tauri" / "capabilities").exists(),
                          "capabilities 目錄在 exFAT 上會被 ._ sidecar 咬")
 
+    def test_window_drag_permission_and_failure_containment(self):
+        """Drag regions need ACL permission and drag rejection is not fatal."""
+        caps = self.CONF["app"]["security"]["capabilities"]
+        permissions = {
+            permission
+            for capability in caps
+            for permission in capability.get("permissions", [])
+            if isinstance(permission, str)
+        }
+        self.assertIn("core:window:allow-start-dragging", permissions)
+        self.assertIn("/start[_-]dragging/i.test(reason)", JS)
+        self.assertIn("e.preventDefault()", JS)
+
     def test_window_has_a_drag_region(self):
         """沒有拖曳區的無邊框視窗，是一個推不動的視窗。
 
@@ -218,6 +231,17 @@ class TauriWiring(unittest.TestCase):
             block = CSS.split(sel, 1)[1].split("}", 1)[0] if sel in CSS else ""
             self.assertIn("pointer-events:auto", block,
                           f"{sel} 要被點就要明講 pointer-events:auto")
+
+    def test_native_console_diagnostics_do_not_navigate_away_from_the_app(self):
+        """診斷不能把正式 Source Tree 導到 probe data URL。
+
+        2026-09-22 原生視窗實測只剩一行 ``probe``：
+        hook_console 在啟動後呼叫 navigate(data:...)，把正常頁面換掉。
+        這種診斷即使 Rust 編譯成功也會讓產品看起來是空白，所以把
+        「console hook 不得改變目前 document」固定成靜態契約。
+        """
+        self.assertNotIn("w2.navigate", self.RS)
+        self.assertNotIn('data:text/html,<html><body>probe', self.RS)
 
     def test_the_passthrough_list_covers_every_header_child(self):
         """上面那條檢查列的清單，要真的涵蓋 header 的每一個直屬子元素。
@@ -346,6 +370,20 @@ class NoDuplicateJsDefs(unittest.TestCase):
         fake = "function a() {}\nfunction a() {}\nconst b = 1;\n"
         names = self.DEF.findall(fake) + self.LET.findall(fake)
         self.assertEqual(sorted({x for x in names if names.count(x) > 1}), ["a"])
+
+
+class DriftDismissalContract(unittest.TestCase):
+    """「不用」要跨過下一次 render tick，但不能改後端 drift state。"""
+
+    def test_drift_dismissal_is_local_and_survives_rerender(self):
+        self.assertIn('dismissed.has(dismissKey("d", s.n))', JS)
+        self.assertIn('dismissed.add(dismissKey("d", s.n))', JS)
+        self.assertIn('st.dataset.drift = "0"', JS)
+
+    def test_dismissal_key_is_scoped_to_the_current_session(self):
+        self.assertIn('`${kind}:${currentSession || "unknown"}:${n}`', JS)
+        self.assertIn('dismissKey("b", s.n)', JS)
+        self.assertIn('dismissKey("c", s.n)', JS)
 
 
 class RenderersAreActuallyCalled(unittest.TestCase):

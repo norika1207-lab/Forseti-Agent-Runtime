@@ -21,6 +21,8 @@
         <i></i><i></i><i></i>
       </button>
       <span class="tag">Forseti</span>
+    </div>
+    <div class="sessionRow" data-tauri-drag-region>
       <span id="sessName"></span>
       <!-- owner 2026-09-15:「上面一半的那個板塊要被拿掉，可以用彈出的，
            但是我要讓樹的面積更大。」溫度留在 bar 上,其餘收進 #panel。 -->
@@ -135,7 +137,15 @@
         <button class="x" id="nodeClose" aria-label="關閉">×</button>
       </div>
       <div class="nodeBody">
-        <p class="nodeSaid" id="nodeSaid"></p>
+        <div class="nodeTurn">
+          <span>你的要求</span>
+          <p class="nodeSaid" id="nodeSaid"></p>
+        </div>
+        <div class="nodeTurn ai">
+          <span>AI 回答</span>
+          <p class="nodeSaid" id="nodeAI"></p>
+        </div>
+        <div class="nodeVerdict" id="nodeVerdict"></div>
         <button class="act" id="actOpen">
           <b>跳回桌面版這個 session</b>
           <span>切過去之後還是停在它原本的位置，不會停在這一輪</span>

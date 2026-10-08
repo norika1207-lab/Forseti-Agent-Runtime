@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from pathlib import Path
 
 import owner as owner_classifier
@@ -20,6 +21,8 @@ import betrayal
 import source_tree_schema
 import vitals
 from tracker import tracker_for
+
+_CLAUDE_FOCUS_CACHE: tuple[float, tuple[str, float]] = (0.0, ("", 0.0))
 
 
 def latest_under(root: Path) -> Path | None:
@@ -84,10 +87,14 @@ def latest_codex_focused_session(root: Path | None = None) -> str:
 
 def latest_claude_focused_session() -> tuple[str, float]:
     """Return Claude's last foreground session and its real focus timestamp."""
+    global _CLAUDE_FOCUS_CACHE
+    if time.monotonic() - _CLAUDE_FOCUS_CACHE[0] < 3.0:
+        return _CLAUDE_FOCUS_CACHE[1]
     root = (Path.home() / "Library" / "Application Support" / "Claude" /
             "claude-code-sessions")
     best = ("", 0.0)
     if not root.is_dir():
+        _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
         return best
     for path in root.rglob("local_*.json"):
         try:
@@ -100,6 +107,7 @@ def latest_claude_focused_session() -> tuple[str, float]:
         focused = float(item.get("lastFocusedAt") or 0) / 1000.0
         if focused > best[1]:
             best = (str(item["cliSessionId"]), focused)
+    _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
     return best
 
 
@@ -207,6 +215,11 @@ def main(argv: list[str]) -> int:
             row["owner_goal_change_state"] = candidate.get("kind")
     for row, goal in zip(rows, vitals.goal_support(rows)):
         row["goal"] = goal
+    goals = [row.get("goal") for row in rows]
+    snap_dims = vitals.dimensions(rows, snap, goals)
+    snap["dims"] = snap_dims
+    snap["temp"] = vitals.temperature(snap_dims)
+    snap["progress"] = vitals.progress_layers(rows)
     source_tree_schema.annotate_rows(rows)
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)
@@ -225,9 +238,6 @@ def main(argv: list[str]) -> int:
             "tone": "info",
             "n": 0,
         },
-        "temp": {"c": None, "band": "UNKNOWN", "coverage": 0,
-                 "why": "首屏只讀 Session；深度語意分析尚未完成"},
-        "progress": {"activity": 0, "task": 0},
         "cards": [],
         "source_tree_schema": source_tree_schema.schema(),
         "semantic_surface": {

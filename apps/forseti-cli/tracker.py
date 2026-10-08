@@ -503,7 +503,11 @@ class Tracker:
         if folder is None:
             return []
         out = []
-        for path in sorted(folder.glob("*.jsonl"), key=lambda p: p.stat().st_mtime):
+        # The card only needs recent support activity.  Reading every historical
+        # worker transcript on every refresh was the source of minute-long
+        # Claude/Codex switching stalls.
+        paths = sorted(folder.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)[-12:]
+        for path in paths:
             owner = []
             answer = []
             first = last = None

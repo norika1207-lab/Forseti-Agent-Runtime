@@ -140,6 +140,8 @@ button{font:inherit;cursor:pointer;color:inherit}
   max-height:50vh;overflow-y:auto;overscroll-behavior:contain}
 
 .bar{display:flex;align-items:center;gap:9px;pointer-events:none}
+.sessionRow{display:flex;align-items:center;gap:8px;margin-top:5px;
+  min-width:0;pointer-events:none}
 
 /* 漢堡。owner 手繪的位置:左上角，跟紅綠燈同一帶但不擋到它們。 */
 .burger{pointer-events:auto;flex:0 0 auto;width:22px;height:22px;padding:0;
@@ -151,9 +153,10 @@ button{font:inherit;cursor:pointer;color:inherit}
 .burger i:last-child{width:70%}
 .tag{font-size:10.5px;font-weight:590;letter-spacing:.04em;
   color:var(--blue);text-transform:none}
-#sessName{font-size:10.5px;color:var(--ink-4);margin-left:auto;
+#sessName{font-size:10.5px;color:var(--ink-4);flex:1;min-width:0;
   letter-spacing:-.005em;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis;max-width:148px}
+.sessionRow .miniT,.sessionRow .help{pointer-events:auto}
 .help{pointer-events:auto;flex:0 0 auto;width:20px;height:20px;padding:0;
   border:0;border-radius:50%;background:var(--surface-3);
   color:var(--ink-2);font:590 11.5px var(--sans);line-height:20px;
@@ -286,6 +289,20 @@ button{font:inherit;cursor:pointer;color:inherit}
 .txt{font-size:13px;line-height:1.5;color:var(--ink);overflow:hidden;
   overflow-wrap:anywhere;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.turnPart{display:grid;grid-template-columns:24px minmax(0,1fr);gap:7px;align-items:start}
+.turnPart+.turnPart{margin-top:8px;padding-top:8px;border-top:.5px solid var(--hair)}
+.turnPart>span{font:600 9px/1.65 var(--mono);color:var(--ink-4)}
+.turnPart.answer>span{color:var(--blue)}
+.turnPart.answer .txt{-webkit-line-clamp:3;color:var(--ink)}
+.turnPart.request .txt{font-size:11.5px;color:var(--ink-3);-webkit-line-clamp:2}
+.turnVerdict{display:flex;align-items:baseline;gap:7px;margin-top:9px;padding-top:8px;
+  border-top:.5px solid var(--hair);min-width:0}
+.turnVerdict b{flex:none;font-size:10.5px;font-weight:650;color:var(--ink-2)}
+.turnVerdict span{min-width:0;font-size:9.5px;color:var(--ink-4);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.turnVerdict.confirmed b{color:#FF6961}.turnVerdict.suspected b{color:var(--amber)}
+.turnVerdict.aligned b{color:var(--green)}.turnVerdict.tool_fail b{color:var(--blue)}
+.turnVerdict.new_direction b,.turnVerdict.direction_candidate b{color:var(--violet)}
 .st[data-growing="1"] .body{background:var(--surface-2)}
 
 /* 一輪裡發生了什麼，用講的。
@@ -355,6 +372,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .card .x:hover{opacity:.85}
 .card b{display:block;font-weight:600;font-size:12.5px;margin-bottom:4px;
   letter-spacing:-.012em}
+.card .round{display:block;margin:0 0 5px;color:inherit;opacity:.5;
+  font:500 10px/1.35 var(--mono);letter-spacing:0}
 .card .tg{font:500 11.5px var(--mono);letter-spacing:-.02em;
   margin:1px 0 7px;word-break:break-all;opacity:.85}
 .card .ev{font-size:12px}
@@ -376,7 +395,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .card.warn .num{color:#1D1D1F}
 .card.warn::before{content:"";position:absolute;left:-13.25px;top:-11px;
   bottom:-13px;width:1.5px;border-radius:1px;
-  background:var(--linkcol,var(--green))}
+  background:var(--red)}
 
 /* 壓縮的卡:它是錨，不是警告，所以不搶重音。 */
 .card.black-note{background:var(--surface);color:var(--ink-2);
@@ -430,6 +449,19 @@ button{font:inherit;cursor:pointer;color:inherit}
 .pop .r{display:flex;gap:8px;padding:1px 0;align-items:flex-start}
 .pop .r i{width:5px;height:5px;border-radius:50%;flex:0 0 auto;margin-top:6px}
 .pop .r span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pop.linePop{width:min(318px,calc(100vw - 24px));max-width:318px;
+  font-family:var(--sans);letter-spacing:0}
+.lineTipTitle{display:flex;align-items:baseline;gap:8px;font-size:13px;
+  font-weight:650;color:#1C1C1E;margin-bottom:5px}
+.lineTipTitle em{margin-left:auto;font:500 10px var(--mono);font-style:normal;
+  color:#8E8E93;white-space:nowrap}
+.linePop p{margin:0 0 8px;font-size:11.5px;line-height:1.48;color:#515154}
+.lineTipRow{display:grid;grid-template-columns:34px minmax(0,1fr);gap:7px;
+  padding:3px 0;border-top:.5px solid rgba(60,60,67,.12)}
+.lineTipRow span{font-size:10px;color:#8E8E93}
+.lineTipRow b{font-size:10.5px;line-height:1.45;font-weight:520;color:#3A3A3C;
+  overflow-wrap:anywhere}
+.lineTipRow.epistemic b{font-family:var(--mono);font-size:9.5px;color:#5856D6}
 
 /* ── List §12 ───────────────────────────────── */
 .fam{margin:14px 16px;border-radius:var(--r-xl);background:var(--surface);
@@ -448,6 +480,16 @@ button{font:inherit;cursor:pointer;color:inherit}
 .fam li code{font:10.5px var(--mono);color:var(--ink-4);flex:0 0 auto;
   letter-spacing:-.03em}
 .fam li span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* F05 判定。判成還在動的那一筆刻意做得很淡 ——
+   它不是警告，它是「這一段久，但不是停住」。 */
+.fam li .stallV{flex:0 0 auto;font-size:10.5px;color:var(--ink-4);
+  letter-spacing:-.01em}
+.fam li .stallV.bad{color:var(--amber);font-weight:560}
+/* 因子數。做得比判定本身更淡 —— 它是這個判定的成色，不是判定。
+   量得到的因子越少，這個 risk 的根據越薄，而那件事要看得到。 */
+.fam li .stallV .stallF{font-style:normal;margin-left:5px;
+  font-size:9.5px;color:var(--ink-4);opacity:.72}
+.fam li .stallV.bad .stallF{color:var(--amber);opacity:.62}
 .fam .none{padding:14px 16px;font-size:12px;color:var(--ink-3);
   border-top:.5px solid var(--hair)}
 .fam.plain{background:transparent;margin-top:4px}
@@ -562,9 +604,23 @@ button{font:inherit;cursor:pointer;color:inherit}
 /* ── 一輪的動作面板 ─────────────────────────────
    點了節點要能做事，不是只能看。 */
 .nodeBody{padding:14px 20px 26px}
-.nodeSaid{margin:0 0 14px;font-size:12.5px;line-height:1.5;color:var(--ink-2);
+.nodeTurn{margin:0 0 10px}.nodeTurn>span{display:block;margin:0 0 4px;
+  font:600 9.5px/1.4 var(--mono);color:var(--ink-4)}
+.nodeTurn.ai>span{color:var(--blue)}
+.nodeSaid{margin:0;font-size:12.5px;line-height:1.5;color:var(--ink-2);
   letter-spacing:-.005em;padding:11px 13px;border-radius:var(--r-md);
   background:var(--surface-3)}
+.nodeTurn.ai .nodeSaid{color:var(--ink)}
+.nodeVerdict{margin:0 0 14px;padding:11px 13px;border-radius:var(--r-md);
+  border:.5px solid var(--hair);font-size:11px;color:var(--ink-3)}
+.nodeVerdict b{font-size:12px;color:var(--ink);margin-right:8px}
+.nodeVerdict>span{font:500 9.5px var(--mono);color:var(--ink-4)}
+.nodeVerdict p{margin:6px 0 0;line-height:1.5}
+.nodeVerdict blockquote{margin:7px 0 0;padding:7px 9px;border-left:2px solid var(--hair-2);
+  color:var(--ink-2);background:var(--surface-3);overflow-wrap:anywhere}
+.nodeVerdict.confirmed{border-color:rgba(255,69,58,.45)}
+.nodeVerdict.confirmed b{color:#FF6961}.nodeVerdict.suspected b{color:var(--amber)}
+.nodeVerdict.aligned b{color:var(--green)}.nodeVerdict.tool_fail b{color:var(--blue)}
 .act{display:block;width:100%;text-align:left;border:0;padding:12px 14px;
   border-radius:var(--r-lg);background:var(--surface-3);color:var(--ink);
   margin-bottom:9px;transition:background .15s var(--ease)}
@@ -748,6 +804,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .fi.miss .fiTag{background:rgba(255,255,255,.1);color:var(--ink-3)}
 .fi.b-NO_CODE .fiTag{background:rgba(255,69,58,.16);color:#FFB3AE}
 .fi.b-JS_ONLY .fiTag{background:rgba(191,90,242,.18);color:#D9A6FF}
+.fi.b-DATA_ONLY .fiTag{background:rgba(48,209,88,.16);color:#9BE6AF}
 .fi.b-NO_DATA .fiTag{background:rgba(255,159,10,.16);color:#FFCC80}
 .fi.b-OWNER .fiTag{background:rgba(10,132,255,.18);color:#9BC8FF}
 
@@ -829,11 +886,15 @@ button{font:inherit;cursor:pointer;color:inherit}
    不是工具失敗率 —— FS-DET-FSD-001 明寫「東西真的做了」不能讓這個分數
    下降，執行成功與目標對齊是兩條獨立的軸。
 
-   線本身不吃滑鼠事件，點擊照舊落在卡片上。 */
+   可見線不攔事件；只有加寬的透明 lineHit 接 hover，點擊仍落在卡片上。 */
 .drift{position:absolute;left:0;top:0;width:var(--lane-x);
-  height:100%;pointer-events:none;overflow:visible;z-index:1}
+  height:100%;pointer-events:auto;overflow:visible;z-index:1}
 .drift path{fill:none;stroke-width:2.5;stroke-linecap:round;
-  stroke-linejoin:round}
+  stroke-linejoin:round;pointer-events:none}
+.drift circle{pointer-events:none}
+.drift .lineHit{fill:none;stroke:transparent;stroke-width:14;
+  pointer-events:stroke;cursor:help}
+.drift circle[data-line-tip]{pointer-events:all;cursor:help}
 /* 回到中軸的那一輪。owner 要看的是「多久以後線才會又回到原本的路線上」，
    所以回歸點要標出來，不然那件事只能用眼睛估。 */
 .drift circle.back{fill:var(--bg);stroke:var(--green);stroke-width:2}
@@ -896,10 +957,13 @@ button{font:inherit;cursor:pointer;color:inherit}
    §17.3 預設只顯示單一最高槓桿的事實，其餘 drill-down。
    所以第一張展開，其他收成一行。 */
 /* 容器讓滑鼠穿過去(視窗要推得動)，卡片本身才接事件。 */
-.cards{padding:0 20px 4px;pointer-events:none}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;
+  padding:0 20px 4px;pointer-events:none}
 .card2{pointer-events:auto;border:.5px solid var(--hair);border-radius:var(--r-lg);
-  background:var(--surface-2);padding:11px 13px 12px;margin-bottom:8px}
+  background:var(--surface-2);padding:11px 13px 12px;margin-bottom:0;min-width:0}
 .card2.hot{border-color:rgba(255,149,0,.45)}
+.card2 .slot{color:var(--ink-4);font:600 9.5px/1.4 var(--mono);
+  letter-spacing:.04em;text-transform:uppercase;margin-bottom:4px}
 .card2 .t{font-size:13.5px;font-weight:600;letter-spacing:-.01em;
   color:var(--ink);line-height:1.4}
 /* 【內文要有上限】2026-09-17 實測:rehydration 那張卡的內文 1204px，
@@ -919,6 +983,11 @@ button{font:inherit;cursor:pointer;color:inherit}
   border-radius:var(--r-pill);background:var(--surface-3);color:var(--ink-2)}
 .card2 button.use{background:var(--blue);color:#fff;font-weight:510}
 .card2 button:hover{filter:brightness(1.06)}
+.card2 .nsObjective{width:100%;box-sizing:border-box;margin:8px 0 6px;resize:vertical}
+.card2 .nsScopeAccept,.card2 .nsScopeReject,.card2 .nsCriteria{width:100%;box-sizing:border-box;margin:2px 0;padding:4px 6px;font-size:11px}
+.card2 .nsActions{display:flex;gap:5px;flex-wrap:wrap}
+.card2 .nsActions button{font-size:11px;padding:4px 7px;cursor:pointer}
+.card2 .nsOut{display:block;min-height:16px;margin-top:5px;font-size:11px;color:var(--ink-3)}
 .card2 .five{display:none;margin:9px 0 0;padding-top:9px;
   border-top:.5px solid var(--hair)}
 .card2 .five.open{display:block}
@@ -928,15 +997,49 @@ button{font:inherit;cursor:pointer;color:inherit}
 .cards .more{pointer-events:auto;font-size:11.5px;color:var(--ink-3);background:none;border:0;
   padding:2px 0 6px}
 .cards .more:hover{color:var(--ink)}
+@media (max-width:560px){
+  .cards{grid-template-columns:1fr}
+}
 
 .adviceBox[hidden]{display:none}
 
 
-/* ── 需要注意：三層 §12.2 §12.3 ────────────
-   第一層按嚴重度分三格(spec-v2.0 §21.1 的 Family C/B/A)，
-   理由是分類幫你整理了但沒幫你決定。 */
+/* ── 需要注意：三層 §12.2 §12.3 / §24 ───────
+   第一層是 root incident 摘要，下面才是嚴重度 drill-down。
+   detector hit 不直接變成 user-visible warning。 */
 .famHead{padding:14px 20px 4px;font-size:11.5px;color:var(--ink-3);
   line-height:1.5}
+.incSum{margin:10px 16px 16px;padding:13px 15px;border-radius:var(--r-xl);
+  background:var(--surface);border:.5px solid var(--hair)}
+.incTop{display:flex;align-items:baseline;gap:8px;margin-bottom:8px}
+.incBig{font:250 30px/1 var(--display);letter-spacing:-.03em;color:var(--ink)}
+.incText{font-size:12px;font-weight:560;color:var(--ink)}
+.incMeta{margin-left:auto;font-size:10.5px;color:var(--ink-4);
+  font-variant-numeric:tabular-nums}
+.incSum ul{list-style:none;margin:0;padding:0;border-top:.5px solid var(--hair)}
+.incSum li{display:flex;align-items:center;gap:9px;padding:9px 0;
+  font-size:12px;color:var(--ink-2);cursor:pointer}
+.incSum li+li{box-shadow:inset 0 .5px 0 var(--hair)}
+.incSum li:hover{background:var(--surface-2)}
+
+/* Shared trace graph navigation (R07). */
+.traceGraphPanel{margin-top:14px}
+.traceViews{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.traceViews button,.traceNode{border:1px solid var(--hair);border-radius:6px;
+  background:var(--surface-2);color:var(--ink);padding:5px 8px;cursor:pointer;font:inherit}
+.traceViews button:hover,.traceNode:hover{border-color:var(--blue)}
+.traceNodeList{display:grid;gap:4px}
+.traceNode{text-align:left;width:100%}
+.traceNodeList:empty::before{content:"選一個視圖查看可追溯節點";color:var(--ink-4);padding:4px 0}
+.incFam{flex:0 0 auto;font:600 10px var(--mono);padding:2px 7px;
+  border-radius:var(--r-pill);background:rgba(255,255,255,.08);
+  color:var(--ink-3)}
+.inc.sevC .incFam{background:rgba(255,69,58,.18);color:#FFB3AE}
+.inc.sevB .incFam{background:rgba(255,214,10,.18);color:var(--amber)}
+.incName{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.incHits{flex:0 0 auto;font-size:10.5px;color:var(--ink-4);
+  font-variant-numeric:tabular-nums}
 .fam.sev h3{display:flex;align-items:center;gap:8px}
 .fam.sev .sevDot{width:8px;height:8px;border-radius:50%;flex:0 0 auto}
 .fam.sevC .sevDot{background:var(--red);
@@ -1195,6 +1298,19 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .lane.lf{stroke:var(--blue)}      /* 工具失敗:誠實的失敗 */
 .drift .lane.lw{stroke:var(--violet)}    /* 只讀不寫 */
 
+/* Source Tree 視覺語法正本的主線狀態。class 名稱由
+   apps/forseti-cli/source_tree_schema.py 送進 snapshot；inline stroke
+   仍保留作為舊資料 fallback。 */
+.drift .main.path-aligned{stroke:var(--green)}
+.drift .main.path-suspected{stroke:var(--amber)}
+.drift .main.path-new-direction{stroke:var(--violet)}
+.drift .main.path-direction-candidate{stroke:var(--violet);stroke-dasharray:3 3}
+.drift .main.path-exploratory{stroke:var(--amber);stroke-dasharray:3 3}
+.drift .main.path-confirmed{stroke:var(--red)}
+.drift .main.path-neutral{stroke:var(--ink-3)}
+.drift .main.path-tool-fail{stroke:var(--blue)}
+.drift .reference.northstar-reference{stroke:var(--green);stroke-width:1.6;stroke-dasharray:4 4;fill:none;opacity:.72}
+
 /* 動作按鈕。會改帳本的東西，樣式要克制但按得到。 */
 .wk .acts{display:flex;flex-wrap:wrap;align-items:center;gap:6px;
   margin-top:10px;padding-top:9px;border-top:.5px solid var(--hair)}
@@ -1302,6 +1418,16 @@ button{font:inherit;cursor:pointer;color:inherit}
 .swatch.lgLt{position:relative;display:inline-block;
   width:16px;height:14px;vertical-align:middle}
 .swatch.lgLt .ltm{position:absolute;left:7px;top:0;bottom:0;width:2px}
+.swatch .lgLine{display:block;width:22px;height:2px;border-radius:1px}
+.swatch .lgLine.path-aligned{background:var(--green)}
+.swatch .lgLine.path-suspected{background:var(--amber)}
+.swatch .lgLine.path-new-direction{background:var(--violet)}
+.swatch .lgLine.path-direction-candidate{background:repeating-linear-gradient(90deg,var(--violet) 0 4px,transparent 4px 7px)}
+.swatch .lgLine.path-exploratory{background:repeating-linear-gradient(90deg,var(--amber) 0 4px,transparent 4px 7px)}
+.swatch .lgLine.path-confirmed{background:var(--red)}
+.swatch .lgLine.path-neutral{background:var(--ink-3)}
+.swatch .lgLine.path-tool-fail{background:var(--blue)}
+.swatch .lgLine.northstar-reference{background:var(--green);height:2px;border-top:1px dashed var(--green)}
 
 /* 收尾端點。還開著的那一段沒有這個。
    畫了等於說「這裡結束了」,而那段其實還開著。TC-LT-02
