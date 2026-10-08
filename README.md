@@ -142,7 +142,7 @@ causal links, cross-session behavior, or native end-to-end verification.
 | Support and subagent records | Keep a support worker's work visible beyond one summary | Partial; sidechains can be read, but exact linkage to the initiating turn still needs source evidence |
 | Advice cards | Surface a useful question or verification step | UI entry point and generation logic exist; timing, presentation, and advice quality need real-session acceptance |
 | Reading coverage and context recovery | See what was read and what may be missing after compaction | Partial; coverage is not understanding, and first-step revalidation after handoff lacks full E2E |
-| Independent raw-session archive | Preserve source bytes for later verification and bounded recovery | In development; this checkout can schedule unencrypted raw chunks. Security gate: **FAIL**. Do not deploy it as a secure backup |
+| Independent raw-session archive | Preserve source bytes for later verification and bounded recovery | In development; this checkout contains encrypted chunks and an APFS-local trust anchor, but independent security and native-path acceptance are pending. Do not treat it as an accepted backup |
 | Task ledger and acceptance receipts | Separate assigned, submitted, independently verified, and completed | Engine and views exist; long-running multi-agent dispatch still needs sustained verification |
 | Claude Code project hook | Ask before conflicting writes in the same project | Installed per project; internal errors fail open, so it cannot block every collision |
 | Reusable JS runtime | Let hosts adopt capture, cost, handoff, and admission functions | Core modules can be used independently; hosts must supply events and implement actions |
@@ -199,7 +199,7 @@ is only a candidate interpretation.
 - **Not one magic score.** Temperature is a visual cue. Activity, tasks, goals, evidence coverage, and unknown sources must stay distinct.
 - **Still under construction.** Precise cross-session causality, support-to-parent links, the full Goal Acceptance Contract, native E2E for every view, and calibration reports are not complete.
 - **Local-data caution.** The UI reads local records; the public screenshot uses synthetic data. Review any real transcript, token, or path before sharing it.
-- **Archive security gate: FAIL.** This checkout can schedule an unencrypted raw archive on the external drive. Do not deploy or rely on that path as a secure backup; encryption, key protection, rollback detection, and source-deletion recovery still need independent verification.
+- **Archive security gate: pending.** Encrypted-at-rest code and source-deletion recovery tests exist, but independent security and installed-app verification have not passed. Do not deploy or rely on this development path as a secure backup yet.
 
 ## Development and verification
 
