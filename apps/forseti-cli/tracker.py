@@ -715,6 +715,11 @@ class CodexTracker(Tracker):
     one implementation.
     """
 
+    def _current(self) -> Strand | None:
+        # Native compaction events are inspectable nodes, not a new owner turn.
+        # The assistant may keep speaking after them without a fresh user turn.
+        return next((s for s in reversed(self.strands) if not s.compaction), None)
+
     @staticmethod
     def _message_text(content: object) -> str:
         if isinstance(content, str):
@@ -744,7 +749,6 @@ class CodexTracker(Tracker):
     def _handle(self, rec: dict, line_no: int) -> None:
         if rec.get("type") == "compacted":
             at = _ts(rec)
-            self._close_current(at)
             strand = Strand(
                 n=len(self.strands) + 1, started_at=at,
                 owner_text="(對話壓縮)", owner_line=line_no,
