@@ -41,9 +41,11 @@ _KEY_PATH = Path.home() / ".forseti" / "archive-key"
 _ANCHOR_DIR = Path.home() / ".forseti" / "archive-anchors"
 _DATA_VOLUME = Path("/System/Volumes/Data")
 _MAGIC = b"FSA2"
+_MANIFEST_MAGIC = b"FSM3"
 _NONCE_BYTES = 12
 _CIPHER_OVERHEAD = len(_MAGIC) + _NONCE_BYTES + 16
 _MAX_MANIFEST_BYTES = 32 * 1024 * 1024
+_CHUNK_BUCKETS = (4096, 65536, 1048576, 4194304, 16777216, 33554432)
 
 
 class ArchiveReadError(Exception):
@@ -163,11 +165,29 @@ def _key(*, create: bool = False) -> bytes:
         os.close(fd)
 
 
+def _archive_key(root: Path) -> bytes:
+    """Create a first-use key only with no archive or local anchor evidence."""
+    benign = {".DS_Store", ".Spotlight-V100", ".Trashes", ".fseventsd"}
+    evidence = any(child.name not in benign and not child.name.startswith("._")
+                   for child in root.iterdir())
+    if _ANCHOR_DIR.exists() and any(_ANCHOR_DIR.iterdir()):
+        evidence = True
+    return _key(create=not evidence)
+
+
 def _canonical(data: dict) -> bytes:
     return json.dumps(data, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _read_json_file(path: Path, limit: int, reason: str):
+    payload = _read_file_bytes(path, limit, reason)
+    try:
+        return json.loads(payload)
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        raise _Failure(reason) from exc
+
+
+def _read_file_bytes(path: Path, limit: int, reason: str) -> bytes:
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         with os.fdopen(fd, "rb") as source:
@@ -175,9 +195,7 @@ def _read_json_file(path: Path, limit: int, reason: str):
             payload = source.read(limit + 1)
         if len(payload) > limit:
             raise _Failure(reason)
-        return json.loads(payload)
-    except (UnicodeError, ValueError, RecursionError) as exc:
-        raise _Failure(reason) from exc
+        return payload
     finally:
         if fd >= 0:
             os.close(fd)
@@ -189,6 +207,42 @@ def _mac(key: bytes, domain: bytes, payload: bytes) -> str:
 
 def _source_id(key: bytes, source: Path) -> str:
     return _mac(key, b"source-path-v2\0", str(source).encode("utf-8"))
+
+
+def _archive_folder(root: Path, key: bytes, provider: str,
+                    session_id: str) -> Path:
+    identity = _canonical({"root": str(root), "provider": provider,
+                           "session_id": session_id})
+    return root / _mac(key, b"archive-folder-v3\0", identity)
+
+
+def _chunk_name(key: bytes, folder: Path, offset: int) -> str:
+    return _mac(key, b"chunk-name-v3\0",
+                folder.name.encode("ascii") + offset.to_bytes(8, "big")) + ".enc"
+
+
+def _manifest_aad(path: Path) -> bytes:
+    return b"forseti-manifest-v3\0" + path.parent.name.encode("ascii")
+
+
+def _encrypt_manifest(key: bytes, path: Path, data: dict) -> bytes:
+    nonce = secrets.token_bytes(_NONCE_BYTES)
+    return (_MANIFEST_MAGIC + nonce
+            + AESGCM(key).encrypt(nonce, _canonical(data), _manifest_aad(path)))
+
+
+def _decrypt_manifest(key: bytes, path: Path, payload: bytes) -> dict:
+    if (len(payload) < len(_MANIFEST_MAGIC) + _NONCE_BYTES + 16
+            or not payload.startswith(_MANIFEST_MAGIC)):
+        raise _Failure("corrupt_manifest")
+    nonce = payload[len(_MANIFEST_MAGIC):len(_MANIFEST_MAGIC) + _NONCE_BYTES]
+    try:
+        plaintext = AESGCM(key).decrypt(
+            nonce, payload[len(_MANIFEST_MAGIC) + _NONCE_BYTES:],
+            _manifest_aad(path))
+        return json.loads(plaintext)
+    except (InvalidTag, UnicodeError, ValueError, RecursionError) as exc:
+        raise _Failure("corrupt_manifest_auth") from exc
 
 
 def _anchor_path(key: bytes, root: Path, provider: str, session_id: str) -> Path:
@@ -234,10 +288,15 @@ def _check_anchor(path: Path, data: dict, key: bytes) -> bool:
 
 def _encrypt(key: bytes, payload: bytes, provider: str, session_id: str,
              offset: int) -> bytes:
+    bucket = next((size for size in _CHUNK_BUCKETS if size >= len(payload) + 4), None)
+    if bucket is None or not 1 <= len(payload) <= MAX_CALL_BYTES:
+        raise _Failure("chunk_exceeds_budget")
+    padded = (len(payload).to_bytes(4, "big") + payload
+              + secrets.token_bytes(bucket - len(payload) - 4))
     nonce = secrets.token_bytes(_NONCE_BYTES)
     aad = _canonical({"provider": provider, "session_id": session_id,
-                      "offset": offset, "format_version": 2})
-    return _MAGIC + nonce + AESGCM(key).encrypt(nonce, payload, aad)
+                      "offset": offset, "format_version": 3})
+    return _MAGIC + nonce + AESGCM(key).encrypt(nonce, padded, aad)
 
 
 def _decrypt(key: bytes, payload: bytes, provider: str, session_id: str,
@@ -246,11 +305,18 @@ def _decrypt(key: bytes, payload: bytes, provider: str, session_id: str,
         raise _Failure("corrupt_archive_chunk")
     nonce = payload[len(_MAGIC):len(_MAGIC) + _NONCE_BYTES]
     aad = _canonical({"provider": provider, "session_id": session_id,
-                      "offset": offset, "format_version": 2})
+                      "offset": offset, "format_version": 3})
     try:
-        return AESGCM(key).decrypt(nonce, payload[len(_MAGIC) + _NONCE_BYTES:], aad)
+        padded = AESGCM(key).decrypt(
+            nonce, payload[len(_MAGIC) + _NONCE_BYTES:], aad)
     except InvalidTag as exc:
         raise _Failure("corrupt_archive_chunk") from exc
+    if len(padded) not in _CHUNK_BUCKETS or len(padded) < 4:
+        raise _Failure("corrupt_archive_chunk")
+    length = int.from_bytes(padded[:4], "big")
+    if not 1 <= length <= MAX_CALL_BYTES or length + 4 > len(padded):
+        raise _Failure("corrupt_archive_chunk")
+    return padded[4:4 + length]
 
 
 def _atomic_bytes(path: Path, payload: bytes) -> None:
@@ -278,7 +344,7 @@ def _save_manifest(path: Path, data: dict, key: bytes, anchor: Path) -> None:
     data["prev_manifest_sha256"] = data.pop("_sealed_digest", _EMPTY_SHA)
     data["generation"] += 1
     sealed = _seal_manifest(data, key)
-    _atomic_bytes(path, _canonical(sealed) + b"\n")
+    _atomic_bytes(path, _encrypt_manifest(key, path, sealed))
     _atomic_bytes(anchor, _canonical(_anchor_data(sealed, key)) + b"\n")
     data["_sealed_digest"] = hashlib.sha256(_canonical(sealed)).hexdigest()
 
@@ -323,18 +389,22 @@ def _read_chunk(source, offset: int, source_size: int, budget: int,
     return bytes(payload)
 
 
-def _read_manifest(path: Path, source: Path | None, provider: str,
-                   session_id: str, key: bytes, anchor: Path,
+def _read_manifest(path: Path, source: Path | None, provider: str | None,
+                   session_id: str | None, key: bytes, anchor: Path | None,
                    source_stat=None) -> dict | None:
     if not path.exists():
         return None
     _secure_file(path)
-    data = _read_json_file(path, _MAX_MANIFEST_BYTES, "corrupt_manifest")
+    data = _decrypt_manifest(key, path, _read_file_bytes(
+        path, _MAX_MANIFEST_BYTES + 64, "corrupt_manifest"))
     if isinstance(data, dict) and data.get("format_version") == 1:
         raise _Failure("legacy_unencrypted_archive")
-    if (not isinstance(data, dict) or data.get("format_version") != 2
-            or data.get("provider") != provider
-            or data.get("session_id") != session_id
+    if (not isinstance(data, dict) or data.get("format_version") != 3
+            or data.get("provider") not in ("codex", "claude")
+            or not isinstance(data.get("session_id"), str)
+            or not _ID.fullmatch(data["session_id"])
+            or (provider is not None and data["provider"] != provider)
+            or (session_id is not None and data["session_id"] != session_id)
             or not isinstance(data.get("source_id"), str)
             or (source is not None and data["source_id"] != _source_id(key, source))
             or type(data.get("generation")) is not int
@@ -358,6 +428,11 @@ def _read_manifest(path: Path, source: Path | None, provider: str,
     expected_mac = _mac(key, b"manifest-v2\0", _canonical(unsigned))
     if not hmac.compare_digest(data["hmac"], expected_mac):
         raise _Failure("corrupt_manifest_auth")
+    root = path.parent.parent
+    if path.parent != _archive_folder(root, key, data["provider"], data["session_id"]):
+        raise _Failure("invalid_manifest_path")
+    provider, session_id = data["provider"], data["session_id"]
+    anchor = _anchor_path(key, root, provider, session_id)
     advance_anchor = _check_anchor(anchor, data, key)
     sealed_digest = hashlib.sha256(_canonical(data)).hexdigest()
     del data["hmac"]
@@ -375,8 +450,10 @@ def _read_manifest(path: Path, source: Path | None, provider: str,
         if (not isinstance(chunk, dict) or chunk.get("offset") != offset
                 or type(chunk.get("size")) is not int
                 or not 1 <= chunk["size"] <= MAX_CALL_BYTES
-                or chunk.get("name") != f"{offset:016x}.enc"
-                or chunk.get("cipher_size") != chunk["size"] + _CIPHER_OVERHEAD
+                or chunk.get("name") != _chunk_name(key, path.parent, offset)
+                or chunk.get("cipher_size") not in
+                tuple(bucket + _CIPHER_OVERHEAD for bucket in _CHUNK_BUCKETS)
+                or chunk["cipher_size"] < chunk["size"] + 4 + _CIPHER_OVERHEAD
                 or type(chunk.get("mtime_ns")) is not int
                 or type(chunk.get("ctime_ns")) is not int
                 or not isinstance(chunk.get("sha256"), str)
@@ -412,8 +489,8 @@ def _verify_part(path: Path, source, offset: int, expected: dict | None,
     try:
         before = os.fstat(fd)
         cipher_size = before.st_size
-        size = cipher_size - _CIPHER_OVERHEAD
-        if size < 1 or size > budget:
+        if cipher_size not in tuple(bucket + _CIPHER_OVERHEAD
+                                    for bucket in _CHUNK_BUCKETS):
             raise _Failure("chunk_exceeds_budget")
         with os.fdopen(fd, "rb") as archived:
             fd = -1
@@ -427,10 +504,13 @@ def _verify_part(path: Path, source, offset: int, expected: dict | None,
             != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
         raise _Failure("corrupt_archive_chunk")
     digest = hashlib.sha256(ciphertext).hexdigest()
+    payload = _decrypt(key, ciphertext, provider, session_id, offset)
+    size = len(payload)
+    if size > budget:
+        raise _Failure("chunk_exceeds_budget")
     if expected and (expected["size"] != size or expected["sha256"] != digest):
         raise _Failure("corrupt_archive_chunk")
-    payload = _decrypt(key, ciphertext, provider, session_id, offset)
-    if len(payload) != size or not _valid_jsonl(payload):
+    if not _valid_jsonl(payload):
         raise _Failure("corrupt_archive_chunk")
     source.seek(offset)
     if source.read(size) != payload:
@@ -476,18 +556,19 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
         source_path = Path(source_path).resolve(strict=True)
         if not source_path.is_file():
             raise _Failure("missing_source")
-        folder = root / provider / session_id
+        _secure_dir(root)
+        if (root / provider / session_id).exists():
+            raise _Failure("legacy_metadata_archive_present")
+        key = _archive_key(root)
+        folder = _archive_folder(root, key, provider, session_id)
         if not folder.resolve().is_relative_to(root):
             raise _Failure("archive_path_escape")
         if source_path.is_relative_to(folder):
             raise _Failure("source_is_archive")
-        _secure_dir(root)
-        _secure_dir(root / provider)
         _secure_dir(folder)
         if any(folder.glob("*.jsonl")):
             raise _Failure("legacy_unencrypted_archive")
-        manifest_path = folder / "manifest.json"
-        key = _key(create=not manifest_path.exists())
+        manifest_path = folder / "manifest.enc"
         anchor = _anchor_path(key, root, provider, session_id)
         lock_path = folder / "archive.lock"
         lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
@@ -501,7 +582,7 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
                 if data is None:
                     if any(folder.glob("*.enc")) or anchor.exists():
                         raise _Failure("missing_manifest")
-                    data = {"format_version": 2, "generation": 0,
+                    data = {"format_version": 3, "generation": 0,
                             "provider": provider,
                             "session_id": session_id,
                             "source_id": _source_id(key, source_path),
@@ -519,7 +600,7 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
                         and data["source_mtime_ns"] not in (0, info.st_mtime_ns)):
                     raise _Failure("source_modified")
                 offset = data["archived_bytes"]
-                part = folder / f"{offset:016x}.enc"
+                part = folder / _chunk_name(key, folder, offset)
                 if part.exists() or part.is_symlink():
                     adopted = _verify_part(part, source, offset, None, max_bytes,
                                            key, provider, session_id)
@@ -606,22 +687,19 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
 @contextmanager
 def _locked_archive(manifest_path: str | Path):
     path = Path(manifest_path)
-    if not path.is_absolute() or path.name != "manifest.json":
+    if not path.is_absolute() or path.name != "manifest.enc":
         raise _Failure("invalid_manifest_path")
     if not _NEWDRIVE.is_dir() or not os.path.ismount(_NEWDRIVE):
         raise _Failure("newdrive_unavailable")
     if path.resolve(strict=True) != path:
         raise _Failure("archive_path_escape")
     folder = path.parent
-    provider_dir = folder.parent
-    root = provider_dir.parent
-    provider, session_id = provider_dir.name, folder.name
+    root = folder.parent
     if (not root.is_relative_to(_NEWDRIVE.resolve())
             or root == _NEWDRIVE.resolve()
-            or provider not in ("codex", "claude")
-            or not _ID.fullmatch(session_id)):
+            or not re.fullmatch(r"[0-9a-f]{64}", folder.name)):
         raise _Failure("invalid_manifest_path")
-    for directory in (root, provider_dir, folder):
+    for directory in (root, folder):
         _check_dir(directory)
     if any(folder.glob("*.jsonl")):
         raise _Failure("legacy_unencrypted_archive")
@@ -629,19 +707,19 @@ def _locked_archive(manifest_path: str | Path):
     lock = folder / "archive.lock"
     _secure_file(lock)
     key = _key()
-    anchor = _anchor_path(key, root, provider, session_id)
     lock_fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_SH)
-        data = _read_manifest(path, None, provider, session_id, key, anchor)
+        data = _read_manifest(path, None, None, None, key, None)
         if data is None:
             raise _Failure("missing_manifest")
+        provider, session_id = data["provider"], data["session_id"]
         if (not data["chunks"] or data["audit_index"] != len(data["chunks"])
                 or data["archived_bytes"] != data["source_size_seen"]):
             raise _Failure("archive_incomplete")
         expected = {chunk["name"] for chunk in data["chunks"]}
         actual = {part.name for part in folder.glob("*.enc")
-                  if not part.name.startswith("._")}
+                  if not part.name.startswith("._") and part.name != "manifest.enc"}
         if actual != expected:
             raise _Failure("uncommitted_archive_chunk")
         yield path, folder, provider, session_id, key, data

@@ -5,6 +5,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -56,8 +57,12 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.fail("archive worker did not terminate")
 
     def receipt(self):
-        path = self.root / "codex" / "session-123" / "worker-status.json"
+        path = self.folder() / "worker-status.json"
         return json.loads(path.read_text())
+
+    def folder(self):
+        return A._archive_folder(self.root.resolve(), A._key(),
+                                 "codex", "session-123")
 
     def test_launch_is_nonblocking_and_archive_is_byte_exact(self):
         original = record(1) + record(2) + record(3)
@@ -68,7 +73,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1)
         self.assertEqual(self.wait_child(result["pid"]), 0)
         self.assertEqual(self.receipt()["status"], "READY")
-        verified = A.verified_chunks(self.root / "codex" / "session-123" / "manifest.json")
+        verified = A.verified_chunks(self.folder() / "manifest.enc")
         self.assertEqual(verified["status"], "READY")
         self.assertTrue(b"".join(A.iter_plaintext_chunks(verified["manifest_path"]))
                         == original)
@@ -86,7 +91,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(self.wait_child(first["pid"]), 3)
         self.assertEqual(self.receipt()["status"], "TIMED_OUT")
 
-    def test_cli_prints_only_status_metadata(self):
+    def test_legacy_argv_cli_fails_closed_with_fixed_status(self):
         self.source.write_bytes(record(1))
         args = ["launch", "--source", str(self.source),
                 "--archive-root", str(self.root), "--provider", "codex",
@@ -97,12 +102,13 @@ class ArchiveWorkerTest(unittest.TestCase):
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             code = W.main(args)
         payload = json.loads(stdout.getvalue())
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "STARTED")
+        self.assertEqual(code, 2)
+        self.assertEqual(payload["status"], "UNKNOWN")
+        self.assertEqual(payload["reason"], "argv_contract_disabled")
         self.assertEqual(stderr.getvalue(), "")
-        self.assertEqual(self.wait_child(payload["pid"]), 0)
+        self.assertIsNone(payload["pid"])
         self.assertNotIn("PRIVATE-SENTINEL", stdout.getvalue())
-        self.assertNotIn("PRIVATE-SENTINEL", json.dumps(self.receipt()))
+        self.assertFalse(self.root.exists())
 
     def test_missing_source_and_invalid_session_fail_closed(self):
         missing = W.launch_worker(**self.kwargs)
@@ -127,7 +133,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         result = W.launch_worker(**self.kwargs)
         self.assertEqual(result["status"], "STARTED")
         self.assertEqual(self.wait_child(result["pid"]), 0)
-        folder = self.root / "codex" / "session-123"
+        folder = self.folder()
         for path in (folder, folder / "worker.lock", folder / "worker-status.json"):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode) & 0o077, 0)
 
@@ -139,8 +145,8 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(self.wait_child(result["pid"]), 3)
         receipt = self.receipt()
         self.assertEqual(receipt["status"], "TIMED_OUT")
-        self.assertGreater(receipt["archived_bytes"], 0)
-        self.assertLess(receipt["archived_bytes"], self.source.stat().st_size)
+        self.assertNotIn("archived_bytes", receipt)
+        self.assertNotIn("source", receipt)
 
     def test_corrupt_source_fails_without_exposing_content(self):
         self.source.write_bytes(b"PRIVATE-SENTINEL-DO-NOT-LOG\n")
@@ -163,8 +169,9 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(result["status"], "STARTED")
         self.assertEqual(self.wait_child(result["pid"]), 0)
         receipt = self.receipt()
-        self.assertEqual(receipt["status"], "READY")
-        self.assertEqual(receipt["archived_bytes"], size)
+        self.assertEqual(receipt["status"], "READY", receipt["reason"])
+        verified = A.verified_chunks(self.folder() / "manifest.enc")
+        self.assertEqual(verified["archived_bytes"], size)
 
     def test_default_worker_fails_closed_above_hard_cap(self):
         prefix, suffix = b'{"payload":"', b'"}\n'
@@ -179,6 +186,67 @@ class ArchiveWorkerTest(unittest.TestCase):
         receipt = self.receipt()
         self.assertEqual(receipt["status"], "UNKNOWN")
         self.assertEqual(receipt["reason"], "record_exceeds_budget")
+
+    def test_launch_fd_stdin_contract_and_child_argv_privacy(self):
+        self.source.write_bytes(record(1))
+        request = {"source": str(self.source), "archive_root": str(self.root),
+                   "provider": "codex", "session_id": "session-123",
+                   "max_bytes": len(record(1)), "watch_seconds": 3,
+                   "interval_seconds": 0.05}
+        read_fd, write_fd = os.pipe()
+        os.write(write_fd, json.dumps(request).encode())
+        os.close(write_fd)
+        stdout = io.StringIO()
+        original_popen = W.subprocess.Popen
+        spawned = []
+
+        def capture(argv, **kwargs):
+            spawned.append(argv)
+            return original_popen(argv, **kwargs)
+
+        try:
+            with mock.patch.object(W.subprocess, "Popen", side_effect=capture):
+                with contextlib.redirect_stdout(stdout):
+                    code = W.main(["launch-fd", "--request-fd", str(read_fd)])
+        finally:
+            try:
+                os.close(read_fd)
+            except OSError:
+                pass
+        result = json.loads(stdout.getvalue())
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "STARTED")
+        self.assertEqual(self.wait_child(result["pid"]), 0)
+        child_argv = " ".join(spawned[0])
+        self.assertNotIn(str(self.source), child_argv)
+        self.assertNotIn("session-123", child_argv)
+        self.assertNotIn(str(self.root), child_argv)
+        self.assertEqual(self.receipt()["status"], "READY")
+
+    def test_launch_fd_zero_accepts_json_stdin(self):
+        self.source.write_bytes(record(1))
+        request = {"source": str(self.source), "archive_root": str(self.root),
+                   "provider": "codex", "session_id": "session-123",
+                   "max_bytes": len(record(1)), "watch_seconds": 3,
+                   "interval_seconds": 0.05}
+        command = [sys.executable, str(Path(W.__file__).resolve()),
+                   "launch-fd", "--request-fd", "0"]
+        launched = subprocess.run(command, input=json.dumps(request).encode(),
+                                  capture_output=True, check=False, timeout=5)
+        self.assertEqual(launched.returncode, 0)
+        self.assertEqual(launched.stderr, b"")
+        result = json.loads(launched.stdout)
+        self.assertEqual(result["status"], "STARTED")
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and not (
+                self.folder() / "worker-status.json").exists():
+            time.sleep(0.02)
+        while time.monotonic() < deadline:
+            receipt = self.receipt()
+            if receipt["status"] == "READY":
+                break
+            time.sleep(0.02)
+        self.assertEqual(receipt["status"], "READY", receipt["reason"])
 
 
 if __name__ == "__main__":

@@ -4,7 +4,8 @@
 The public `launch` command never scans a transcript. A detached child owns a
 per-session flock while it calls source_archive.sync_source with a finite byte
 budget and watch deadline. Standard streams are discarded in the child; the
-status receipt contains only fixed status codes and numeric progress.
+status receipt contains only fixed status codes. The supported CLI accepts
+source identity through JSON on stdin, never through process arguments.
 """
 
 from __future__ import annotations
@@ -75,13 +76,19 @@ def _validated_paths(source_path: str | Path, archive_root: str | Path,
     source = Path(source_path).resolve(strict=True)
     if not source.is_file():
         raise _WorkerFailure("missing_source")
-    folder = root / provider / session_id
+    _secure_dir(root)
+    if (root / provider / session_id).exists():
+        raise _WorkerFailure("legacy_metadata_archive_present")
+    try:
+        key = source_archive._archive_key(root)
+    except source_archive.ArchiveReadError as exc:
+        raise _WorkerFailure(exc.reason) from exc
+    folder = source_archive._archive_folder(root, key, provider, session_id)
     if not folder.resolve().is_relative_to(root):
         raise _WorkerFailure("archive_path_escape")
     if source.is_relative_to(folder):
         raise _WorkerFailure("source_is_archive")
-    for path in (root, root / provider, folder):
-        _secure_dir(path)
+    _secure_dir(folder)
     return source, root, folder
 
 
@@ -102,10 +109,8 @@ def _validate_limits(max_bytes: int, watch_seconds: float,
         raise _WorkerFailure("invalid_finalized_flag")
 
 
-def _write_status(folder: Path, *, status: str, reason: str,
-                  archived_bytes: int | None = None) -> None:
-    receipt = {"status": status, "reason": reason, "pid": os.getpid(),
-               "archived_bytes": archived_bytes, "updated_at": time.time()}
+def _write_status(folder: Path, *, status: str, reason: str) -> None:
+    receipt = {"status": status, "reason": reason, "auto_inject": False}
     path = folder / "worker-status.json"
     temp = folder / f".worker-status.{secrets.token_hex(8)}.tmp"
     try:
@@ -150,19 +155,29 @@ def launch_worker(*, source_path: str | Path, archive_root: str | Path,
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 return _reply("ALREADY_RUNNING", "session_worker_locked")
-            args = [sys.executable, str(Path(__file__).resolve()), "_run",
-                    "--source", str(source), "--archive-root", str(root),
-                    "--provider", provider, "--session-id", session_id,
-                    "--max-bytes", str(max_bytes),
-                    "--watch-seconds", str(watch_seconds),
-                    "--interval-seconds", str(interval_seconds),
-                    "--lock-fd", str(fd)]
-            if source_finalized:
-                args.append("--source-finalized")
-            child = subprocess.Popen(
-                args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True,
-                close_fds=True, pass_fds=(fd,))
+            config = {"source": str(source), "archive_root": str(root),
+                      "provider": provider, "session_id": session_id,
+                      "max_bytes": max_bytes, "watch_seconds": watch_seconds,
+                      "interval_seconds": interval_seconds,
+                      "source_finalized": source_finalized, "lock_fd": fd}
+            read_fd, write_fd = os.pipe()
+            try:
+                args = [sys.executable, str(Path(__file__).resolve()), "_run",
+                        "--config-fd", str(read_fd)]
+                child = subprocess.Popen(
+                    args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, start_new_session=True,
+                    close_fds=True, pass_fds=(fd, read_fd))
+                os.close(read_fd)
+                read_fd = -1
+                with os.fdopen(write_fd, "wb") as output:
+                    write_fd = -1
+                    output.write(json.dumps(config).encode("utf-8"))
+            finally:
+                if read_fd >= 0:
+                    os.close(read_fd)
+                if write_fd >= 0:
+                    os.close(write_fd)
             _SPAWNED_CHILDREN[child.pid] = child
             return _reply("STARTED", "worker_spawned", child.pid)
         finally:
@@ -183,7 +198,10 @@ def _run_worker(args) -> int:
             args.source, args.archive_root, args.provider, args.session_id)
         lock_path = folder / "worker.lock"
         _secure_file(lock_path)
-        if os.fstat(args.lock_fd).st_ino != lock_path.stat().st_ino:
+        lock_info = os.fstat(args.lock_fd)
+        if (not stat.S_ISREG(lock_info.st_mode)
+                or lock_info.st_dev != lock_path.stat().st_dev
+                or lock_info.st_ino != lock_path.stat().st_ino):
             raise _WorkerFailure("invalid_lock_fd")
         fcntl.flock(args.lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         deadline = time.monotonic() + args.watch_seconds
@@ -194,21 +212,22 @@ def _run_worker(args) -> int:
                 session_id=args.session_id, max_bytes=args.max_bytes,
                 source_finalized=args.source_finalized)
             if result["status"] == "READY":
-                _write_status(folder, status="READY", reason="caught_up",
-                              archived_bytes=result["archived_bytes"])
+                _write_status(folder, status="READY", reason="caught_up")
                 return 0
             if result["status"] == "UNKNOWN":
                 _write_status(folder, status="UNKNOWN", reason=result["reason"])
                 return 2
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _write_status(folder, status="TIMED_OUT", reason="watch_deadline",
-                              archived_bytes=result["archived_bytes"])
+                _write_status(folder, status="TIMED_OUT", reason="watch_deadline")
                 return 3
             time.sleep(min(args.interval_seconds, remaining))
-    except Exception:
+    except Exception as exc:
         try:
-            _write_status(folder, status="UNKNOWN", reason="worker_error")
+            reason = (exc.reason if isinstance(exc, (_WorkerFailure,
+                                                    source_archive.ArchiveReadError))
+                      else "worker_error_" + type(exc).__name__.lower())
+            _write_status(folder, status="UNKNOWN", reason=reason)
         except Exception:
             pass
         return 2
@@ -219,11 +238,31 @@ def _run_worker(args) -> int:
             pass
 
 
+def _request_from_fd(fd: int) -> dict:
+    try:
+        with os.fdopen(os.dup(fd), "rb") as source:
+            payload = source.read(65537)
+        if len(payload) > 65536:
+            raise ValueError("request_too_large")
+        request = json.loads(payload)
+        if not isinstance(request, dict):
+            raise ValueError("invalid_request")
+        return request
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise _WorkerFailure("invalid_request") from exc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Bounded Forseti raw-session archive worker")
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("launch", "_run"):
+    for name in ("launch", "_run", "launch-fd"):
         command = sub.add_parser(name)
+        if name == "launch-fd":
+            command.add_argument("--request-fd", type=int, required=True)
+            continue
+        if name == "_run":
+            command.add_argument("--config-fd", type=int, required=True)
+            continue
         command.add_argument("--source", required=True)
         command.add_argument("--archive-root", required=True)
         command.add_argument("--provider", required=True, choices=("codex", "claude"))
@@ -236,19 +275,28 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--interval-seconds", type=float,
                              default=DEFAULT_INTERVAL_SECONDS)
         command.add_argument("--source-finalized", action="store_true")
-        if name == "_run":
-            command.add_argument("--lock-fd", type=int, required=True)
     args = parser.parse_args(argv)
+    if args.command == "launch":
+        print(json.dumps(_reply("UNKNOWN", "argv_contract_disabled"),
+                         sort_keys=True))
+        return 2
     if args.command == "_run":
-        return _run_worker(args)
-    result = launch_worker(
-        source_path=args.source, archive_root=args.archive_root,
-        provider=args.provider, session_id=args.session_id,
-        max_bytes=args.max_bytes, watch_seconds=args.watch_seconds,
-        interval_seconds=args.interval_seconds,
-        source_finalized=args.source_finalized)
-    print(json.dumps(result, sort_keys=True))
-    return 0 if result["status"] != "UNKNOWN" else 2
+        try:
+            return _run_worker(argparse.Namespace(**_request_from_fd(args.config_fd)))
+        except _WorkerFailure:
+            return 2
+    if args.command == "launch-fd":
+        try:
+            request = _request_from_fd(args.request_fd)
+            if "source" not in request or "source_path" in request:
+                raise _WorkerFailure("invalid_request")
+            request["source_path"] = request.pop("source")
+            result = launch_worker(**request)
+        except (TypeError, _WorkerFailure):
+            result = _reply("UNKNOWN", "invalid_request")
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["status"] != "UNKNOWN" else 2
+    return 2
 
 
 if __name__ == "__main__":

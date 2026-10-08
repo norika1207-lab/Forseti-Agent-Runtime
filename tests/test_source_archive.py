@@ -48,7 +48,9 @@ class SourceArchiveTest(unittest.TestCase):
         return A.sync_source(**self.kwargs)
 
     def chunks(self, result):
-        manifest = json.loads(Path(result["manifest_path"]).read_text())
+        path = Path(result["manifest_path"])
+        manifest = A._read_manifest(path, None, "codex", "session-123",
+                                    A._key(), None)
         folder = Path(result["archive_path"])
         key = A._key()
         return manifest, b"".join(A._decrypt(
@@ -163,9 +165,10 @@ class SourceArchiveTest(unittest.TestCase):
         self.source.write_bytes(record(1))
         first = self.sync()
         manifest_path = Path(first["manifest_path"])
-        data = json.loads(manifest_path.read_text())
+        data = A._decrypt_manifest(A._key(), manifest_path,
+                                   manifest_path.read_bytes())
         del data["source_size_seen"]
-        manifest_path.write_text(json.dumps(data), encoding="utf-8")
+        manifest_path.write_bytes(A._encrypt_manifest(A._key(), manifest_path, data))
         self.assertEqual(self.sync()["reason"], "corrupt_manifest")
 
     def test_lower_budget_than_existing_chunk_is_explicit_failure(self):
@@ -222,7 +225,8 @@ class SourceArchiveTest(unittest.TestCase):
         result = self.sync()
         with self.source.open("ab") as output:
             output.write(record(2))
-        pending = Path(result["archive_path"]) / f"{len(first):016x}.enc"
+        folder = Path(result["archive_path"])
+        pending = folder / A._chunk_name(A._key(), folder, len(first))
         pending.write_bytes(A._encrypt(A._key(), record(2), "codex",
                                        "session-123", len(first)))
         adopted = self.sync()
@@ -243,7 +247,7 @@ class SourceArchiveTest(unittest.TestCase):
         self.kwargs["archive_root"] = self.root
         result = self.sync()
         manifest, _ = self.chunks(result)
-        for directory in (self.root, self.root / "codex", Path(result["archive_path"])):
+        for directory in (self.root, Path(result["archive_path"])):
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode) & 0o077, 0)
         for path in (Path(result["manifest_path"]),
                      Path(result["archive_path"]) / "archive.lock",
@@ -262,11 +266,12 @@ class SourceArchiveTest(unittest.TestCase):
 
     def test_symlinked_session_path_cannot_escape_archive_root(self):
         self.source.write_bytes(record(1))
-        (self.root / "codex").mkdir(parents=True, mode=0o700)
+        self.root.mkdir(parents=True, mode=0o700)
+        folder = A._archive_folder(self.root.resolve(), A._key(create=True),
+                                   "codex", "session-123")
         outside = Path(self.temp.name) / "outside"
         outside.mkdir(mode=0o700)
-        (self.root / "codex" / "session-123").symlink_to(outside,
-                                                           target_is_directory=True)
+        folder.symlink_to(outside, target_is_directory=True)
         result = self.sync()
         self.assertEqual(result["status"], "UNKNOWN")
         self.assertEqual(result["reason"], "archive_path_escape")
@@ -281,15 +286,38 @@ class SourceArchiveTest(unittest.TestCase):
         self.assertEqual(manifest["chunks"][0]["sha256"],
                          hashlib.sha256(encrypted).hexdigest())
         self.assertNotIn(b"private transcript content", encrypted)
-        self.assertNotIn("private transcript content",
-                         Path(result["manifest_path"]).read_text())
-        self.assertNotIn(str(self.source),
-                         Path(result["manifest_path"]).read_text())
+        sealed = Path(result["manifest_path"]).read_bytes()
+        self.assertNotIn(b"private transcript content", sealed)
+        self.assertNotIn(str(self.source).encode(), sealed)
+        self.assertNotIn(b"session-123", sealed)
+        self.assertNotIn(b"codex", sealed)
+        self.assertNotIn("session-123", Path(result["archive_path"]).name)
+        self.assertEqual(len(Path(result["archive_path"]).name), 64)
+        self.assertIn(len(encrypted) - A._CIPHER_OVERHEAD, A._CHUNK_BUCKETS)
+        self.assertNotEqual(len(encrypted), len(record(1)) + A._CIPHER_OVERHEAD)
         self.assertNotIn("private transcript content", str(result))
         for path in self.root.rglob("*"):
             if path.is_file():
                 self.assertNotIn(b"private transcript content", path.read_bytes())
         self.assertEqual(list(self.root.rglob("*.jsonl")), [])
+
+    def test_first_use_key_ignores_benign_fs_files_but_not_archive_evidence(self):
+        self.root.mkdir(parents=True)
+        (self.root / ".DS_Store").write_bytes(b"metadata")
+        with tempfile.TemporaryDirectory() as local:
+            anchor_dir = Path(local) / "anchors"
+            with mock.patch.object(A, "_ANCHOR_DIR", anchor_dir):
+                with mock.patch.object(A, "_key", return_value=b"k" * 32) as key:
+                    A._archive_key(self.root)
+                    self.assertTrue(key.call_args.kwargs["create"])
+                    (self.root / ("a" * 64)).mkdir()
+                    A._archive_key(self.root)
+                    self.assertFalse(key.call_args.kwargs["create"])
+                    (self.root / ("a" * 64)).rmdir()
+                    anchor_dir.mkdir()
+                    (anchor_dir / "old-anchor").write_bytes(b"evidence")
+                    A._archive_key(self.root)
+                    self.assertFalse(key.call_args.kwargs["create"])
 
     def test_old_manifest_is_rejected_after_anchor_advances(self):
         self.source.write_bytes(record(1))
@@ -373,9 +401,9 @@ class SourceArchiveTest(unittest.TestCase):
         folder.mkdir(parents=True, mode=0o700)
         manifest = folder / "manifest.json"
         manifest.write_text('{"format_version":1}', encoding="utf-8")
-        self.assertEqual(self.sync()["reason"], "legacy_unencrypted_archive")
+        self.assertEqual(self.sync()["reason"], "legacy_metadata_archive_present")
         self.assertEqual(A.verified_chunks(manifest)["reason"],
-                         "legacy_unencrypted_archive")
+                         "invalid_manifest_path")
         self.assertEqual(list(folder.glob("*.enc")), [])
 
     def test_anchor_tampering_fails_closed(self):
@@ -477,9 +505,9 @@ class SourceArchiveTest(unittest.TestCase):
         self.assertEqual(self.sync()["status"], "READY")
         self.source.unlink()
         path = Path(first["manifest_path"])
-        manifest = json.loads(path.read_text())
+        manifest = A._decrypt_manifest(A._key(), path, path.read_bytes())
         manifest["chain_sha256"] = "0" * 64
-        path.write_text(json.dumps(manifest), encoding="utf-8")
+        path.write_bytes(A._encrypt_manifest(A._key(), path, manifest))
         read = A.verified_chunks(path)
         self.assertEqual(read["status"], "UNKNOWN")
         self.assertEqual(read["encrypted_chunk_paths"], [])
