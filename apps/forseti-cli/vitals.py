@@ -39,6 +39,17 @@ _CORRECTION = re.compile(
     r"|漏(?:掉|了)|錯了|不對|搞錯|重(?:做|寫|改)"
     r"|擅自|自作主張|誰叫你|我要的是"
     r"|為什麼(?:不|沒|要)")
+_OWNER_GOAL_CHANGE = re.compile(
+    r"改(?:成|為)|現在(?:的)?目標(?:是|改成)|不要(?:再)?做原本|"
+    r"原本(?:的)?目標(?:不要|改)|換(?:一個|個)?方向|新的方向|"
+    r"改走|轉向|接下來(?:改|換)做"
+)
+_OWNER_TASK_SWITCH = re.compile(
+    r"^(?=.{0,50}(?:另一|另外|別的|不同|先停|換|新工作))"
+    r"(?:現在|接下來|這次|先|另外|改先).{0,24}"
+    r"(?:幫我|去|做|處理|修|查|開始|改做|改處理)"
+)
+_EXPLORATORY = re.compile(r"探索|試做|先試|旁支|實驗")
 # 她只是叫我往下走,不是在糾正。F06 §5 的 HumanContinueBurden 算這個。
 _NUDGE = re.compile(r"^\s*(繼續|continue|go|下一步|嗯|好|ok|okay)\s*[。.!！]?\s*$", re.I)
 
@@ -100,6 +111,30 @@ def is_correction(text: str) -> bool:
 
 def is_nudge(text: str) -> bool:
     return bool(_NUDGE.match((text or "").strip()))
+
+
+def owner_goal_change_candidates(rows: list) -> list[dict]:
+    """Detect owner direction changes as candidates, never as adopted goals."""
+    out = []
+    for row in rows or []:
+        text = (row.get("owner_text") or "").strip()
+        explicit = bool(_OWNER_GOAL_CHANGE.search(text))
+        task_switch = bool(_OWNER_TASK_SWITCH.search(text))
+        if not text or not (explicit or task_switch):
+            continue
+        exploratory = bool(_EXPLORATORY.search(text))
+        out.append({
+            "n": row.get("n"),
+            "kind": ("EXPLORATORY_BRANCH" if exploratory else
+                     "OWNER_GOAL_CHANGE" if explicit else "OWNER_TASK_SWITCH"),
+            "state": "CANDIDATE",
+            "confidence": "HIGH" if explicit else "MEDIUM",
+            "evidence": text[:600],
+            "why": ("owner marked this as exploratory" if exploratory else
+                    "owner used an explicit goal-change phrase" if explicit else
+                    "owner inserted work; confirm whether temporary or a new goal"),
+        })
+    return out
 
 
 # ── 目標支持度 ────────────────────────────────
