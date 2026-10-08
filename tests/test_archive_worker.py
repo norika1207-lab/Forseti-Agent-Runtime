@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "apps", "forseti-cli"))
@@ -32,8 +33,20 @@ class ArchiveWorkerTest(unittest.TestCase):
                        "provider": "codex", "session_id": "session-123",
                        "max_bytes": len(record(1)), "watch_seconds": 3,
                        "interval_seconds": 0.05}
+        self.addCleanup(self.cleanup_anchor)
+
+    def cleanup_anchor(self):
+        try:
+            anchor = A._anchor_path(A._key(), self.root.resolve(), "codex",
+                                    "session-123")
+            anchor.unlink(missing_ok=True)
+        except A.ArchiveReadError:
+            pass
 
     def wait_child(self, pid):
+        process = W._SPAWNED_CHILDREN.pop(pid, None)
+        if process is not None:
+            return process.wait(timeout=8)
         deadline = time.monotonic() + 8
         while time.monotonic() < deadline:
             done, status = os.waitpid(pid, os.WNOHANG)
@@ -57,8 +70,9 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(self.receipt()["status"], "READY")
         verified = A.verified_chunks(self.root / "codex" / "session-123" / "manifest.json")
         self.assertEqual(verified["status"], "READY")
-        self.assertEqual(b"".join(Path(p).read_bytes() for p in verified["chunk_paths"]),
-                         original)
+        self.assertTrue(b"".join(A.iter_plaintext_chunks(verified["manifest_path"]))
+                        == original)
+        self.assertNotIn("chunk_paths", verified)
         self.assertFalse(result["auto_inject"])
 
     def test_duplicate_launch_has_one_live_worker(self):
@@ -99,6 +113,14 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(invalid["status"], "UNKNOWN")
         self.assertEqual(invalid["reason"], "invalid_identity")
         self.assertFalse((self.root / "escape").exists())
+
+    def test_missing_crypto_does_not_spawn_worker(self):
+        self.source.write_bytes(record(1))
+        with mock.patch.object(A, "AESGCM", None):
+            result = W.launch_worker(**self.kwargs)
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "crypto_unavailable")
+        self.assertIsNone(result["pid"])
 
     def test_owner_only_worker_files(self):
         self.source.write_bytes(record(1))

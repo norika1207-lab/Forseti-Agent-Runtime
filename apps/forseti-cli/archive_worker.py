@@ -28,6 +28,7 @@ _NEWDRIVE = Path("/Volumes/NewDrive")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 DEFAULT_WATCH_SECONDS = 600.0
 DEFAULT_INTERVAL_SECONDS = 0.5
+_SPAWNED_CHILDREN: dict[int, subprocess.Popen] = {}
 
 
 class _WorkerFailure(Exception):
@@ -86,6 +87,8 @@ def _validated_paths(source_path: str | Path, archive_root: str | Path,
 
 def _validate_limits(max_bytes: int, watch_seconds: float,
                      interval_seconds: float, source_finalized: bool) -> None:
+    if source_archive.AESGCM is None:
+        raise _WorkerFailure("crypto_unavailable")
     if (type(max_bytes) is not int
             or not 1 <= max_bytes <= source_archive.MAX_CALL_BYTES):
         raise _WorkerFailure("invalid_budget")
@@ -132,6 +135,9 @@ def launch_worker(*, source_path: str | Path, archive_root: str | Path,
                   source_finalized: bool = False) -> dict:
     """Return immediately; STARTED and ALREADY_RUNNING are successful launch results."""
     try:
+        for pid, process in list(_SPAWNED_CHILDREN.items()):
+            if process.poll() is not None:
+                del _SPAWNED_CHILDREN[pid]
         _validate_limits(max_bytes, watch_seconds, interval_seconds,
                          source_finalized)
         source, root, folder = _validated_paths(
@@ -157,6 +163,7 @@ def launch_worker(*, source_path: str | Path, archive_root: str | Path,
                 args, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, start_new_session=True,
                 close_fds=True, pass_fds=(fd,))
+            _SPAWNED_CHILDREN[child.pid] = child
             return _reply("STARTED", "worker_spawned", child.pid)
         finally:
             os.close(fd)
