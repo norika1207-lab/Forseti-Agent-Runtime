@@ -18,6 +18,11 @@ def record(n):
     return json.dumps({"n": n, "text": "private transcript content"}).encode() + b"\n"
 
 
+def large_record(size):
+    prefix, suffix = b'{"payload":"', b'"}\n'
+    return prefix + b"x" * (size - len(prefix) - len(suffix)) + suffix
+
+
 class SourceArchiveTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir="/Volumes/NewDrive")
@@ -155,6 +160,35 @@ class SourceArchiveTest(unittest.TestCase):
         self.sync()
         self.kwargs["max_bytes"] = len(record(1)) - 1
         self.assertEqual(self.sync()["reason"], "chunk_exceeds_budget")
+
+    def test_default_resumes_legacy_budget_before_13455941_byte_record(self):
+        initial = record(1)
+        self.source.write_bytes(initial)
+        self.assertEqual(self.sync()["status"], "IN_PROGRESS")
+        oversized_for_old_default = large_record(13_455_941)
+        with self.source.open("ab") as output:
+            output.write(oversized_for_old_default)
+        result = A.sync_source(
+            source_path=self.source, archive_root=self.root,
+            provider="codex", session_id="session-123")
+        self.assertEqual(A.DEFAULT_MAX_BYTES, A.MAX_CALL_BYTES)
+        self.assertEqual(result["status"], "IN_PROGRESS")
+        self.assertEqual(result["archived_bytes"], len(initial + oversized_for_old_default))
+        ready = A.sync_source(
+            source_path=self.source, archive_root=self.root,
+            provider="codex", session_id="session-123")
+        self.assertEqual(ready["status"], "READY")
+        _, archived = self.chunks(ready)
+        self.assertTrue(archived == initial + oversized_for_old_default)
+
+    def test_record_above_hard_cap_fails_closed(self):
+        self.source.write_bytes(large_record(A.MAX_CALL_BYTES + 1))
+        result = A.sync_source(
+            source_path=self.source, archive_root=self.root,
+            provider="codex", session_id="session-123")
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "record_exceeds_budget")
+        self.assertFalse(result["auto_inject"])
 
     def test_tamper_after_ready_revokes_status(self):
         self.source.write_bytes(record(1))

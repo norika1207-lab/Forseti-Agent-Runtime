@@ -222,7 +222,8 @@ def main(argv: list[str] | None = None) -> int:
         command.add_argument("--provider", required=True, choices=("codex", "claude"))
         command.add_argument("--session-id", required=True)
         command.add_argument("--max-bytes", type=int,
-                             default=source_archive.DEFAULT_MAX_BYTES)
+                             default=source_archive.DEFAULT_MAX_BYTES,
+                             help="maximum source bytes per sync call (default: 16 MiB)")
         command.add_argument("--watch-seconds", type=float,
                              default=DEFAULT_WATCH_SECONDS)
         command.add_argument("--interval-seconds", type=float,

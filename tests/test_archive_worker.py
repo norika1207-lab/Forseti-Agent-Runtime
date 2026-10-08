@@ -129,6 +129,35 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(receipt["status"], "UNKNOWN")
         self.assertNotIn("PRIVATE-SENTINEL", json.dumps(receipt))
 
+    def test_default_worker_budget_accepts_record_above_four_mib(self):
+        prefix, suffix = b'{"payload":"', b'"}\n'
+        size = 4 * 1024 * 1024 + 1
+        self.source.write_bytes(prefix + b"x" * (size - len(prefix) - len(suffix))
+                                + suffix)
+        options = {key: value for key, value in self.kwargs.items()
+                   if key != "max_bytes"}
+        options["watch_seconds"] = 10
+        result = W.launch_worker(**options)
+        self.assertEqual(result["status"], "STARTED")
+        self.assertEqual(self.wait_child(result["pid"]), 0)
+        receipt = self.receipt()
+        self.assertEqual(receipt["status"], "READY")
+        self.assertEqual(receipt["archived_bytes"], size)
+
+    def test_default_worker_fails_closed_above_hard_cap(self):
+        prefix, suffix = b'{"payload":"', b'"}\n'
+        size = A.MAX_CALL_BYTES + 1
+        self.source.write_bytes(prefix + b"x" * (size - len(prefix) - len(suffix))
+                                + suffix)
+        options = {key: value for key, value in self.kwargs.items()
+                   if key != "max_bytes"}
+        result = W.launch_worker(**options)
+        self.assertEqual(result["status"], "STARTED")
+        self.assertEqual(self.wait_child(result["pid"]), 2)
+        receipt = self.receipt()
+        self.assertEqual(receipt["status"], "UNKNOWN")
+        self.assertEqual(receipt["reason"], "record_exceeds_budget")
+
 
 if __name__ == "__main__":
     unittest.main()

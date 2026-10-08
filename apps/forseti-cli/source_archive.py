@@ -23,8 +23,8 @@ from pathlib import Path
 _NEWDRIVE = Path("/Volumes/NewDrive")
 _ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 _EMPTY_SHA = hashlib.sha256(b"").hexdigest()
-DEFAULT_MAX_BYTES = 4 * 1024 * 1024
 MAX_CALL_BYTES = 16 * 1024 * 1024
+DEFAULT_MAX_BYTES = MAX_CALL_BYTES
 
 
 class _Failure(Exception):
