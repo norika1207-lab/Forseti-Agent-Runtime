@@ -273,10 +273,41 @@ def path_semantics(row: dict, previous: dict | None = None) -> dict:
 
 def annotate_rows(rows: list[dict]) -> list[dict]:
     """Attach hover-ready semantics without rewriting source observations."""
+    import owner
+
     previous = None
+    last_decision = None
     for i, row in enumerate(rows or []):
         if i + 1 < len(rows) and rows[i + 1].get("corrected_by_owner"):
             row["owner_correction_text"] = rows[i + 1].get("owner_text") or ""
+        owner_text = (row.get("owner_text") or "").strip()
+        owner_kind = row.get("owner_message_kind") or owner.classify(owner_text).kind
+        direction_candidate = bool(row.get("owner_goal_change_candidate"))
+        if (last_decision and owner_text and owner_kind != "CORRECTION"
+                and (owner_kind == "MIND_CHANGE" or direction_candidate)
+                and owner_text != last_decision["text"]):
+            previous_line = last_decision.get("line")
+            current_line = row.get("owner_line")
+            row["decision_comparison"] = {
+                "state": "POSSIBLE_DIFFERENCE",
+                "epistemic": "INFERRED",
+                "baseline_n": last_decision["n"],
+                "current_n": row.get("n"),
+                "baseline_source_ref": (f"line:{previous_line}"
+                                        if previous_line else None),
+                "evidence_source_ref": (f"line:{current_line}"
+                                        if current_line else None),
+                "baseline": (f"第 {last_decision['n']} 輪"
+                             + (f"（原始第 {previous_line} 行）" if previous_line else "")
+                             + f"：{_short(last_decision['text'])}"),
+                "evidence": (f"第 {row.get('n')} 輪"
+                             + (f"（原始第 {current_line} 行）" if current_line else "")
+                             + f"：{_short(owner_text)}"),
+                "why": "與先前的使用者決策不同，供你判斷是否換方向；尚未改動北極星。",
+            }
+        if owner_text and owner_kind in {"NEW_REQUEST", "MIND_CHANGE"}:
+            last_decision = {"n": row.get("n"), "line": row.get("owner_line"),
+                             "text": owner_text}
         row["path_semantics"] = path_semantics(row, previous)
         previous = row
     return rows
