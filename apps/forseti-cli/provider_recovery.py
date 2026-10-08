@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import closing
 from pathlib import Path
 
 from rehydration import ORIGINAL, PACKET_LIMIT, recover_original_interval
+from source_archive import ArchiveReadError, iter_plaintext_chunks, verified_chunks
 from tracker import CodexTracker, Tracker
 
 
@@ -55,7 +57,7 @@ def recover_provider_interval(*, source_path: str, provider: str,
     path = Path(source_path)
     if not path.is_file():
         return _unknown("missing_source")
-    return _recover_records([path], str(path.resolve()), provider,
+    return _recover_records(lambda: _raw_lines([path]), str(path.resolve()), provider,
                             start_round, compaction_ordinal, goal, task, limit)
 
 
@@ -63,13 +65,11 @@ def recover_archived_interval(*, manifest_path: str, start_round: int,
                               compaction_ordinal: int, goal: str, task: str,
                               limit: int = PACKET_LIMIT) -> dict:
     """Recover from verified ordered chunks after the original is gone."""
-    from source_archive import verified_chunks
-
     verified = verified_chunks(manifest_path)
     if verified["status"] != "READY":
         return _unknown("archive_" + verified["reason"])
     result = _recover_records(
-        [Path(p) for p in verified["chunk_paths"]],
+        lambda: _archived_lines(manifest_path),
         verified["manifest_path"], verified["provider"], start_round,
         compaction_ordinal, goal, task, limit)
     after = verified_chunks(manifest_path)
@@ -90,7 +90,12 @@ def _raw_lines(paths: list[Path]):
             yield from source
 
 
-def _recover_records(paths: list[Path], source_ref: str, provider: str,
+def _archived_lines(manifest_path: str):
+    for chunk in iter_plaintext_chunks(manifest_path):
+        yield from chunk.splitlines(keepends=True)
+
+
+def _recover_records(line_factory, source_ref: str, provider: str,
                      start_round: int, compaction_ordinal: int,
                      goal: str, task: str, limit: int) -> dict:
     """Use physical line numbers; never serialize display-truncated rows."""
@@ -105,14 +110,15 @@ def _recover_records(paths: list[Path], source_ref: str, provider: str,
     # Recovery cannot claim a complete source interval if the source is corrupt.
     parser = CodexTracker(source_ref) if provider == "codex" else Tracker(source_ref)
     try:
-        for line_no, raw in enumerate(_raw_lines(paths), 1):
-            if not raw.endswith(b"\n"):
-                return unknown("incomplete_source_line")
-            rec = json.loads(raw)
-            if not isinstance(rec, dict):
-                return unknown("invalid_source_row")
-            parser._handle(rec, line_no)
-    except (OSError, UnicodeError, ValueError):
+        with closing(line_factory()) as lines:
+            for line_no, raw in enumerate(lines, 1):
+                if not raw.endswith(b"\n"):
+                    return unknown("incomplete_source_line")
+                rec = json.loads(raw)
+                if not isinstance(rec, dict):
+                    return unknown("invalid_source_row")
+                parser._handle(rec, line_no)
+    except (OSError, UnicodeError, ValueError, ArchiveReadError):
         return unknown("unreadable_source")
     if provider == "codex":
         boundaries = [event["line"] for event in parser.compaction_events]
@@ -130,15 +136,16 @@ def _recover_records(paths: list[Path], source_ref: str, provider: str,
     prefix = CodexTracker(source_ref) if provider == "codex" else Tracker(source_ref)
     messages = {}
     try:
-        for line_no, raw in enumerate(_raw_lines(paths), 1):
-            if line_no >= cutoff:
-                break
-            rec = json.loads(raw)
-            message = _native_message(rec, provider)
-            if message is not None:
-                messages[line_no] = message
-            prefix._handle(rec, line_no)
-    except (OSError, UnicodeError, ValueError):
+        with closing(line_factory()) as lines:
+            for line_no, raw in enumerate(lines, 1):
+                if line_no >= cutoff:
+                    break
+                rec = json.loads(raw)
+                message = _native_message(rec, provider)
+                if message is not None:
+                    messages[line_no] = message
+                prefix._handle(rec, line_no)
+    except (OSError, UnicodeError, ValueError, ArchiveReadError):
         return unknown("unreadable_source")
 
     rows = []

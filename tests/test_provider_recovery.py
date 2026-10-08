@@ -135,7 +135,10 @@ def test_malformed_assistant_content_fails_closed(tmp_path):
     assert result["packet"] is None
 
 
-def test_recover_from_verified_archive_after_original_is_removed():
+def test_recover_from_verified_archive_after_original_is_removed(tmp_path, monkeypatch):
+    import source_archive
+    monkeypatch.setattr(source_archive, "_KEY_PATH", tmp_path / "archive-key")
+    monkeypatch.setattr(source_archive, "_ANCHOR_DIR", tmp_path / "archive-anchors")
     with tempfile.TemporaryDirectory(dir="/Volumes/NewDrive") as folder:
         base = Path(folder)
         source = base / "codex.jsonl"
@@ -158,6 +161,13 @@ def test_recover_from_verified_archive_after_original_is_removed():
             if archive["status"] == "READY":
                 break
         assert archive["status"] == "READY"
+        archive_dir = Path(archive["archive_path"])
+        assert not list(archive_dir.glob("*.jsonl"))
+        for encrypted in archive_dir.glob("*.enc"):
+            assert "完整保留這段原文".encode() not in encrypted.read_bytes()
+        assert str(source) not in Path(archive["manifest_path"]).read_text()
+        assert source_archive._KEY_PATH.is_file()
+        assert not source_archive._KEY_PATH.is_relative_to(base)
         source.unlink()
         recovered = recover_archived_interval(
             manifest_path=archive["manifest_path"], start_round=1,
