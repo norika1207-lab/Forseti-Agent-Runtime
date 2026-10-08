@@ -346,7 +346,13 @@ def main(argv: list[str]) -> int:
         },
     })
     if len(argv) > 4 and argv[4] == "archive-meta-v1":
-        snap["_archive_source_path"] = str(target)
+        provider_root = (Path.home() / (".codex/sessions" if provider == "codex"
+                                       else ".claude/projects"))
+        try:
+            if target.resolve(strict=True).is_relative_to(provider_root.resolve(strict=True)):
+                snap["_archive_source_path"] = str(target)
+        except OSError:
+            pass
     print(json.dumps(snap, ensure_ascii=False))
     return 0
 

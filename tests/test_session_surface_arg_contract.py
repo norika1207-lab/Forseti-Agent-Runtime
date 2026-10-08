@@ -60,3 +60,15 @@ def test_archive_metadata_is_internal_only(tmp_path, monkeypatch, capsys):
     assert 'object.remove("_archive_source_path")' in rust
     assert 'cmd.arg("archive-meta-v1")' in rust
     assert 'schedule_raw_archive(&contents, &source, provider, session_id)' in rust
+
+
+def test_archive_metadata_rejects_unrelated_jsonl(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    transcript = tmp_path / "unrelated.jsonl"
+    transcript.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "private"}}) + "\n", encoding="utf-8")
+    assert session_surface.main([
+        "session_surface.py", str(transcript), "180", "claude", "archive-meta-v1",
+    ]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert "_archive_source_path" not in data

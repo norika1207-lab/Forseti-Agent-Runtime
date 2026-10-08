@@ -248,8 +248,9 @@ fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_i
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn();
-    if spawned.is_ok() {
+    if let Ok(mut child) = spawned {
         seen.insert(key, Instant::now());
+        std::thread::spawn(move || { let _ = child.wait(); });
     }
 }
 
