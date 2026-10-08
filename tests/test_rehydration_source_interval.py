@@ -48,6 +48,14 @@ class OriginalIntervalTest(unittest.TestCase):
                 self.assertEqual(result["reason"], reason)
                 self.assertIsNone(result["packet"])
 
+    def test_empty_round_before_text_is_not_source_complete(self):
+        result = self.recover([row(1, owner="", ai=""),
+                               row(2, ai="Original reason")])
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "empty_original_round")
+        self.assertIsNone(result["packet"])
+        self.assertFalse(result["auto_inject"])
+
     def test_unattributed_or_summary_source_is_unknown(self):
         for change in ({"source_ref": ""}, {"source_type": R.SUMMARY},
                        {"owner_text": None}):
@@ -92,6 +100,18 @@ class OriginalIntervalTest(unittest.TestCase):
             refs = result["packet"]["provenance_refs"]
             self.assertEqual(refs, [f"{path.resolve()}:1#1:owner_text",
                                     f"{path.resolve()}:2#2:ai_text"])
+
+    def test_jsonl_source_with_empty_round_is_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "original.jsonl"
+            path.write_text("\n".join(json.dumps(r) for r in
+                                      [row(1), row(2, ai="Original reason")]) + "\n",
+                            encoding="utf-8")
+            result = R.recover_original_jsonl_interval(
+                source_path=str(path), start_round=1, compaction_round=3,
+                goal="Ship Forseti", task="Check reason")
+            self.assertEqual(result["reason"], "empty_original_round")
+            self.assertIsNone(result["packet"])
 
     def test_missing_or_corrupt_jsonl_source_is_unknown(self):
         with tempfile.TemporaryDirectory() as directory:

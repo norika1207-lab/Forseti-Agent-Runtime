@@ -265,6 +265,8 @@ def recover_original_interval(*, source_rows: list[dict] | None,
         for key in ("owner_text", "ai_text"):
             if not isinstance(row.get(key), str):
                 return unknown("missing_original_text")
+        if not row["owner_text"].strip() and not row["ai_text"].strip():
+            return unknown("empty_original_round")
         by_round[n] = row
 
     if len(by_round) != compaction_round - start_round:
