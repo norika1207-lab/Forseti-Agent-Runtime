@@ -1899,7 +1899,8 @@ function renderTree() {
     body.addEventListener("click", () => openNode(s));
     const semantic = s.path_semantics || {};
     const requestText = flat(s.owner_text).slice(0, 180) || "(沒有使用者要求)";
-    const answerText = flat(s.ai_text).slice(0, 300) ||
+    const lastAnswer = (s.activity || []).filter((item) => item.kind === "answer").at(-1);
+    const answerText = flat(lastAnswer?.text || s.ai_text).slice(0, 300) ||
       (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
     body.innerHTML =
       `<div class="turnPart request"><span>你</span><div class="txt">${esc(requestText)}</div></div>` +
@@ -2174,12 +2175,46 @@ function renderTree() {
 let nodeN = 0;
 const nodeSheet = $("nodeSheet");
 
+function renderActivityItems(activityList, activity) {
+  activityList.className = "nodeActivityList";
+  activityList.replaceChildren();
+  for (const item of activity) {
+    const detail = document.createElement("details");
+    const summary = document.createElement("summary");
+    const label = document.createElement("b");
+    label.textContent = item.kind === "answer"
+      ? (item.phase === "commentary" ? "AI 執行中回覆" : item.phase === "final_answer" ? "AI 最終回覆" : "AI 回覆")
+      : item.kind === "tool_call" ? `工具呼叫 · ${item.name || "tool"}`
+      : `工具結果 · ${item.name || "tool"}${item.failed ? " · 失敗" : ""}`;
+    summary.appendChild(label);
+    const stamp = document.createElement("span");
+    stamp.textContent = `${item.at ? new Date(item.at * 1000).toLocaleTimeString() : "時間未知"} · 原始第 ${item.line || "?"} 行`;
+    summary.appendChild(stamp);
+    detail.appendChild(summary);
+    const body = document.createElement("pre");
+    body.textContent = item.text || "(原始紀錄沒有文字內容)";
+    detail.appendChild(body);
+    if (item.truncated) {
+      const cut = document.createElement("p");
+      cut.className = "cutNote";
+      cut.textContent = "內容過長，這裡只顯示前段；完整內容仍在原始紀錄。";
+      detail.appendChild(cut);
+    }
+    activityList.appendChild(detail);
+  }
+  if (!activity.length) activityList.textContent = "這輪沒有可讀的過程紀錄。";
+}
+
 function openNode(s) {
   nodeN = s.n;
   $("nodeTitle").textContent = `第 ${s.n} 輪`;
   $("nodeSaid").textContent = flat(s.owner_text).slice(0, 160) || "(沒有文字)";
-  $("nodeAI").textContent = flat(s.ai_text).slice(0, 1200) ||
+  const activity = s.activity || [];
+  const answers = activity.filter((item) => item.kind === "answer");
+  $("nodeAI").textContent = (answers.length ? answers[answers.length - 1].text : flat(s.ai_text)) ||
     (s.growing ? "等待 AI 回答" : "(沒有 AI 回答)");
+  $("nodeActivityTitle").textContent = `這輪過程 · ${activity.length} 筆`;
+  renderActivityItems($("nodeActivityList"), activity);
   const semantic = s.path_semantics || {};
   const verdict = $("nodeVerdict");
   verdict.className = `nodeVerdict ${semantic.state || "neutral"}`;
@@ -2188,10 +2223,21 @@ function openNode(s) {
     `<p>${esc(semantic.why || "尚無足夠證據")}</p>` +
     (semantic.evidence ? `<blockquote>${esc(semantic.evidence)}</blockquote>` : "");
   const support = s.support || [];
-  if (support.length) {
-    $("nodeAI").textContent += "\n\n支援工作（" + support.length + " 筆）：\n" +
-      support.map((x) => "【" + (x.status === "active" ? "進行中" : "已回報") + "】" +
-        flat(x.request).slice(0, 240) + "\n" + flat(x.response).slice(-700)).join("\n\n");
+  const supportBox = $("nodeSupport");
+  supportBox.hidden = !support.length;
+  const supportList = $("nodeSupportList");
+  supportList.replaceChildren();
+  $("nodeSupportTitle").textContent = `支援工作過程 · ${support.length} 筆`;
+  for (const child of support) {
+    const group = document.createElement("details");
+    group.className = "nodeSupportChild";
+    const heading = document.createElement("summary");
+    heading.textContent = `${flat(child.request).slice(0, 100) || "支援工作"} · ${(child.activity || []).length} 個事件`;
+    group.appendChild(heading);
+    const events = document.createElement("div");
+    renderActivityItems(events, child.activity || []);
+    group.appendChild(events);
+    supportList.appendChild(group);
   }
   $("forkOut").hidden = true;
   $("forkOut").textContent = "";

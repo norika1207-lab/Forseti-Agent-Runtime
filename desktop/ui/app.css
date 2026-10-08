@@ -616,6 +616,21 @@ button{font:inherit;cursor:pointer;color:inherit}
   letter-spacing:-.005em;padding:11px 13px;border-radius:var(--r-md);
   background:var(--surface-3)}
 .nodeTurn.ai .nodeSaid{color:var(--ink)}
+.nodeFinal{margin:0 0 14px}
+.nodeFinal summary{cursor:pointer;color:var(--blue);font-size:11px;font-weight:600;margin-bottom:7px}
+.nodeActivity{margin:14px 0 18px}
+.nodeActivity h3{margin:0 0 8px;font-size:12px;font-weight:600;color:var(--ink)}
+.nodeActivityList{display:grid;gap:6px}
+.nodeActivity details{border:1px solid var(--hair);border-radius:6px;padding:8px 10px;background:var(--surface-3)}
+.nodeActivity summary{cursor:pointer;font-size:11px;line-height:1.4;color:var(--ink-2);overflow-wrap:anywhere}
+.nodeActivity summary b{color:var(--ink);font-weight:600}
+.nodeActivity summary span{color:var(--ink-4);margin-left:6px}
+.nodeActivity pre{margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;
+  color:var(--ink-2);font:11px/1.5 var(--mono)}
+.nodeActivity .cutNote{color:var(--amber);font-size:10px;margin:6px 0 0}
+.nodeSupportHint{margin:0 0 8px;color:var(--ink-4);font-size:10.5px;line-height:1.5}
+.nodeSupportChild{margin-bottom:7px}
+.nodeSupportChild>div{display:grid;gap:6px;margin-top:9px}
 .nodeVerdict{margin:0 0 14px;padding:11px 13px;border-radius:var(--r-md);
   border:.5px solid var(--hair);font-size:11px;color:var(--ink-3)}
 .nodeVerdict b{font-size:12px;color:var(--ink);margin-right:8px}

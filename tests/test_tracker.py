@@ -97,6 +97,17 @@ class TestStrandGrows(Case):
         self.tk.poll()
         self.assertGreater(self.tk.strands[0].ended_at, first)
 
+    def test_claude_keeps_interleaved_messages_and_tool_receipt(self):
+        self.write(self.owner("檢查"), self.ai_text("先看檔案"),
+                   self.ai_tool("Read", path="/tmp/a"),
+                   self.result(), self.ai_text("檢查完畢"))
+        self.tk.poll()
+        activity = self.tk.snapshot()["rows"][0]["activity"]
+        self.assertEqual([item["kind"] for item in activity],
+                         ["answer", "tool_call", "tool_result", "answer"])
+        self.assertEqual(activity[-1]["text"], "檢查完畢")
+        self.assertEqual(activity[2]["line"], 4)
+
     def test_next_owner_message_closes_the_previous(self):
         self.write(self.owner("一", dt=-60), self.ai_text("好", dt=-50),
                    self.owner("二", dt=-10))
@@ -172,6 +183,29 @@ class TestClaudeSupport(Case):
         self.assertEqual(len(support), 1)
         self.assertEqual(support[0]["request"], "支援讀取工作佇列")
         self.assertIn("支援已回報結果", support[0]["response"])
+
+    def test_sidechain_process_stays_in_child_record(self):
+        project = self.f.parent / "subagents"
+        project.mkdir()
+        child = project / "agent-steps.jsonl"
+        rows = [
+            self.owner("支援調查"),
+            self.ai_text("先讀來源"),
+            self.ai_tool("Read", tid="child-call", path="/tmp/source"),
+            self.result(tid="child-call"),
+            self.ai_text("最後結論"),
+        ]
+        child.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n"
+                                 for row in rows), encoding="utf-8")
+        self.write(self.owner("主命令"))
+        self.tk.poll()
+        row = self.tk.snapshot()["rows"][0]
+        assert row["activity"] == []
+        history = row["support"][0]["activity"]
+        assert [item["kind"] for item in history] == [
+            "answer", "tool_call", "tool_result", "answer"]
+        assert [item["line"] for item in history] == [2, 3, 4, 5]
+        assert history[-1]["text"] == "最後結論"
 
 
 class TestFailureIsNotGuessed(Case):

@@ -141,6 +141,7 @@ class Strand:
     owner_line: int
     ended_at: float | None = None
     ai_text: str = ""
+    activity: list[dict] = field(default_factory=list)
     dots: list[Dot] = field(default_factory=list)
     compaction: bool = False     # 這一輪裡發生過壓縮，§6
     compaction_meta: dict = field(default_factory=dict)
@@ -208,6 +209,7 @@ class Strand:
             "owner_text": self.owner_text[:600],
             "owner_line": self.owner_line,
             "ai_text": self.ai_text[:900],
+            "activity": self.activity,
             "dots": [d.to_dict() for d in self.dots],
             "read": sum(1 for d in self.dots if d.kind == KIND_READ),
             "write": sum(1 for d in self.dots if d.kind == KIND_WRITE),
@@ -356,7 +358,7 @@ class Tracker:
                     if not isinstance(b, dict):
                         continue
                     if b.get("type") == "tool_result":
-                        self._close_tool(b, at)
+                        self._close_tool({**b, "line_no": line_no}, at)
                 text = "\n".join(
                     b.get("text", "") for b in content
                     if isinstance(b, dict) and b.get("type") == "text")
@@ -382,11 +384,21 @@ class Tracker:
                     if txt.strip():
                         cur.ai_text = (cur.ai_text + "\n\n" + txt).strip()
                         cur.claimed_count = explicit_claimed_count(cur.ai_text)
+                        cur.activity.append({"kind": "answer", "at": at,
+                                             "line": line_no,
+                                             "phase": rec.get("phase") or "message",
+                                             "text": txt[:4000],
+                                             "truncated": len(txt) > 4000})
                 elif b.get("type") == "tool_use":
                     name = b.get("name") or "?"
                     dot = Dot(at=at, label=name, kind=tool_kind(name),
                               detail=_tool_detail(b), line_no=line_no)
                     self._add_dot(dot)
+                    detail = b.get("activity_input") or _tool_detail(b)
+                    cur.activity.append({"kind": "tool_call", "at": at,
+                                         "line": line_no, "name": name,
+                                         "text": str(detail)[:800],
+                                         "truncated": len(str(detail)) > 800})
                     tid = b.get("id")
                     if tid:
                         self._pending_tools[tid] = dot
@@ -468,6 +480,20 @@ class Tracker:
         """
         tid = block.get("tool_use_id")
         dot = self._pending_tools.pop(tid, None) if tid else None
+        cur = self._current()
+        if cur is not None:
+            output = block.get("content")
+            if isinstance(output, list):
+                output = "\n".join(str(item.get("text") or "") for item in output
+                                   if isinstance(item, dict) and item.get("type") == "text")
+            output = "" if output is None else str(output)
+            cur.activity.append({"kind": "tool_result", "at": at,
+                                 "line": block.get("line_no") or 0,
+                                 "name": dot.label if dot else "tool",
+                                 "failed": block.get("is_error") is True,
+                                 "matched": dot is not None,
+                                 "text": output[:800],
+                                 "truncated": len(output) > 800})
         if dot is None:
             return
         if block.get("is_error") is True:
@@ -510,6 +536,8 @@ class Tracker:
         for path in paths:
             owner = []
             answer = []
+            activity = []
+            pending = {}
             first = last = None
             dots = 0
             try:
@@ -517,7 +545,7 @@ class Tracker:
             except OSError:
                 continue
             with lines:
-                for raw in lines:
+                for line_no, raw in enumerate(lines, 1):
                     try:
                         rec = json.loads(raw)
                     except ValueError:
@@ -531,6 +559,20 @@ class Tracker:
                     content = msg.get("content") if isinstance(msg, dict) else None
                     blocks = content if isinstance(content, list) else []
                     if rec.get("type") == "user":
+                        for block in blocks:
+                            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                                continue
+                            output = block.get("content")
+                            if isinstance(output, list):
+                                output = "\n".join(str(part.get("text") or "") for part in output
+                                                   if isinstance(part, dict) and part.get("type") == "text")
+                            output = "" if output is None else str(output)
+                            activity.append({"kind": "tool_result", "at": _ts(rec),
+                                             "line": line_no,
+                                             "name": pending.pop(block.get("tool_use_id"), "tool"),
+                                             "failed": block.get("is_error") is True,
+                                             "text": output[:800],
+                                             "truncated": len(output) > 800})
                         text = content if isinstance(content, str) else " ".join(
                             str(b.get("text", "")) for b in blocks
                             if isinstance(b, dict) and b.get("type") == "text")
@@ -541,9 +583,22 @@ class Tracker:
                             if not isinstance(block, dict):
                                 continue
                             if block.get("type") == "text" and block.get("text"):
-                                answer.append(str(block["text"]).strip())
+                                value = str(block["text"]).strip()
+                                answer.append(value)
+                                activity.append({"kind": "answer", "at": _ts(rec),
+                                                 "line": line_no, "phase": "message",
+                                                 "text": value[:4000],
+                                                 "truncated": len(value) > 4000})
                             elif block.get("type") == "tool_use":
                                 dots += 1
+                                name = block.get("name") or "tool"
+                                if block.get("id"):
+                                    pending[block["id"]] = name
+                                detail = _tool_detail(block)
+                                activity.append({"kind": "tool_call", "at": _ts(rec),
+                                                 "line": line_no, "name": name,
+                                                 "text": detail,
+                                                 "truncated": False})
             if not owner and not answer and not dots:
                 continue
             child = {
@@ -555,6 +610,7 @@ class Tracker:
                 "request": owner[0][:500] if owner else "(support 未提供請求)",
                 "response": "\n\n".join(answer)[-1200:],
                 "tool_count": dots,
+                "activity": activity,
                 "source": "claude.sidechain",
             }
             out.append(child)
@@ -710,6 +766,7 @@ class CodexTracker(Tracker):
                 "type": payload.get("role"),
                 "timestamp": at,
                 "uuid": identity,
+                "phase": payload.get("phase"),
                 "message": {"content": content},
             }, line_no)
             return
@@ -725,6 +782,7 @@ class CodexTracker(Tracker):
                     "name": payload.get("name") or "tool",
                     "input": payload.get("input")
                     if isinstance(payload.get("input"), dict) else {},
+                    "activity_input": payload.get("input") or "",
                 }]},
             }, line_no)
             return
@@ -741,6 +799,8 @@ class CodexTracker(Tracker):
                     "type": "tool_result",
                     "tool_use_id": payload.get("call_id") or identity,
                     "is_error": payload.get("status") == "failed",
+                    "content": payload.get("output"),
+                    "line_no": line_no,
                 }]},
             }, line_no)
 
