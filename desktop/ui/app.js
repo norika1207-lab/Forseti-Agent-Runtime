@@ -3688,8 +3688,9 @@ async function tick() {
     uiId = d.ui_id || "";
     currentSession = d.session || "";
     const how = picked ? "鎖定" : (d.picked_by || "");
-    $("sessName").textContent = [how, when].filter(Boolean).join(" · ");
-    $("sessName").title = "session " + (d.session || "");
+    const title = d.session_title || d.session || "未命名 session";
+    $("sessName").textContent = [title, how, when].filter(Boolean).join(" · ");
+    $("sessName").title = `${title} · session ${d.session || ""}`;
     // 健康度 = 1 - 失敗點比例。成分疊加，不是合成分數。
     setAdvice(d);
     setContext(d);

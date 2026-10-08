@@ -111,6 +111,21 @@ def latest_claude_focused_session() -> tuple[str, float]:
     return best
 
 
+def claude_session_title(session: str) -> str:
+    root = (Path.home() / "Library" / "Application Support" / "Claude" /
+            "claude-code-sessions")
+    if not root.is_dir():
+        return ""
+    for path in root.rglob("local_*.json"):
+        try:
+            item = json.loads(path.read_bytes())
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue
+        if item.get("cliSessionId") == session and not item.get("isArchived"):
+            return str(item.get("title") or "").strip()
+    return ""
+
+
 def latest_codex_focus_timestamp(root: Path | None = None) -> float:
     """Read the event timestamp, not log-file mtime (background writes lie)."""
     import datetime
@@ -228,12 +243,14 @@ def main(argv: list[str]) -> int:
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)
     session = id_match.group(1) if id_match else target.stem
+    session_title = claude_session_title(session) if provider == "claude" else ""
     followed = latest_codex_focused_session()
     picked_by = ("跟著 Codex 前景" if followed == session
                  else f"鎖定 {provider.title()} Session")
     snap.update({
         "provider": provider,
         "session": session,
+        "session_title": session_title or session,
         "ui_id": session,
         "picked_by": picked_by,
         "advice": {

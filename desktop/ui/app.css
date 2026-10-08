@@ -154,8 +154,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .tag{font-size:10.5px;font-weight:590;letter-spacing:.04em;
   color:var(--blue);text-transform:none}
 #sessName{font-size:10.5px;color:var(--ink-4);flex:1;min-width:0;
-  letter-spacing:-.005em;white-space:nowrap;
-  overflow:hidden;text-overflow:ellipsis;max-width:148px}
+  letter-spacing:-.005em;white-space:normal;line-height:1.25;
+  overflow-wrap:anywhere;max-width:none}
 .sessionRow .miniT,.sessionRow .help{pointer-events:auto}
 .help{pointer-events:auto;flex:0 0 auto;width:20px;height:20px;padding:0;
   border:0;border-radius:50%;background:var(--surface-3);
