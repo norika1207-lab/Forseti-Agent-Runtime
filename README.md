@@ -32,7 +32,7 @@ An AI can read files, edit code, delegate, and run tests. It can also merely say
 |---|---|
 | **Did it actually happen?** | The AI's words, tool calls, visible results, and acceptance receipts, each tied to a turn |
 | **Where did the work change course?** | The point where you inserted a task, approved a new goal, explored a branch, or the AI may have drifted |
-| **What was lost after compaction?** | Instructions and decisions traceable to saved source records, with excerpts you can check |
+| **What can be checked after compaction?** | Earlier instructions and decisions traceable to records the source retained; an anchor cannot prove what the model forgot |
 
 Forseti is an observation and traceability layer, not a machine that settles
 truth for you. It distinguishes **observed, inferred, and unknown**. An unseen
@@ -88,8 +88,9 @@ must not be misclassified as the AI's fault.
 ![Development concept: recover sourced excerpts from records the host actually saved](docs/assets/context-recovery.svg)
 
 The desktop may show only recent turns. Older context can be recovered only
-where the source retained it. An **in-development** recovery path can select
-pre-compaction instructions and decisions with provenance and a size limit.
+where the source retained it. A bounded recovery path can prepare source-referenced
+user and AI text before a compaction anchor. It does not currently recover tool
+payloads into that packet or prove what the model forgot.
 **A person reviews and pastes the packet; it is not injected into an AI automatically.**
 
 ### A dot is not a card
@@ -116,14 +117,14 @@ confirmed red goal drift still needs independent contradiction evidence,
 post-correction persistence, and other cross-checks. A red line for a
 verifiable claim conflict must not be read as confirmed goal drift.
 
-The development recovery packet selects sourced user instructions,
-constraints, and decisions from the saved pre-compaction range. It does not
-prove the AI understood them. If essential context exceeds capacity, the
-workflow should report that limit rather than silently discard it.
+The development desktop packet combines candidate user excerpts with separately
+recorded task state; its excerpts may be shortened. Native source recovery is
+a separate, bounded path. Neither proves the AI understood earlier context.
 
 ## Capabilities and status
 
-This table describes code paths on public `main` and their limits.
+This table describes code paths at this commit and their limits; an installed
+app or public release may lag.
 **Code existing is not the same as acceptance in real sessions.** "Partial"
 means there is an engine or interface but gaps remain in source coverage,
 causal links, cross-session behavior, or native end-to-end verification.
@@ -141,13 +142,14 @@ causal links, cross-session behavior, or native end-to-end verification.
 | Support and subagent records | Keep a support worker's work visible beyond one summary | Partial; sidechains can be read, but exact linkage to the initiating turn still needs source evidence |
 | Advice cards | Surface a useful question or verification step | UI entry point and generation logic exist; timing, presentation, and advice quality need real-session acceptance |
 | Reading coverage and context recovery | See what was read and what may be missing after compaction | Partial; coverage is not understanding, and first-step revalidation after handoff lacks full E2E |
+| Independent raw-session archive | Preserve source bytes for later verification and bounded recovery | In development; encrypted-at-rest storage and rollback protection must pass security and native-path acceptance before use |
 | Task ledger and acceptance receipts | Separate assigned, submitted, independently verified, and completed | Engine and views exist; long-running multi-agent dispatch still needs sustained verification |
 | Claude Code project hook | Ask before conflicting writes in the same project | Installed per project; internal errors fail open, so it cannot block every collision |
 | Reusable JS runtime | Let hosts adopt capture, cost, handoff, and admission functions | Core modules can be used independently; hosts must supply events and implement actions |
 
 ### A typical inspection
 
-1. With Claude or Codex open, let Forseti **follow** and verify the session name before trusting the timeline.
+1. With Claude or Codex open, try **follow** or select a session manually. Verify the displayed name after switching apps; cross-app stability has not passed acceptance.
 2. Find dense tool activity, long gaps, or a possible branch.
 3. Open a turn to inspect its request, saved AI messages, tool calls, and results rather than relying on the card summary.
 4. Compare files, tests, commits, or other receipts. Keep an unsupported claim unresolved and decide what to ask next.
@@ -197,6 +199,7 @@ is only a candidate interpretation.
 - **Not one magic score.** Temperature is a visual cue. Activity, tasks, goals, evidence coverage, and unknown sources must stay distinct.
 - **Still under construction.** Precise cross-session causality, support-to-parent links, the full Goal Acceptance Contract, native E2E for every view, and calibration reports are not complete.
 - **Local-data caution.** The UI reads local records; the public screenshot uses synthetic data. Review any real transcript, token, or path before sharing it.
+- **Archive security gate.** A development archive is not an accepted secure backup until encryption, key protection, rollback detection, and source-deletion recovery are independently verified on the target filesystem.
 
 ## Development and verification
 
@@ -302,7 +305,7 @@ Two rules in here were paid for in production, not derived from a spec:
 
 **Stable id and display name are separate fields, and routing may only use the stable one.** In production the rules stored an internal id while the panel showed a user-chosen name. Rename something and the two silently decouple; have two windows share a name and you cannot even tell where a message went. The user's word for it was "it sends things to the wrong place." `labelDrift()` and `ambiguousLabels()` surface both conditions so the host can fix the UI before anyone notices the misdelivery.
 
-Nothing is dropped silently. Every skipped event is counted with a reason, and `captureHealth()` reports the capture rate — because the quality of all five mechanisms below is capped by this number, and a capture layer that quietly loses events is the hardest failure to find: everything still runs, every answer is a little wrong, and nothing turns red.
+For events supplied to `capture.js`, skipped events are counted with a reason and `captureHealth()` reports the capture rate. Events never supplied by a host are outside that denominator; the capture layer cannot certify a complete provider transcript.
 
 ### `shell.js` — the 80% that was invisible
 
@@ -548,11 +551,11 @@ The empty-beat counter is persisted. Reset it on restart and the loop can never 
 
 A fuel gauge answers how much room is left. This answers something else: of what is in context right now, how much was checked and how much did the model write itself.
 
-**This measurement only works at runtime, and the reason it fails otherwise is the point.** I tried computing it after the fact from transcripts. A transcript is a complete record — it keeps every tool output in full. The context window is the compacted subset, and compaction keeps summaries while dropping detail. Summaries are the model's own text; detail is the raw tool output. So the transcript reads a steady 80% evidence while the live window may already have inverted.
+**This measurement only works at runtime, and the reason it fails otherwise is the point.** I tried computing it after the fact from transcripts. Native transcripts may retain more than the live context, but source coverage varies; Forseti cannot assume every tool output was recorded. The live context is a compacted subset, so a retrospective transcript ratio can look healthy while the live window has already changed.
 
 Why the number matters is the same line that drives `provenance.js`: *I have no reliable boundary between what I actually checked and what I generated.* If that boundary does not exist internally, then the proportion of real evidence on hand determines what gets picked up as evidence. When it falls, the model does not notice. The thermometer does.
 
-`compactionDelta()` is where it earns its keep. A single reading says what the temperature is; comparing two says **what compaction took**:
+`compactionDelta()` compares comparable host-supplied readings before and after compaction. It reports their measured change, not the exact content the model forgot:
 
 ```js
 { fact_ratio_before: 0.8, fact_ratio_after: 0.5,
