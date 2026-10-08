@@ -3450,12 +3450,11 @@ addEventListener("keydown", (e) => {
 
 // A manual pick is a temporary inspection mode.  The old key made a stopped
 // session win forever, even after the user switched Claude/Codex in front.
-const PICK_KEY = "forseti.session.v2";
 let picked = null;        // null = 跟著最新
 try {
   localStorage.removeItem("forseti.session");
-  picked = localStorage.getItem(PICK_KEY) || null;
-} catch (e) { picked = null; }
+  localStorage.removeItem("forseti.session.v2");
+} catch (e) { /* localStorage may be unavailable */ }
 
 let allSessions = [];
 const picker = $("picker");
@@ -3535,10 +3534,6 @@ function choose(id) {
   picked = id;
   visibleTail = 180;
   loadingOlder = false;
-  try {
-    if (id) localStorage.setItem(PICK_KEY, id);
-    else localStorage.removeItem(PICK_KEY);
-  } catch (e) { /* 無痕視窗之類，選擇只在這次有效 */ }
   closePicker();
   rows = [];
   lastCount = 0;

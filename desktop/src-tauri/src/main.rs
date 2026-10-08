@@ -17,7 +17,7 @@
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{mpsc::channel, OnceLock};
+use std::sync::{mpsc::channel, Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
 
@@ -193,18 +193,56 @@ fn run_session_surface(session: Option<String>, tail: Option<u32>) -> Result<Str
     cmd.arg("-B").arg(&script)
         .env_remove("__CFBundleIdentifier")
         .env("PYTHONDONTWRITEBYTECODE", "1");
-    if let Some(value) = session.filter(|s| !s.is_empty()) {
-        cmd.arg(value);
-    }
-    if let Some(value) = tail {
-        cmd.arg(value.to_string());
-    }
+    // Python argv[1] is always the session slot. An empty slot keeps auto
+    // selection active when the UI supplies only a tail length.
+    cmd.arg(session.unwrap_or_default());
+    cmd.arg(tail.unwrap_or(180).to_string());
+    cmd.arg(current_provider_hint());
     let out = cmd.output().map_err(|e| format!("Session runtime 跑不起來:{e}"))?;
     if !out.status.success() {
         return Err(format!("Session runtime 失敗:{}",
                            String::from_utf8_lossy(&out.stderr)));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+static LAST_PROVIDER: OnceLock<Mutex<String>> = OnceLock::new();
+
+#[cfg(target_os = "macos")]
+fn frontmost_provider() -> Option<&'static str> {
+    use objc2_app_kit::NSWorkspace;
+    let app = NSWorkspace::sharedWorkspace().frontmostApplication()?;
+    let bundle = app.bundleIdentifier()?.to_string();
+    match bundle.as_str() {
+        "com.anthropic.claudefordesktop" => Some("claude"),
+        "com.openai.codex" => Some("codex"),
+        _ => None,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn frontmost_provider() -> Option<&'static str> { None }
+
+fn current_provider_hint() -> String {
+    let cache = LAST_PROVIDER.get_or_init(|| Mutex::new(String::new()));
+    if let Some(provider) = frontmost_provider() {
+        if let Ok(mut last) = cache.lock() { *last = provider.to_string(); }
+    }
+    cache.lock().map(|last| last.clone()).unwrap_or_default()
+}
+
+fn spawn_provider_focus_watcher(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut previous = current_provider_hint();
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            let current = current_provider_hint();
+            if !current.is_empty() && current != previous {
+                previous = current;
+                let _ = app.emit("forseti://changed", ());
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -250,6 +288,7 @@ fn spawn_watcher(app: tauri::AppHandle) {
         let mut targets = vec![repo.join(".forseti")];
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
             targets.push(home.join(".claude/projects"));
+            targets.push(home.join("Library/Application Support/Claude/claude-code-sessions"));
             targets.push(home.join(".codex/sessions"));
             // Codex records a task switch in its desktop log even when the
             // selected transcript itself is idle.  Watching JSONL alone can
@@ -864,6 +903,7 @@ fn main() {
         .setup(|app| {
             spawn_watcher(app.handle().clone());
             spawn_codex_focus_watcher(app.handle().clone());
+            spawn_provider_focus_watcher(app.handle().clone());
 
             // 明確把視窗叫出來。
             //

@@ -100,6 +100,7 @@ def latest_claude_focused_session() -> tuple[str, float]:
             "claude-code-sessions")
     best = ("", 0.0)
     named_best = ("", 0.0)
+    focused_best = ("", 0.0)
     if not root.is_dir():
         _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
         return best
@@ -126,8 +127,9 @@ def latest_claude_focused_session() -> tuple[str, float]:
         title = str(item.get("title") or "").strip()
         if title and title != "Forseti 自動接續" and candidate_time > named_best[1]:
             named_best = (str(item["cliSessionId"]), candidate_time)
-    if named_best[0]:
-        best = named_best
+        if focused > focused_best[1]:
+            focused_best = (str(item["cliSessionId"]), focused)
+    best = focused_best if focused_best[0] else named_best if named_best[0] else best
     _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
     return best
 
@@ -213,7 +215,8 @@ def _find_session(requested: str, roots: list[Path]) -> Path | None:
     return None
 
 
-def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | None:
+def resolve_requested(value: str, *, logs_root: Path | None = None,
+                      provider_hint: str = "") -> Path | None:
     requested = value.strip()
     roots = [Path.home() / ".codex" / "sessions", *_claude_transcript_roots()]
     if requested:
@@ -222,8 +225,16 @@ def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | No
     # Compare both providers before choosing.  Previously this function
     # checked Codex first, so any Codex focus log could permanently mask Claude.
     claude_id, claude_at = latest_claude_focused_session()
+    if provider_hint == "claude" and claude_id:
+        target = _find_session(claude_id, roots)
+        if target is not None:
+            return target
     codex_id = latest_codex_focused_session(logs_root)
     codex_at = latest_codex_focus_timestamp(logs_root)
+    if provider_hint == "codex" and codex_id:
+        target = _find_session(codex_id, roots)
+        if target is not None:
+            return target
     # Claude's metadata is the direct session source.  When its focus event is
     # absent, a named active Claude session is still stronger evidence than a
     # stale Codex renderer event; users can explicitly choose Codex from the
@@ -254,7 +265,8 @@ def resolve_requested(value: str, *, logs_root: Path | None = None) -> Path | No
 
 
 def main(argv: list[str]) -> int:
-    target = resolve_requested(argv[1] if len(argv) > 1 else "")
+    target = resolve_requested(argv[1] if len(argv) > 1 else "",
+                               provider_hint=argv[3] if len(argv) > 3 else "")
     if target is None:
         print(json.dumps({"error": "找不到 Claude 或 Codex transcript"},
                          ensure_ascii=False))
