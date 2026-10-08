@@ -1606,7 +1606,7 @@ function renderRescue(d) {
    工具失敗是誠實的失敗，跟「說了沒做」不是同一件事（§4.1），
    所以它們不能共用一個顏色。 */
 const LANE_CLS = {
-  COMPACT: "lc", BETRAYAL: "lb", DRIFT: "ld",
+  COMPACT: "lc", BETRAYAL: "lb", DRIFT: "ld", CORRECTION: "lcr",
   TOOL_FAIL: "lf", BLIND_WRITE: "lw",
 };
 
@@ -1730,28 +1730,22 @@ function drawDrift() {
   });
 
   /* 主線。一輪一段，顏色跟著那一輪走。 */
-  const colorOf = (k, d) => {
-    if (k === "CONFLICTING") return "var(--red)";
-    if (d >= 0.34) return "var(--amber)";
-    if (d > 0.08) return `color-mix(in srgb, var(--amber) ${
-      Math.round(d * 180)}%, var(--green))`;
-    return "var(--green)";
-  };
+  const fallbackColor = (state) => ({confirmed: "var(--red)",
+    suspected: "var(--amber)", new_direction: "var(--violet)",
+    direction_candidate: "var(--violet)", exploratory: "var(--amber)",
+    temporary: "var(--amber)", aligned: "var(--green)",
+    tool_fail: "var(--blue)"}[state] || "var(--ink-3)");
   const schema = (lastSnap || {}).source_tree_schema || {};
   const lineSpec = (state) => ((schema.lines || {})[state] || {});
   const pathState = (p) => {
     if (p.semantic && p.semantic.state) return p.semantic.state;
-    if (p.k === "CONFLICTING") return "confirmed";
     if (p.failed > 0) return "tool_fail";
-    if (p.k === "UNKNOWN") return "neutral";
-    if (p.exploratory) return "suspected";
-    if (p.d > 0.08) return "suspected";
-    return "aligned";
+    return "neutral";
   };
   // North Star reference: once the actual path leaves the accepted route,
   // keep the old canonical route visible as a green dashed epistemic
   // reference. It is not the self-recovery latency marker below.
-  const firstOff = pts.findIndex((p) => ["suspected", "confirmed", "exploratory"].includes(pathState(p)));
+  const firstOff = pts.findIndex((p) => pathState(p) === "new_direction");
   if (firstOff > 0) {
     const ref = document.createElementNS(NS, "path");
     const start = pts[firstOff - 1], end = pts[pts.length - 1];
@@ -1760,8 +1754,8 @@ function drawDrift() {
     add(ref, "reference northstar-reference");
     addHit(ref, {
       label: "原本的 North Star 參照",
-      meaning: "實際路徑分開後，這條虛線保留當時仍有效的主線作比較。",
-      why: `實際路徑自第 ${pts[firstOff].n} 輪開始離開參照線`,
+      meaning: "使用者確認新 North Star 換版後，舊目標仍作歷史參照。",
+      why: `第 ${pts[firstOff].n} 輪確認新方向`,
       evidence: "active North Star version chain",
       epistemic: "OBSERVED",
       round: pts[firstOff].n,
@@ -1775,7 +1769,7 @@ function drawDrift() {
     seg.setAttribute("d", prev
       ? `M ${MAIN} ${prev.y1} L ${MAIN} ${p.y1}`
       : `M ${MAIN} ${p.y0} L ${MAIN} ${p.y1}`);
-    seg.setAttribute("stroke", spec.css_var ? `var(${spec.css_var})` : colorOf(p.k, p.d));
+    seg.setAttribute("stroke", spec.css_var ? `var(${spec.css_var})` : fallbackColor(state));
     seg.setAttribute("data-path-state", state);
     add(seg, spec.class_name || "main");
     addHit(seg, Object.assign({
@@ -1794,18 +1788,25 @@ function drawDrift() {
     const cy = (p.y0 + p.y1) / 2;
     const halo = document.createElementNS(NS, "circle");
     halo.setAttribute("cx", String(MAIN)); halo.setAttribute("cy", String(cy));
-    halo.setAttribute("r", String(r + 3.2));
-    halo.setAttribute("fill", spec.css_var ? `var(${spec.css_var})` : colorOf(p.k, p.d));
+    halo.setAttribute("r", String(Math.max(12, r + 3.2)));
+    halo.setAttribute("fill", spec.css_var ? `var(${spec.css_var})` : fallbackColor(state));
     halo.setAttribute("data-path-state", state);
     lineTip(halo, Object.assign({label: spec.label, meaning: spec.meaning, round: p.n}, p.semantic || {}));
     add(halo, "halo " + (spec.class_name || "").replace("main ", ""));
     const c = document.createElementNS(NS, "circle");
     c.setAttribute("cx", String(MAIN)); c.setAttribute("cy", String(cy));
     c.setAttribute("r", String(r));
-    c.setAttribute("fill", spec.css_var ? `var(${spec.css_var})` : colorOf(p.k, p.d));
+    c.setAttribute("fill", spec.css_var ? `var(${spec.css_var})` : fallbackColor(state));
     c.setAttribute("data-path-state", state);
     lineTip(c, Object.assign({label: spec.label, meaning: spec.meaning, round: p.n}, p.semantic || {}));
     add(c, "node " + (spec.class_name || "").replace("main ", ""));
+    const openPoint = (e) => {
+      e.stopPropagation();
+      const strand = rows.find((row) => Number(row.n) === p.n);
+      if (strand) openNodeWithMarker(strand, markerEvidence(strand, "path"));
+    };
+    halo.addEventListener("click", openPoint);
+    c.addEventListener("click", openPoint);
   });
 
   lane.appendChild(svg);
@@ -1869,11 +1870,8 @@ function renderTree() {
     wrap.dataset.klass = (s.goal && s.goal.klass) || "UNKNOWN";
     wrap.dataset.failed = String(s.failed || 0);
     wrap.dataset.exploratory = s.exploratory_branch ? "1" : "0";
-    wrap.dataset.pathState = (s.path_semantics && s.path_semantics.state) || (wrap.dataset.klass === "CONFLICTING"
-      ? "confirmed"
-      : (s.failed || 0) > 0 ? "tool_fail"
-        : wrap.dataset.klass === "UNKNOWN" ? "neutral"
-          : Number(s.goal && s.goal.distance || 0) > 0.08 ? "suspected" : "aligned");
+    wrap.dataset.pathState = (s.path_semantics && s.path_semantics.state) ||
+      ((s.failed || 0) > 0 ? "tool_fail" : "neutral");
     if (s.corrected_by_owner) wrap.dataset.corrected = "1";
 
     // 紫點的框。§5.4 三條件同時成立才跳，而且壓在線上不是躺在側邊，
@@ -1978,10 +1976,14 @@ function renderTree() {
           dd.appendChild(n);
         }
       });
-      bts.forEach((b) => {
+      bts.forEach((b, i) => {
         const el = document.createElement("span");
         el.className = "d white";
         el.dataset.tip = b.why;
+        el.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openNodeWithMarker(s, markerEvidence(s, "white", i));
+        });
         dd.appendChild(el);
       });
       // §3.5 空轉看得出來
@@ -2066,6 +2068,44 @@ function renderTree() {
       `<span class="dur">${s.growing ? "長中" : dur(s.duration)}</span>`;
 
     wrap.append(gut, body, time);
+    const markers = [];
+    bts.forEach((_, i) => markers.push(["white", i]));
+    const compactions = ((lastSnap || {}).compaction_events || [])
+      .filter((event) => Number(event.n) === Number(s.n) &&
+        Number.isInteger(Number(event.ordinal)) && Number(event.ordinal) > 0 &&
+        Number.isInteger(Number(event.line)) && Number(event.line) > 0);
+    compactions.forEach((event, i) => markers.push(["compaction", i, event]));
+    const decision = s.decision_comparison;
+    if (decision?.state === "POSSIBLE_DIFFERENCE" &&
+        decision?.epistemic === "INFERRED" &&
+        Number(decision?.current_n) === Number(s.n) &&
+        decision?.baseline_source_ref && decision?.evidence_source_ref &&
+        decision?.baseline && decision?.evidence)
+      markers.push(["gold", 0]);
+    if (s.drift_alert) markers.push(["purple", 0]);
+    (s.notes || []).forEach((_, i) => markers.push(["pink", i]));
+    if (markers.length) {
+      gut.style.minHeight = Math.max(h, 7 + markers.length * 26) + "px";
+      const marks = document.createElement("div");
+      marks.className = "eventMarks";
+      const names = {white: "AI 回覆問題", gold: "決策模式提醒",
+        purple: "可能偏離北極星", pink: "你的注記", compaction: "對話壓縮"};
+      for (const [kind, index, event] of markers) {
+        const mark = document.createElement("button");
+        mark.type = "button";
+        mark.className = `eventMark ${kind}`;
+        mark.setAttribute("aria-label", kind === "compaction"
+          ? `第 ${s.n} 輪：第 ${event.ordinal} 次對話壓縮，原始第 ${event.line} 行`
+          : `第 ${s.n} 輪：${names[kind]}${index ? ` ${index + 1}` : ""}`);
+        mark.title = names[kind];
+        mark.addEventListener("click", (e) => {
+          e.stopPropagation();
+          openNodeWithMarker(s, markerEvidence(s, kind, index, event));
+        });
+        marks.appendChild(mark);
+      }
+      wrap.appendChild(marks);
+    }
     // 用真實元素不用偽元素:`.st::after` 被粉紅點的角標佔著、
     // `::before` 被 checkpoint 佔著、左緣的 inset 陰影被分歧點佔著。
     // 同一輪可能同時是這幾種,共用任何一個都會讓後寫的蓋掉前面的。
@@ -2205,9 +2245,95 @@ function renderActivityItems(activityList, activity) {
   if (!activity.length) activityList.textContent = "這輪沒有可讀的過程紀錄。";
 }
 
+function markerEvidence(s, kind, index = 0, event = null) {
+  const semantic = s.path_semantics || {};
+  if (kind === "compaction") {
+    return {kind, title: `第 ${event.ordinal} 次 · ${event.label || "對話壓縮"}`,
+      body: `發生於第 ${s.n} 輪；普通對話輪次沒有因這筆事件重新編號。`,
+      evidence: [`原始紀錄第 ${event.line} 行`,
+        event.at ? `時間：${hhmmss(event.at)}` : "時間未提供",
+        `來源 size：${event.size ?? "未知"}`].join("\n")};
+  }
+  if (kind === "white") {
+    const b = (s.betrayals || [])[index] || {};
+    return {kind, title: `第 ${s.n} 輪 · ${b.title || b.fp_name || "AI 回覆待核對"}`,
+      body: [`查證等級：${b.grade || "未標示"}`, b.why || "此事件沒有附判定理由。"].join("\n"),
+      evidence: [`命中原文：${b.hit || "未提供"}`,
+        b.target ? `查證標的：${b.target}` : "",
+        b.fp ? `對應規則：${b.fp}` : ""].filter(Boolean).join("\n"),
+      advice: b.advice || ""};
+  }
+  if (kind === "gold") {
+    const d = s.decision_comparison || {};
+    return {kind, title: `第 ${s.n} 輪 · 決策模式提醒`,
+      body: `${d.why || "與先前決策可能不同。"}\n推論級參考；不是警告，也沒有自動改動北極星。`,
+      evidence: [`過去的做法：${d.baseline || "沒有可比資料"}`,
+        `本輪決策：${d.evidence || "沒有可比資料"}`,
+        `來源：${d.baseline_source_ref || "先前行號未知"} → ${d.evidence_source_ref || "本輪行號未知"}`].join("\n")};
+  }
+  if (kind === "purple") {
+    const a = s.drift_alert || {};
+    const measured = [a.from_n, a.n, a.from_distance, a.distance]
+      .every((value) => value !== null && value !== undefined);
+    return {kind, title: `第 ${s.n} 輪 · 可能偏離北極星`,
+      body: measured
+        ? `第 ${a.from_n} 至 ${a.n} 輪：目標距離 ${a.from_distance} → ${a.distance}；${a.turns || "?"} 輪未糾正。這是推論，不是已確認偏離。`
+        : "這筆警示缺少完整的輪次或距離資料，不能據此確認偏離。",
+      evidence: [`警示狀態：${a.state || "UNKNOWN"} · 信心：${a.confidence ?? "未知"}`,
+        `目標錨點：${a.goal_anchor_ref || "未提供"} · GAC：${a.gac ?? "未知"}`,
+        `已檢查排除條件：${(a.excluded || []).join("、") || "未提供"}`].join("\n"),
+      advice: measured ? (a.prompt || "") : ""};
+  }
+  if (kind === "pink") {
+    const note = (s.notes || [])[index] || {};
+    return {kind, title: "你當時留下的筆記", body: note.text || "",
+      evidence: note.at ? hhmmss(note.at) : ""};
+  }
+  const direction = s.direction_decision || {};
+  const position = rows.findIndex((row) => Number(row.n) === Number(s.n));
+  const previous = position > 0 ? rows[position - 1] : null;
+  const previousLabel = previous?.path_semantics?.label || "資料不足";
+  const previousRound = previous && Number(previous.n) === Number(s.n) - 1
+    ? "前一輪" : "上一個已載入節點";
+  const decisionText = direction.action === "confirm" ? "使用者已確認新目標" :
+    direction.action === "explore" ? "使用者已選擇探索旁支，原目標保留" :
+      direction.action === "temporary" ? "使用者已確認暫時工作，原目標不變" : "";
+  return {kind: "path", state: semantic.state || "neutral",
+    title: `第 ${s.n} 輪 · ${semantic.label || "路徑狀態未知"}`,
+    body: [`判定責任：${semantic.actor || "未歸因"} · 證據等級：${semantic.epistemic || "UNKNOWN"}`,
+      previous ? `${previousRound}「${previousLabel}」→ 本輪「${semantic.label || "資料不足"}」` : "這是目前可見的第一輪",
+      semantic.why || "本輪尚無足夠證據判定方向。", decisionText].filter(Boolean).join("\n"),
+    evidence: semantic.evidence ? `本輪判定依據：${semantic.evidence}` : "本輪沒有可引用的判定依據。"};
+}
+
+let pendingNodeMarker = null;
+function openNodeWithMarker(s, marker) {
+  pendingNodeMarker = marker;
+  openNode(s);
+}
+
 function openNode(s) {
+  const marker = pendingNodeMarker;
+  pendingNodeMarker = null;
   nodeN = s.n;
   $("nodeTitle").textContent = `第 ${s.n} 輪`;
+  const markerBox = $("nodeMarker");
+  markerBox.hidden = !marker;
+  if (marker) {
+    markerBox.className = `nodeMarker ${marker.kind} ${marker.state || ""}`;
+    $("nodeMarkerTitle").textContent = marker.title;
+    $("nodeMarkerBody").textContent = marker.body;
+    $("nodeMarkerEvidence").textContent = marker.evidence || "";
+    $("nodeMarkerAdvice").hidden = !marker.advice;
+    $("nodeMarkerAdvice").textContent = marker.advice || "";
+    const copy = $("nodeMarkerCopy");
+    copy.hidden = !marker.advice;
+    copy.onclick = async () => {
+      try { await navigator.clipboard.writeText(marker.advice); copy.textContent = "已複製"; }
+      catch { copy.textContent = "無法複製"; }
+    };
+    copy.textContent = "複製校正提問";
+  }
   $("nodeSaid").textContent = flat(s.owner_text).slice(0, 160) || "(沒有文字)";
   const activity = s.activity || [];
   const answers = activity.filter((item) => item.kind === "answer");
@@ -3403,6 +3529,8 @@ const LEGEND = [
      "紫色虛線", "語意像是在改方向，但還沒確認成新的 North Star"],
     ['<span class="swatch"><i class="lgLine path-exploratory" data-schema-key="exploratory"></i></span>',
      "橘色虛線", "你明確保留的探索旁支；不改主線，也不算 drift"],
+    ['<span class="swatch"><i class="lgLine path-temporary" data-schema-key="temporary"></i></span>',
+     "橘色點線", "你確認的暫時工作；原本的 North Star 保留"],
     ['<span class="swatch"><i class="lgLine path-confirmed" data-schema-key="confirmed"></i></span>',
      "紅色分支", "已有 deterministic 或 owner-confirmed contradiction"],
     ['<span class="swatch"><i class="lgLine path-tool-fail" data-schema-key="tool_fail"></i></span>',

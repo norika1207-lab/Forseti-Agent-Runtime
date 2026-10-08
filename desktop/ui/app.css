@@ -631,6 +631,31 @@ button{font:inherit;cursor:pointer;color:inherit}
 .nodeSupportHint{margin:0 0 8px;color:var(--ink-4);font-size:10.5px;line-height:1.5}
 .nodeSupportChild{margin-bottom:7px}
 .nodeSupportChild>div{display:grid;gap:6px;margin-top:9px}
+.nodeMarker{margin:0 0 14px;padding:11px 13px;border:1px solid var(--hair);
+  border-radius:6px;background:var(--surface-3);color:var(--ink);overflow-wrap:anywhere}
+.nodeMarker[hidden]{display:none}
+.nodeMarkerHead{display:flex;align-items:center;gap:9px;font-size:12px}
+.nodeMarkerHead i{display:block;flex:0 0 10px;width:10px;height:10px;border-radius:50%}
+.nodeMarker.white .nodeMarkerHead i{background:#fff;box-shadow:0 0 7px #fff}
+.nodeMarker.compaction .nodeMarkerHead i{background:var(--surface-3);
+  border:2px solid #fff;box-shadow:0 0 7px rgba(255,255,255,.55)}
+.nodeMarker.gold .nodeMarkerHead i{background:var(--gold)}
+.nodeMarker.purple .nodeMarkerHead i{background:var(--violet)}
+.nodeMarker.pink .nodeMarkerHead i{background:#ff80b8}
+.nodeMarker.path .nodeMarkerHead i{background:var(--blue)}
+.nodeMarker.path.suspected .nodeMarkerHead i,
+.nodeMarker.path.exploratory .nodeMarkerHead i,
+.nodeMarker.path.temporary .nodeMarkerHead i{background:var(--amber)}
+.nodeMarker.path.new_direction .nodeMarkerHead i,
+.nodeMarker.path.direction_candidate .nodeMarkerHead i{background:var(--violet)}
+.nodeMarker.path.confirmed .nodeMarkerHead i{background:var(--red)}
+.nodeMarker.path.aligned .nodeMarkerHead i{background:var(--green)}
+.nodeMarker p{margin:8px 0 0;font-size:11.5px;line-height:1.5;white-space:pre-wrap}
+.nodeMarkerEvidence{color:var(--ink-3)}
+.nodeMarkerAdvice{color:var(--amber)}
+#nodeMarkerCopy{margin-top:9px;padding:5px 9px;border:1px solid var(--hair);
+  border-radius:4px;background:var(--surface);color:var(--ink);cursor:pointer}
+#nodeMarkerCopy[hidden]{display:none}
 .nodeVerdict{margin:0 0 14px;padding:11px 13px;border-radius:var(--r-md);
   border:.5px solid var(--hair);font-size:11px;color:var(--ink-3)}
 .nodeVerdict b{font-size:12px;color:var(--ink);margin-right:8px}
@@ -915,6 +940,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .lineHit{fill:none;stroke:transparent;stroke-width:14;
   pointer-events:stroke;cursor:help}
 .drift circle[data-line-tip]{pointer-events:all;cursor:help}
+.drift circle.node[data-line-tip],.drift circle.halo[data-line-tip]{cursor:pointer}
 /* 回到中軸的那一輪。owner 要看的是「多久以後線才會又回到原本的路線上」，
    所以回歸點要標出來，不然那件事只能用眼睛估。 */
 .drift circle.back{fill:var(--bg);stroke:var(--green);stroke-width:2}
@@ -1315,6 +1341,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .lane.lc{stroke:var(--ink-3)}     /* 壓縮:中性色,它不是誰的錯 */
 .drift .lane.lb{stroke:var(--red)}       /* 說了沒做 */
 .drift .lane.ld{stroke:var(--amber)}     /* 偏離目標 */
+.drift .lane.lcr{stroke:var(--amber)}    /* 使用者糾正 */
 .drift .lane.lf{stroke:var(--blue)}      /* 工具失敗:誠實的失敗 */
 .drift .lane.lw{stroke:var(--violet)}    /* 只讀不寫 */
 
@@ -1326,6 +1353,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .main.path-new-direction{stroke:var(--violet)}
 .drift .main.path-direction-candidate{stroke:var(--violet);stroke-dasharray:3 3}
 .drift .main.path-exploratory{stroke:var(--amber);stroke-dasharray:3 3}
+.drift .main.path-temporary{stroke:var(--amber);stroke-dasharray:1 4}
 .drift .main.path-confirmed{stroke:var(--red)}
 .drift .main.path-neutral{stroke:var(--ink-3)}
 .drift .main.path-tool-fail{stroke:var(--blue)}
@@ -1374,6 +1402,20 @@ button{font:inherit;cursor:pointer;color:inherit}
 
 /* 時間軸上的角標。有注記的那一輪要看得出來。 */
 .st[data-notes] .card2, .st[data-notes] .bub{position:relative}
+.eventMarks{position:absolute;left:37px;top:7px;z-index:3;
+  display:flex;flex-direction:column;gap:2px}
+.eventMark{display:grid;place-items:center;width:24px;height:24px;padding:0;
+  border:0;background:transparent;cursor:pointer}
+.eventMark::before{content:"";width:10px;height:10px;border-radius:50%;
+  box-shadow:0 0 0 2px var(--bg)}
+.eventMark.white::before{background:#fff;box-shadow:0 0 8px #fff}
+.eventMark.compaction::before{background:var(--bg);border:2px solid #fff;
+  box-shadow:0 0 0 2px var(--bg),0 0 7px rgba(255,255,255,.55)}
+.eventMark.gold::before{background:var(--gold)}
+.eventMark.purple::before{background:var(--violet)}
+.eventMark.pink::before{background:#ff80b8}
+.eventMark:hover::before,.eventMark:focus-visible::before{transform:scale(1.3)}
+.eventMark:focus-visible{outline:2px solid var(--blue);outline-offset:1px;border-radius:50%}
 .st[data-notes]::after{content:"";position:absolute;right:6px;top:6px;
   width:6px;height:6px;border-radius:50%;background:var(--gold);
   box-shadow:0 0 0 2px rgba(255,214,10,.2)}
@@ -1444,6 +1486,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .swatch .lgLine.path-new-direction{background:var(--violet)}
 .swatch .lgLine.path-direction-candidate{background:repeating-linear-gradient(90deg,var(--violet) 0 4px,transparent 4px 7px)}
 .swatch .lgLine.path-exploratory{background:repeating-linear-gradient(90deg,var(--amber) 0 4px,transparent 4px 7px)}
+.swatch .lgLine.path-temporary{background:repeating-linear-gradient(90deg,var(--amber) 0 2px,transparent 2px 6px)}
 .swatch .lgLine.path-confirmed{background:var(--red)}
 .swatch .lgLine.path-neutral{background:var(--ink-3)}
 .swatch .lgLine.path-tool-fail{background:var(--blue)}
