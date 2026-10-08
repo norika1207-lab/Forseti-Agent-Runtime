@@ -1,43 +1,43 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
-  <title id="title">Forseti 宣稱與證據鏈</title>
-  <desc id="desc">AI 說完成之後，Forseti 對照工具事件、結果與獨立驗收；缺少證據時保留待查。</desc>
+  <title id="title">Forseti claim and evidence chain</title>
+  <desc id="desc">An AI completion claim is checked against recorded tool events, visible results, and independent acceptance. Missing evidence remains unresolved.</desc>
   <rect width="1200" height="420" fill="#101214"/>
   <path d="M0 418H1200M0 0V420" stroke="#30363a"/>
-  <text x="48" y="65" fill="#f7f8f7" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif" font-size="30" font-weight="700">一句「完成」，不等於完成</text>
-  <text x="48" y="100" fill="#a4adb1" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif" font-size="18">Forseti 把宣稱、操作、結果、驗收分開看</text>
+  <text x="48" y="65" fill="#f7f8f7" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif" font-size="30" font-weight="700">"Done" is a claim, not a receipt.</text>
+  <text x="48" y="100" fill="#a4adb1" font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif" font-size="18">Separate the claim, action, result, and acceptance.</text>
   <path d="M205 214H986" stroke="#6b797d" stroke-width="2"/>
   <path d="M981 208l10 6-10 6" fill="none" stroke="#6b797d" stroke-width="2"/>
   <g font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif">
     <g transform="translate(48 145)">
       <rect width="220" height="145" rx="8" fill="#1c2022" stroke="#667175"/>
       <circle cx="29" cy="30" r="8" fill="#fff"/>
-      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">AI 宣稱</text>
-      <text x="24" y="86" fill="#d5dcdd" font-size="21">「檔案已寫好」</text>
-      <text x="24" y="119" fill="#8f9a9e" font-size="16">這是說法，不是收據</text>
+      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">AI claim</text>
+      <text x="24" y="86" fill="#d5dcdd" font-size="19">"File written"</text>
+      <text x="24" y="119" fill="#8f9a9e" font-size="15">A claim, not a receipt</text>
     </g>
     <g transform="translate(345 145)">
       <rect width="220" height="145" rx="8" fill="#1c2022" stroke="#62d5a1"/>
       <circle cx="29" cy="30" r="8" fill="#62d5a1"/>
-      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">工具事件</text>
-      <text x="24" y="86" fill="#d5dcdd" font-size="21">真的呼叫了嗎？</text>
-      <text x="24" y="119" fill="#8f9a9e" font-size="16">輸入、時間與來源</text>
+      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">Tool event</text>
+      <text x="24" y="86" fill="#d5dcdd" font-size="19">Was it called?</text>
+      <text x="24" y="119" fill="#8f9a9e" font-size="15">Input, time, source</text>
     </g>
     <g transform="translate(642 145)">
       <rect width="220" height="145" rx="8" fill="#1c2022" stroke="#62d5a1"/>
       <circle cx="29" cy="30" r="8" fill="#62d5a1"/>
-      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">可見結果</text>
-      <text x="24" y="86" fill="#d5dcdd" font-size="21">檔案／測試／commit</text>
-      <text x="24" y="119" fill="#8f9a9e" font-size="16">結果與宣稱是否相符</text>
+      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">Visible result</text>
+      <text x="24" y="86" fill="#d5dcdd" font-size="19">File / test / commit</text>
+      <text x="24" y="119" fill="#8f9a9e" font-size="15">Does it match the claim?</text>
     </g>
     <g transform="translate(939 145)">
       <rect width="220" height="145" rx="8" fill="#1c2022" stroke="#62d5a1"/>
       <circle cx="29" cy="30" r="8" fill="#62d5a1"/>
-      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">獨立驗收</text>
-      <text x="24" y="86" fill="#d5dcdd" font-size="21">範圍真的符合嗎？</text>
-      <text x="24" y="119" fill="#8f9a9e" font-size="16">核對後才可稱通過</text>
+      <text x="48" y="37" fill="#fff" font-size="19" font-weight="700">Acceptance</text>
+      <text x="24" y="86" fill="#d5dcdd" font-size="19">Scope satisfied?</text>
+      <text x="24" y="119" fill="#8f9a9e" font-size="15">Pass only after checking</text>
     </g>
     <path d="M456 290v52h299" fill="none" stroke="#f3b64a" stroke-width="2" stroke-dasharray="5 6"/>
     <circle cx="755" cy="342" r="6" fill="#f3b64a"/>
-    <text x="780" y="348" fill="#f3b64a" font-size="17">缺少來源或結果：保留「待查」，不補故事</text>
+    <text x="780" y="348" fill="#f3b64a" font-size="17">Missing source or result: unresolved</text>
   </g>
 </svg>

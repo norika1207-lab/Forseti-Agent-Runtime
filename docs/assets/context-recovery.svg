@@ -1,36 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
-  <title id="title">Forseti 壓縮後的脈絡恢復</title>
-  <desc id="desc">開發中的回填流程從來源實際保存的紀錄選取有出處的節錄；來源缺漏不可補造，回填包須由人核對與貼回 AI，而非自動注入。</desc>
+  <title id="title">Forseti context recovery after compaction</title>
+  <desc id="desc">Development concept: sourced excerpts can be selected only from records actually saved by the host. A person reviews and pastes the packet; nothing is injected automatically.</desc>
   <rect width="1200" height="440" fill="#101214"/>
   <g font-family="-apple-system,BlinkMacSystemFont,Arial,sans-serif">
-    <text x="48" y="65" fill="#f7f8f7" font-size="30" font-weight="700">對話被壓縮，原本的做法不該憑空消失</text>
-    <text x="48" y="101" fill="#a4adb1" font-size="18">開發中回填流程示意；只從來源實際保存的紀錄找回脈絡</text>
+    <text x="48" y="65" fill="#f7f8f7" font-size="30" font-weight="700">Compaction should not erase earlier decisions.</text>
+    <text x="48" y="101" fill="#a4adb1" font-size="18">Development concept: recover only what the source actually saved.</text>
     <rect x="48" y="145" width="276" height="209" rx="8" fill="#1e2223" stroke="#65d7a3"/>
-    <text x="72" y="181" fill="#65d7a3" font-size="19" font-weight="700">已保存的本機紀錄</text>
-    <text x="72" y="222" fill="#e8eeee" font-size="18">第 7 輪　原始第 93 行</text>
-    <text x="72" y="257" fill="#e8eeee" font-size="18">第 8 輪　原始第 106 行</text>
-    <text x="72" y="292" fill="#e8eeee" font-size="18">第 9 輪　原始第 121 行</text>
-    <text x="72" y="327" fill="#889498" font-size="17">…來源缺漏時不可補造</text>
+    <text x="72" y="181" fill="#65d7a3" font-size="19" font-weight="700">Saved source records</text>
+    <text x="72" y="222" fill="#e8eeee" font-size="18">Turn 7, source line 93</text>
+    <text x="72" y="257" fill="#e8eeee" font-size="18">Turn 8, source line 106</text>
+    <text x="72" y="292" fill="#e8eeee" font-size="18">Turn 9, source line 121</text>
+    <text x="72" y="327" fill="#889498" font-size="17">Missing data stays missing</text>
     <path d="M324 248H423" stroke="#768186" stroke-width="2"/>
     <path d="M415 242l10 6-10 6" fill="none" stroke="#768186" stroke-width="2"/>
     <circle cx="461" cy="248" r="39" fill="#26211a" stroke="#f3b64a" stroke-width="2"/>
     <path d="M447 236l14 12-14 12M475 236l-14 12 14 12" fill="none" stroke="#f3b64a" stroke-width="2"/>
-    <text x="427" y="323" fill="#f3b64a" font-size="18">壓縮點</text>
+    <text x="427" y="323" fill="#f3b64a" font-size="18">Compaction</text>
     <path d="M501 248H572" stroke="#768186" stroke-width="2"/>
     <path d="M564 242l10 6-10 6" fill="none" stroke="#768186" stroke-width="2"/>
     <rect x="574" y="145" width="280" height="209" rx="8" fill="#1e2223" stroke="#bd86ed"/>
-    <text x="598" y="181" fill="#bd86ed" font-size="19" font-weight="700">有出處的回填包</text>
-    <text x="598" y="221" fill="#e8eeee" font-size="18">原本目標與約束</text>
-    <text x="598" y="257" fill="#e8eeee" font-size="18">重要決定與原文節錄</text>
-    <text x="598" y="293" fill="#e8eeee" font-size="18">輪次、行號、容量上限</text>
-    <text x="598" y="329" fill="#889498" font-size="17">超額時明示，不偷刪骨架</text>
+    <text x="598" y="181" fill="#bd86ed" font-size="19" font-weight="700">Sourced recovery packet</text>
+    <text x="598" y="221" fill="#e8eeee" font-size="18">Original goal and limits</text>
+    <text x="598" y="257" fill="#e8eeee" font-size="18">Decisions and excerpts</text>
+    <text x="598" y="293" fill="#e8eeee" font-size="18">Turn, line, size limit</text>
+    <text x="598" y="329" fill="#889498" font-size="17">Report overflow explicitly</text>
     <path d="M854 248H926" stroke="#768186" stroke-width="2"/>
     <path d="M918 242l10 6-10 6" fill="none" stroke="#768186" stroke-width="2"/>
     <rect x="928" y="145" width="224" height="209" rx="8" fill="#1e2223" stroke="#fff"/>
-    <text x="952" y="181" fill="#fff" font-size="19" font-weight="700">人先核對</text>
-    <text x="952" y="225" fill="#e8eeee" font-size="18">再貼回 AI</text>
-    <text x="952" y="269" fill="#889498" font-size="17">不是自動注入</text>
-    <text x="952" y="305" fill="#889498" font-size="17">也不是完整理解</text>
-    <text x="48" y="405" fill="#8f9a9e" font-size="16">可追溯的節錄，不是憑壓縮摘要重寫過去。</text>
+    <text x="952" y="181" fill="#fff" font-size="19" font-weight="700">Human review</text>
+    <text x="952" y="225" fill="#e8eeee" font-size="18">Then paste to AI</text>
+    <text x="952" y="269" fill="#889498" font-size="17">No auto-injection</text>
+    <text x="952" y="305" fill="#889498" font-size="17">No claim of full recall</text>
+    <text x="48" y="405" fill="#8f9a9e" font-size="16">Traceable excerpts, not a rewritten story based on a compaction summary.</text>
   </g>
 </svg>

@@ -1,192 +1,208 @@
 <div align="center">
 
-<img src="desktop/src-tauri/icons/icon.png" alt="Forseti 圖示" width="88">
+<img src="desktop/src-tauri/icons/icon.png" alt="Forseti icon" width="88">
 
 # Forseti
 
-**看見 AI 做了什麼、憑什麼說完成，以及何時離開你的目標。**
+**See what the AI did, what backs its claims, and when it left your goal.**
 
-Forseti 是本機優先的 macOS AI 工作儀表。它把對話、工具事件、證據與方向變更
-排回同一條時間線，讓「完成了」可以被追問，也讓「走偏了」可以找到起點。
+Forseti is a local-first macOS dashboard for AI work. It places conversations,
+tool events, evidence, and changes in direction on one timeline, so you can
+trace a claim of completion back to its receipts and locate where a detour began.
 
-[看介面](#介面長什麼樣) · [三個情境](#三個你會用到的情境) · [功能與狀態](#能做什麼) · [運作方式](#如何運作) · [限制](#目前的邊界)
+[Interface](#the-interface) · [Three situations](#three-situations) · [Capabilities](#capabilities-and-status) · [How it works](#how-it-works) · [Limits](#current-limits)
 
 </div>
 
-![Forseti 主視覺：對話的主線、分岔、證據節點與北極星](docs/assets/forseti-facebook-cover.png)
+![Forseti concept art: a goal-aligned path, branches, evidence nodes, and a north star](docs/assets/forseti-facebook-cover.png)
 
-*Forseti 概念主視覺；下方另有以真正桌面介面渲染的示例畫面。*
+*Concept art. An example rendered in the actual desktop interface appears below.*
 
-> **截至 2026-10-08 的產品與開發方向說明。** 圖解包含已存在能力及尚未併入公開 `main` 的開發中互動；
-> 以[功能狀態表](#能做什麼)和目前版本的程式為準。這裡將可在桌面版使用的功能、
-> 已有引擎但尚未完成端到端驗收的能力，以及設計目標分開寫。
-> 不能把測試通過、畫面出現或 AI 的自述直接當成任務完成。
+> **Product and development overview, 2026-10-08.** Some diagrams show interactions
+> still in development and not shipped on public `main`. Check the
+> [status table](#capabilities-and-status) and the current code. A passing test,
+> a visible screen, or an AI self-report is not proof that a task was completed.
 
-## 你不必再靠記憶追問
+## Answers you can trace
 
-AI 可以連續讀檔、改檔、派支援、跑測試，也可能只說「做好了」。
-當一個任務跨越幾百輪對話，人最需要的不是另一段漂亮摘要，而是三個能回頭核對的答案：
+An AI can read files, edit code, delegate, and run tests. It can also merely say
+"done." Across hundreds of turns, three questions matter more than another summary:
 
-| 你問 | Forseti 幫你找到 |
+| Your question | What Forseti helps you inspect |
 |---|---|
-| **「它真的做了嗎？」** | AI 原話、工具呼叫、可見結果與驗收收據各自在哪一輪 |
-| **「什麼時候開始走岔？」** | 使用者插入工作、確認新目標、探索旁支或 AI 疑似偏離的時間位置 |
-| **「壓縮後忘了什麼？」** | 原始紀錄中可追溯的指示、限制與決定，以及可核對的回填節錄 |
+| **Did it actually happen?** | The AI's words, tool calls, visible results, and acceptance receipts, each tied to a turn |
+| **Where did the work change course?** | The point where you inserted a task, approved a new goal, explored a branch, or the AI may have drifted |
+| **What was lost after compaction?** | Instructions and decisions traceable to saved source records, with excerpts you can check |
 
-Forseti 是你的觀測與追溯層，不是替人作最終裁決的「真相機器」。
-它會區分**已觀測、推論與未知**；看不到的過程，不會畫成已發生。
+Forseti is an observation and traceability layer, not a machine that settles
+truth for you. It distinguishes **observed, inferred, and unknown**. An unseen
+step should not be drawn as if it happened.
 
-## 介面長什麼樣
+## The interface
 
 <p align="center">
-  <img src="docs/assets/forseti-interface.png" width="420" alt="Forseti 真實桌面介面以合成對話呈現：時間線、輪次卡片、工具點與跟隨狀態">
+  <img src="docs/assets/forseti-interface.png" width="420" alt="Forseti desktop interface rendered with a synthetic conversation: timeline, turn cards, tool dots, and follow state">
 </p>
 
-*圖為 `desktop/ui/` 真正介面以[合成示例對話](docs/assets/demo-project/forseti-demo.jsonl)渲染；
-文字、檔案與測試結果都是示範，不是產品或使用者的真實工作紀錄。*
+*Rendered from a development build of `desktop/ui/` using a
+[synthetic example transcript](docs/assets/demo-project/forseti-demo.jsonl).
+The Chinese UI text, messages, files, and test results are examples. This is
+not a screenshot of an installed release or proof of native acceptance.*
 
-| 畫面位置 | 看得到什麼 | 可以怎麼用 |
+| Area | What it shows | What to check |
 |---|---|---|
-| 頂端 | Forseti、session 名稱、跟隨/鎖定狀態、溫度和建議入口 | 確認正在看的對話；手動選 session 或恢復跟隨 |
-| 左側時間線 | 每輪起訖、讀/寫/失敗等工具點、問題旁線 | 找出工作密集、空轉、被糾正或發生失敗的時間段 |
-| 對話卡片 | 使用者當輪要求、最近 AI 回覆、當輪狀態 | 快速掃描，不必先展開長篇紀錄 |
-| 輪次明細 | 逐筆 AI 回覆、工具呼叫與結果、原始行號和時間 | 回到「先說了什麼、後來真的做了什麼」的順序 |
-| 支援工作 | 獨立支援紀錄及其事件 | 檢視支援過程；未有因果證據時不冒稱由特定輪次派出 |
-| 其他檢視 | 需要注意、在做什麼、讀文件、這台機器、功能、自我審計 | 從對話切換到任務、覆蓋與診斷角度 |
+| Header | Session name, follow or lock state, temperature, and advice entry point | Check which conversation is selected |
+| Timeline | Turns, recorded tool events, and branches | Locate bursts of activity, idle gaps, corrections, and failures |
+| Turn card | The user's request, latest AI answer, and turn status | Scan quickly before opening the record |
+| Turn detail | Individual AI answers, tool calls and results, source line numbers and times | Reconstruct what was said and what the source recorded next |
+| Support work | Separate support records and their events | Inspect support activity without inventing a parent-turn link |
+| Other views | Attention, activity, reading, machine state, capabilities, and self-audit | Inspect the work from a different angle |
 
-**讀一個節點時的原則：** 卡片是摘要；點開輪次看到的是當輪的事件序列和判定依據。
-線與點只能代表來源有記錄的事件。沒有捕獲到的工具動作、外部工作或語意脈絡，
-應標成不足或未知，不應補成看似完整的故事。
+**A card is a summary, not the whole record.** Turn detail exposes the saved
+event sequence and available basis for a verdict. Lines and dots may represent
+only events the source recorded; missing tool steps or context remain unknown.
 
-## 三個你會用到的情境
+## Three situations
 
-### 1. AI 說「完成」，但交付在哪裡？
+### 1. The AI said "done." Where is the deliverable?
 
-![Forseti 把 AI 宣稱、工具事件、可見結果與獨立驗收拆開核對](docs/assets/evidence-chain.svg)
+![Evidence chain: AI claim, tool event, visible result, and independent acceptance](docs/assets/evidence-chain.svg)
 
-一個回覆寫著「檔案已寫好」，不代表檔案存在；有工具呼叫，也不代表結果符合要求。
-Forseti 把宣稱放回當輪，讓你沿著工具輸入、輸出、檔案、測試與驗收收據查下去。
-**證據缺席就顯示待查**，而不是替 AI 補上一段合理故事。
+A reply saying "I wrote the file" does not make that file exist. Even a tool call
+does not prove that its result met the request. Forseti ties the claim to its
+turn so you can inspect recorded inputs, outputs, files, tests, and receipts.
+**Missing evidence stays unresolved**; it is not filled with a plausible story.
 
-### 2. 工作換了，是你授權，還是 AI 跑偏？
+### 2. Did you change the goal, or did the AI drift?
 
-![Forseti 先辨識使用者插入工作，再區分暫時工作、探索旁支與新北極星](docs/assets/direction-decisions.svg)
+![Development concept: distinguish a temporary task, exploratory branch, and approved new north star](docs/assets/direction-decisions.svg)
 
-橘線是值得核對的起點。開發中的方向判讀會在你中途插入另一件工作時提供候選建議卡，
-讓你選擇「暫時工作」「探索旁支」或明確確認新北極星。
-前兩者保留原目標；只有你確認新方向才建立新版本。
-AI 自己偏離則另看目標距離、來源與連續證據，不把你的指令算成它的責任。
+An orange line is a place to investigate, not a verdict. The **in-development**
+direction workflow is intended to ask whether an inserted task is temporary,
+an exploratory branch, or an explicitly approved new north star. The first two
+retain the original goal. AI drift needs separate evidence; your instruction
+must not be misclassified as the AI's fault.
 
-### 3. 對話壓縮了，過去的做法去哪了？
+### 3. After compaction, where did earlier decisions go?
 
-![Forseti 開發中的回填流程：從來源已保存的紀錄取回有出處的節錄](docs/assets/context-recovery.svg)
+![Development concept: recover sourced excerpts from records the host actually saved](docs/assets/context-recovery.svg)
 
-桌面只顯示部分近期輪次，不代表來源中更早的紀錄都已被讀入；能否取回取決於來源是否保存。
-開發中的回填路徑可跨過顯示視窗，從壓縮前的原始範圍取回重要指示、約束與決定，
-組成有出處及長度上限的回填包。**目前由人核對並貼回 AI，不是自動注入。**
+The desktop may show only recent turns. Older context can be recovered only
+where the source retained it. An **in-development** recovery path can select
+pre-compaction instructions and decisions with provenance and a size limit.
+**A person reviews and pastes the packet; it is not injected into an AI automatically.**
 
-### 點位和卡片不是同一件事
+### A dot is not a card
 
-開發版時間線上的**大點**用來打開當輪的路徑判定：是哪個事件讓線轉向、證據是什麼、使用者是否確認新方向。
-卡片則是該輪要求、回覆與活動的速覽。額外的事件點各有獨立內容：
+In the development design, a **large dot** opens the turn's path verdict:
+which event changed direction, what evidence exists, and whether the user
+approved a new goal. A card is a quick view of that turn's request, answer,
+and activity. Other event dots have distinct meanings:
 
-| 點位 | 意義 | 裁定界線 |
+| Dot | Intended meaning | Evidence boundary |
 |---|---|---|
-| 黑底白點 | AI 的「已寫、已跑、已用工具」宣稱與可見紀錄不符 | 顯示具體標的、缺口和核對方法；來源不足時不直接稱說謊 |
-| 金點 | 這次使用者決策與可核對的歷史模式不同 | 只是參考，不是警告；目前沒有可靠歷史比較資料時不顯示，**不能冒充已完成** |
-| 紫點 | AI 可能偏離當前北極星 | 要有目標、連續性與使用者未改方向等條件；提供可複製的校正提問 |
-| 粉紅點 | 使用者當時寫下的筆記 | 保留原文與時間，不用後來的摘要覆蓋 |
+| White on black | An AI claim to have written, run, or used a tool conflicts with visible records | Show the target and gap; insufficient source data is not proof of lying |
+| Gold | A user decision differs from a verifiable past pattern | Advisory only; **not shipped as a reliable comparison** without usable history |
+| Purple | Possible AI drift from the current north star | Needs a goal, continuity, and evidence that the user did not change direction |
+| Pink | A note written by the user at that point | Preserve its text and time rather than replacing it with a later summary |
 
-橘線表示**可能偏離的起點**，不是已證實的責任。開發中的判讀流程在使用者中途插入工作時，
-先提出「暫時工作、探索旁支或新北極星」的候選建議卡；只有使用者確認新北極星，才建立新目標版本。
-未經確認，不把橘線直接染成「AI 犯錯」，也不把使用者改方向當成 AI 漂移。
-開發版可把插入工作明確標為**只是暫時工作**，獨立記錄此裁定並維持原目標版本；
-「只是探索」是另一種旁支，不與臨時任務混為一談。明確說「回到原本工作」會結束暫時狀態；
-若沒有新的確認，暫時標記最多維持 12 輪，避免永久遮蔽後續的偏離檢查。
-目前持續偏離的偵測最高仍是 **SUSPECTED**：確認偏離所需的 GAR、獨立矛盾證據、
-糾正後持續性與多維交叉驗證尚未全部接妥。因此「橘逐漸變成已確認的紅色目標偏離」
-仍是待完成能力；現有紅線的可查證宣稱衝突，不應被誤讀成目標偏離已獲確認。
+Orange means a **possible start of deviation**, not established responsibility.
+The in-development workflow treats a temporary task and an exploratory branch
+as different from an approved new north star. Without explicit confirmation,
+it should not turn your change of direction into an AI-drift verdict. A
+temporary designation has a 12-turn limit so it cannot indefinitely hide
+later drift. Sustained goal drift currently reaches at most **SUSPECTED**;
+confirmed red goal drift still needs independent contradiction evidence,
+post-correction persistence, and other cross-checks. A red line for a
+verifiable claim conflict must not be read as confirmed goal drift.
 
-開發版回填包從上一次壓縮至本次壓縮前選取有輪次出處的使用者原話、限制與決策。
-它不是「AI 已完整理解」的證明；若目標和約束本身超出容量，會明示阻擋，而不是悄悄截斷。
+The development recovery packet selects sourced user instructions,
+constraints, and decisions from the saved pre-compaction range. It does not
+prove the AI understood them. If essential context exceeds capacity, the
+workflow should report that limit rather than silently discard it.
 
-## 能做什麼
+## Capabilities and status
 
-下表只描述公開 `main` 能找到的程式路徑及其限制，**不把程式存在當作真實 session 已驗收**。
-「部分」表示已有引擎或介面，但仍有來源覆蓋、因果關聯、跨 session 或原生端到端缺口。
+This table describes code paths on public `main` and their limits.
+**Code existing is not the same as acceptance in real sessions.** "Partial"
+means there is an engine or interface but gaps remain in source coverage,
+causal links, cross-session behavior, or native end-to-end verification.
 
-| 能力 | 對人的幫助 | 目前界線 |
+| Capability | Why it helps | Current boundary |
 |---|---|---|
-| 跟隨 Claude 與 Codex 對話 | 在旁邊看到目前工作的 session，不必手動找 JSONL | 已有來源適配與桌面接線；跨 app 前景切換尚未完成穩定性驗收，不能保證總能跟對。不是 Grok 等所有工具的通用接入 |
-| 對話線與輪次卡片 | 對照要求、回覆、時長和當輪證據 | 已有介面與資料路徑；分岔及點位互動仍須逐項驗收，顏色不能單獨判定責任 |
-| 逐筆活動紀錄 | 還原來源中可見的 AI 回覆、工具呼叫、工具結果與行號 | 已有輪次明細介面；長內容會截斷顯示，來源未保存的過程無法補回 |
-| 讀/寫/失敗點 | 看見有紀錄的工具活動與失敗 | 已有事件點；shell 內部與其他 opaque 動作只能作已觀測下界 |
-| 目標與方向變更 | 區分使用者糾正、新方向、探索與 AI 自行偏離的候選 | 部分；無可核對的目標/授權時不能宣稱「確認偏離」 |
-| 宣稱與證據核對 | 找出「說有寫/跑/完成」卻缺檔案、工具或結果收據的情況 | 已有檢視與引擎；沒有足夠來源時只能標示待查，語意抽取和來源覆蓋不是百分之百 |
-| 活動、任務、目標進度分層 | 避免把「很忙」當成「完成了正確的工作」 | 已有資料路徑；外部 host 若漏事件，進度只能算已觀測下界 |
-| 停滯、空輸出與接續 | 看見沒有新證據的長時間等待，保留恢復線索 | 已有偵測與救援資料；不能強制外部 AI 產品自動續作 |
-| 支援/子代理紀錄 | 不讓主代理一句總結蓋掉支援過程 | 部分；可讀獨立 sidechain，精確對回發起輪次仍需來源證據 |
-| 建議卡 | 把值得問、查或驗的下一步放在手邊 | 已有介面入口與產生邏輯；觸發時機、顯示方式及建議品質仍須真實 session 驗收 |
-| 讀取覆蓋與脈絡恢復 | 看必讀資料讀了多少、壓縮/交接後缺了什麼 | 部分；覆蓋率不是理解率，接班 session 的第一步重驗尚缺完整 E2E |
-| 任務帳本與驗收收據 | 區分已派工、已提交、獨立驗證與真正完成 | 引擎與檢視已有；真實多代理長跑及自動派工仍須持續驗證 |
-| Claude Code 專案 hook | 在同專案檔案寫入衝突時要求確認，不默默覆蓋 | 依專案安裝；內部錯誤 fail-open，不能宣稱擋住所有衝突 |
-| 可重用 JS runtime | 讓其他 host 採用 capture、cost、handoff、admission 等純函式 | 核心模組可單獨使用；host 必須供應完整事件並實作執行側接線 |
+| Claude and Codex session following | See the session Forseti selected without finding its JSONL yourself | Source adapters and desktop wiring exist; cross-app foreground switching has **not** passed stability acceptance. Not a universal Grok/other-provider integration |
+| Timeline and turn cards | Compare requests, answers, duration, and available evidence | UI and data paths exist; branches and dot interactions need individual acceptance. Color alone cannot assign responsibility |
+| Activity detail | Inspect saved AI answers, tool calls, results, and source line numbers | Turn detail exists; long text is truncated on screen, and events absent from the source cannot be recovered |
+| Read, write, and failure dots | Locate recorded tool activity and failures | Event dots exist; opaque shell work is only an observed lower bound |
+| Goals and changes in direction | Separate candidate user corrections, new goals, exploration, and AI drift | Partial; no confirmed drift verdict without a reliable goal and authorization evidence |
+| Claim and evidence checks | Investigate claims of writing, running, or completing work | UI and engine exist; insufficient sources mean "unresolved," not "false." Extraction and coverage are incomplete |
+| Activity, task, and goal progress | Avoid treating busyness as completion | Data paths exist; missing host events limit the result to observed activity |
+| Stalls and recovery hints | See long waits without new evidence | Detection and recovery data exist; Forseti cannot force an external AI product to continue |
+| Support and subagent records | Keep a support worker's work visible beyond one summary | Partial; sidechains can be read, but exact linkage to the initiating turn still needs source evidence |
+| Advice cards | Surface a useful question or verification step | UI entry point and generation logic exist; timing, presentation, and advice quality need real-session acceptance |
+| Reading coverage and context recovery | See what was read and what may be missing after compaction | Partial; coverage is not understanding, and first-step revalidation after handoff lacks full E2E |
+| Task ledger and acceptance receipts | Separate assigned, submitted, independently verified, and completed | Engine and views exist; long-running multi-agent dispatch still needs sustained verification |
+| Claude Code project hook | Ask before conflicting writes in the same project | Installed per project; internal errors fail open, so it cannot block every collision |
+| Reusable JS runtime | Let hosts adopt capture, cost, handoff, and admission functions | Core modules can be used independently; hosts must supply events and implement actions |
 
-### 一個典型使用流程
+### A typical inspection
 
-1. 在 Claude 或 Codex 工作時讓 Forseti **跟隨**目前對話，先核對頂端 session 名稱。
-2. 從時間線找出異常密集的工具點、長時間空白或改變方向的旁線。
-3. 點開輪次，看使用者要求、AI 當時的回覆、工具輸入與結果，而不只看卡片摘要。
-4. 對照檔案、測試、commit 或其他收據；證據不夠時維持「待查」，再決定下一句要問什麼。
+1. With Claude or Codex open, let Forseti **follow** and verify the session name before trusting the timeline.
+2. Find dense tool activity, long gaps, or a possible branch.
+3. Open a turn to inspect its request, saved AI messages, tool calls, and results rather than relying on the card summary.
+4. Compare files, tests, commits, or other receipts. Keep an unsupported claim unresolved and decide what to ask next.
 
-## 如何運作
+## How it works
 
 ```mermaid
 flowchart LR
-    A[Claude/Codex 本機對話紀錄] --> B[來源適配與時間排序]
-    H[Claude Code 專案 hook / 工具事件] --> B
-    B --> C[輪次與逐筆活動]
-    B --> D[事件 / 任務 / 證據帳本]
-    C --> E[候選訊號與目標版本比對]
+    A[Local Claude/Codex records] --> B[Source adapters and ordering]
+    H[Claude Code project hook / tool events] --> B
+    B --> C[Turns and activity]
+    B --> D[Event / task / evidence ledgers]
+    C --> E[Candidate signals and goal versions]
     D --> E
-    E --> F[覆蓋與認知狀態: observed / inferred / unknown]
-    F --> G[Tauri 桌面介面與本機 CLI]
-    G --> I[人核對來源並決定下一步]
+    E --> F[Coverage: observed / inferred / unknown]
+    F --> G[Tauri desktop UI and local CLI]
+    G --> I[Human checks sources and decides]
 ```
 
-**輸入不是結論。** AI 自述、工具呼叫、工具結果、檔案狀態與驗證收據是不同層級的證據。
-`capture`/adapter 正規化來源；`tracker` 保留輪次和事件序列；`desktop_api` 組裝畫面快照；
-`src/` 的偵測器與契約模組分析衝突、成本、目標、停滯、聲明和恢復。
-UI 應同時顯示「為什麼這樣判」及拿不到資料時的未知狀態。
+**An input is not a verdict.** AI self-reports, tool calls, tool results,
+filesystem state, and verification receipts carry different evidentiary weight.
+Adapters normalize sources; `tracker` preserves turns and events; `desktop_api`
+builds a UI snapshot; the `src/` modules analyze conflicts, costs, goals,
+stalls, claims, and recovery. The UI should expose both its basis and unknowns.
 
 ```mermaid
 flowchart TD
-    R[使用者當輪要求] --> A[AI 回覆 / 承諾]
-    A --> T[工具呼叫]
-    T --> O[工具結果]
-    O --> V{有可驗收收據?}
-    V -- 有 --> P[獨立核對結果與範圍]
-    V -- 沒有或來源缺漏 --> U[保留未知 / 提醒補證據]
-    P --> N[呈現已驗證狀態]
+    R[User request] --> A[AI answer / claim]
+    A --> T[Tool call]
+    T --> O[Tool result]
+    O --> V{Acceptance receipt?}
+    V -- Yes --> P[Independently check result and scope]
+    V -- No or source missing --> U[Leave unknown / request evidence]
+    P --> N[Show verified scope]
 ```
 
-這條鏈刻意不把「AI 說已完成」直接連到「已完成」。
-同樣地，使用者明確更換目標與 AI 未經授權偏離是兩種事件；
-在沒有可追溯的授權與前後因果時，只能顯示候選判讀。
+There is deliberately no direct edge from "the AI said done" to "done."
+Likewise, an explicitly changed user goal and unauthorized AI drift are
+different events; without traceable authorization and causality, the result
+is only a candidate interpretation.
 
-## 目前的邊界
+## Current limits
 
-- **不是所有 AI 產品的通用讀取器。** 現有桌面跟隨重點是本機 Claude/Codex；其他供應者不能由名稱相似就推定支援。
-- **不是全知錄影。** 只還原本機來源實際保存的訊息和工具事件；外部程序、未記錄的自動步驟及 opaque shell 內容可能看不到。
-- **不是自動判罪或自動部署器。** 訊號、顏色和建議供人查證；破壞性操作、寫入及發布需要各自的授權和驗收。
-- **不是一個萬能分數。** 溫度與趨勢是視覺提示；活動、任務、目標、證據覆蓋與未知來源必須分開讀。
-- **部分能力仍在建設。** 精確跨 session 因果鏈、支援紀錄對回發起輪次、完整 Goal Acceptance Contract、所有視圖的 native E2E 和校準報告不能冒充已完成。
-- **資料路徑可控。** 介面讀本機紀錄；公開截圖使用合成資料。把真實 transcript、token、檔案路徑放進 issue 或截圖前應自行審查。
+- **Not a universal AI reader.** Desktop following focuses on local Claude and Codex records; support for other providers must be verified separately.
+- **Not an omniscient recording.** It can reconstruct only messages and tool events actually saved by a source. External processes and opaque shell work may remain invisible.
+- **Not an automatic judge or deployer.** Signals, colors, and advice invite human verification; writing, destructive operations, and publication need their own authorization.
+- **Not one magic score.** Temperature is a visual cue. Activity, tasks, goals, evidence coverage, and unknown sources must stay distinct.
+- **Still under construction.** Precise cross-session causality, support-to-parent links, the full Goal Acceptance Contract, native E2E for every view, and calibration reports are not complete.
+- **Local-data caution.** The UI reads local records; the public screenshot uses synthetic data. Review any real transcript, token, or path before sharing it.
 
-## 開發與驗證
+## Development and verification
 
-此 repo 有兩個不同交付面：**Node 22+ 的零執行依賴 JS 核心**，以及
-**macOS Tauri/Python 桌面應用**。`npm test` 驗的是前者，不等於桌面真實跟隨驗收。
+This repository has two delivery surfaces: a **Node 22+ JS core with no runtime
+dependencies** and a **macOS Tauri/Python desktop app**. `npm test` checks the
+former; it is not acceptance of real desktop session following.
 
 ```bash
 git clone https://github.com/norika1207-lab/Forseti-Agent-Runtime
@@ -195,37 +211,41 @@ npm test
 python3 -m pytest -q tests/test_tracker.py tests/test_ui_contract.py
 ```
 
-桌面版需 macOS、Rust/Tauri 工具鏈與 `desktop/` 依賴；
-建置、安裝、原生 UI 驗證是另外的步驟。單獨執行部署前的兩組 UI 守門測試：
+The desktop app needs macOS, Rust/Tauri tooling, and `desktop/` dependencies.
+Build, installation, and native UI verification are separate steps. To run
+the two UI gate suites **without deploying**, use:
 
 ```bash
 python3 -m pytest -q tests/test_js_symbols.py tests/test_ui_contract.py
 ```
 
-**不要把 `desktop/deploy.sh` 當成純測試指令：公開 `main` 的腳本會部署並處理正在執行的 App。**
-測試或瀏覽器 harness 的結果也不代表 App 已更新。
+**Do not use `desktop/deploy.sh` as a test-only command: public `main` deploys
+and handles the running app.** Tests and browser harnesses do not mean an
+installed app was updated.
 
-| 位置 | 負責什麼 |
+| Path | Responsibility |
 |---|---|
-| [`src/`](src/) | 可獨立採用的 JS runtime、偵測器與契約 |
-| [`apps/forseti-cli/`](apps/forseti-cli/) | 本機紀錄解析、帳本、桌面 API 與診斷 CLI |
-| [`hooks/`](hooks/) | 專案範圍的 Claude Code 事件 hook |
-| [`desktop/ui/`](desktop/ui/) | 對話線、卡片、建議、檢視與互動 |
-| [`desktop/src-tauri/`](desktop/src-tauri/) | macOS 應用殼與本機命令橋接 |
-| [`tests/`](tests/) / [`test/`](test/) | Python / JavaScript 契約與回歸測試 |
+| [`src/`](src/) | Reusable JS runtime, detectors, and contracts |
+| [`apps/forseti-cli/`](apps/forseti-cli/) | Local-record parsing, ledgers, desktop API, and diagnostic CLI |
+| [`hooks/`](hooks/) | Project-scoped Claude Code event hook |
+| [`desktop/ui/`](desktop/ui/) | Timeline, cards, advice, views, and interactions |
+| [`desktop/src-tauri/`](desktop/src-tauri/) | macOS app shell and local command bridge |
+| [`tests/`](tests/) / [`test/`](test/) | Python and JavaScript regression suites |
 
-延伸閱讀：[系統工程規格書](docs/工程規格書.md)（設計與歷史）、
-[Widget 原始設計](.forseti/WIDGET_SPEC.md)（設計意圖，不等於當前驗收）。
+Further reading: [engineering specification](docs/工程規格書.md) (design and
+history) and [original widget design](.forseti/WIDGET_SPEC.md) (design intent,
+not current acceptance).
 
-授權：MIT。
+License: MIT.
 
 ---
 
 <details>
-<summary>展開：早期 JS runtime 設計、測量與失敗紀錄</summary>
+<summary>Earlier JS runtime design, measurements, and failure log</summary>
 
-以下保留早期 JS runtime 的設計說明和失敗紀錄，供需要深入理解機制的人閱讀。
-其中的測量數字與開發狀態是歷史快照；目前產品能力以上方功能表與當前程式/測試為準。
+The following preserves the earlier JS runtime design and failure record.
+Its measurements and development status are historical snapshots; use the
+status table above and current code/tests for present capabilities.
 
 ---
 
