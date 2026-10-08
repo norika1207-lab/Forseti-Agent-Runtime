@@ -742,11 +742,25 @@ class CodexTracker(Tracker):
         return text.strip()
 
     def _handle(self, rec: dict, line_no: int) -> None:
+        if rec.get("type") == "compacted":
+            at = _ts(rec)
+            self._close_current(at)
+            strand = Strand(
+                n=len(self.strands) + 1, started_at=at,
+                owner_text="(對話壓縮)", owner_line=line_no,
+                ended_at=at, compaction=True,
+                compaction_meta={"pre_tokens": None, "post_tokens": None,
+                                 "trigger": None, "line": line_no},
+            )
+            strand.dots.append(Dot(
+                at=at, label="對話壓縮", kind=KIND_OTHER,
+                detail="AI 的記憶從這裡開始不完整",
+                line_no=line_no, size_override=6,
+            ))
+            self.strands.append(strand)
+            return
         payload = rec.get("payload")
         if not isinstance(payload, dict):
-            if rec.get("type") == "compacted":
-                self._mark_compaction({"isCompactSummary": True},
-                                      _ts(rec), line_no)
             return
         if rec.get("type") != "response_item":
             return
