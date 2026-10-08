@@ -9,6 +9,42 @@ from rehydration import ORIGINAL, PACKET_LIMIT, recover_original_interval
 from tracker import CodexTracker, Tracker
 
 
+def _native_message(rec: dict, provider: str) -> tuple[str, str] | None:
+    if provider == "codex":
+        if rec.get("type") != "response_item":
+            return None
+        payload = rec.get("payload")
+        if not isinstance(payload, dict):
+            raise ValueError("invalid message payload")
+        if payload.get("type") != "message" or payload.get("role") not in {
+                "user", "assistant"}:
+            return None
+        role, content = payload["role"], payload.get("content")
+        accepted = {"input_text", "output_text", "text"}
+    else:
+        if rec.get("type") not in {"user", "assistant"}:
+            return None
+        message = rec.get("message")
+        if not isinstance(message, dict):
+            raise ValueError("invalid message")
+        role, content = rec["type"], message.get("content")
+        accepted = {"text"}
+
+    if isinstance(content, str):
+        return role, content
+    if not isinstance(content, list):
+        raise ValueError("invalid message content")
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise ValueError("invalid content block")
+        if block.get("type") in accepted:
+            if not isinstance(block.get("text"), str):
+                raise ValueError("invalid text block")
+            parts.append(block["text"])
+    return role, "\n".join(parts)
+
+
 def recover_provider_interval(*, source_path: str, provider: str,
                               start_round: int, compaction_ordinal: int,
                               goal: str, task: str,
@@ -62,12 +98,17 @@ def recover_provider_interval(*, source_path: str, provider: str,
     # Reparse only records physically before this anchor. A turn can continue
     # after compaction, so whole-turn ai_text would include future words.
     prefix = CodexTracker(path) if provider == "codex" else Tracker(path)
+    messages = {}
     try:
         with path.open("rb") as source:
             for line_no, raw in enumerate(source, 1):
                 if line_no >= cutoff:
                     break
-                prefix._handle(json.loads(raw), line_no)
+                rec = json.loads(raw)
+                message = _native_message(rec, provider)
+                if message is not None:
+                    messages[line_no] = message
+                prefix._handle(rec, line_no)
     except (OSError, UnicodeError, ValueError):
         return unknown("unreadable_source")
 
@@ -77,15 +118,21 @@ def recover_provider_interval(*, source_path: str, provider: str,
             continue
         if strand.compaction or strand.owner_line <= previous_cutoff:
             return unknown("cross_compaction_boundary")
-        end_line = max(
-            [strand.owner_line] + [item.get("line", 0)
-                                   for item in strand.activity
-                                   if item.get("kind") == "answer"
-                                   and isinstance(item.get("line"), int)])
+        owner_message = messages.get(strand.owner_line)
+        if owner_message is None or owner_message[0] != "user":
+            return unknown("missing_original_owner_message")
+        answer_lines = [item.get("line") for item in strand.activity
+                        if item.get("kind") == "answer"
+                        and isinstance(item.get("line"), int)]
+        if any(line not in messages or messages[line][0] != "assistant"
+               for line in answer_lines):
+            return unknown("missing_original_ai_message")
+        end_line = max([strand.owner_line] + answer_lines)
         rows.append({
             "n": strand.n, "source_type": ORIGINAL,
             "source_ref": f"{path.resolve()}:{strand.owner_line}-{end_line}",
-            "owner_text": strand.owner_text, "ai_text": strand.ai_text,
+            "owner_text": owner_message[1],
+            "ai_text": "\n\n".join(messages[line][1] for line in answer_lines),
         })
     if not rows:
         return unknown("missing_source_round")
@@ -94,5 +141,7 @@ def recover_provider_interval(*, source_path: str, provider: str,
         compaction_round=rows[-1]["n"] + 1,
         goal=goal, task=task, limit=limit)
     if result["status"] == "READY":
+        result["reason"] = "conversation_text_complete_pre_anchor"
+        result["scope"] = "owner_and_ai_text_not_tool_payloads"
         result["compaction_source_ref"] = f"{path.resolve()}:{cutoff}"
     return result

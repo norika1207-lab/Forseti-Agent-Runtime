@@ -94,3 +94,40 @@ def test_assistant_after_compaction_is_not_in_pre_compaction_packet(tmp_path):
     text = json.dumps(result["packet"], ensure_ascii=False)
     assert "壓縮前回覆" in text
     assert "壓縮後回覆不得混入" not in text
+
+
+def test_codex_owner_envelope_and_whitespace_are_preserved(tmp_path):
+    source = tmp_path / "codex.jsonl"
+    original = "  <context>must remain</context>\n## My request:\n  保留原文  "
+    _write(source, [
+        {"type": "response_item", "timestamp": "2026-10-08T10:00:00Z",
+         "payload": {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": original}]}},
+        {"type": "compacted", "timestamp": "2026-10-08T10:00:01Z",
+         "payload": {"window_number": 2}},
+    ])
+    result = recover_provider_interval(
+        source_path=str(source), provider="codex", start_round=1,
+        compaction_ordinal=1, goal="保留", task="回取")
+    assert result["status"] == "READY"
+    assert original in [fragment["text"] for fragment in
+                        result["packet"]["original_fragments"]]
+    assert result["scope"] == "owner_and_ai_text_not_tool_payloads"
+
+
+def test_malformed_assistant_content_fails_closed(tmp_path):
+    source = tmp_path / "codex.jsonl"
+    _write(source, [
+        {"type": "response_item", "timestamp": "2026-10-08T10:00:00Z",
+         "payload": {"type": "message", "role": "user",
+                     "content": [{"type": "input_text", "text": "保留原文"}]}},
+        {"type": "response_item", "timestamp": "2026-10-08T10:00:01Z",
+         "payload": {"type": "message", "role": "assistant", "content": 42}},
+        {"type": "compacted", "timestamp": "2026-10-08T10:00:02Z",
+         "payload": {"window_number": 2}},
+    ])
+    result = recover_provider_interval(
+        source_path=str(source), provider="codex", start_round=1,
+        compaction_ordinal=1, goal="保留", task="回取")
+    assert result["status"] == "UNKNOWN"
+    assert result["packet"] is None
