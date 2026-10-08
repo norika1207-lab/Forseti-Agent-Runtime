@@ -154,14 +154,16 @@ def test_recover_from_verified_archive_after_original_is_removed(tmp_path, monke
         ])
         kwargs = {"source_path": source,
                   "archive_root": base / ".forseti" / "session_archive",
-                  "provider": "codex", "session_id": "source-deletion-test"}
+                  "provider": "codex", "session_id": "source-deletion-test",
+                  "max_bytes": max(map(len, source.read_bytes().splitlines(keepends=True)))}
         archive = None
-        for _ in range(5):
+        for _ in range(12):
             archive = sync_source(**kwargs)
             if archive["status"] == "READY":
                 break
         assert archive["status"] == "READY"
         archive_dir = Path(archive["archive_path"])
+        assert len(list(archive_dir.glob("*.enc"))) >= 2
         assert not list(archive_dir.glob("*.jsonl"))
         for encrypted in archive_dir.glob("*.enc"):
             assert "完整保留這段原文".encode() not in encrypted.read_bytes()
@@ -176,3 +178,5 @@ def test_recover_from_verified_archive_after_original_is_removed(tmp_path, monke
         assert recovered["auto_inject"] is False
         assert "完整保留這段原文" in json.dumps(recovered["packet"], ensure_ascii=False)
         assert archive["manifest_path"] in recovered["compaction_source_ref"]
+        assert f'{archive["manifest_path"]}:1-2' in json.dumps(recovered["packet"], ensure_ascii=False)
+        assert recovered["compaction_source_ref"] == f'{archive["manifest_path"]}:3'
