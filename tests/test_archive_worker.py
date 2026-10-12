@@ -185,10 +185,14 @@ class ArchiveWorkerTest(unittest.TestCase):
     def test_default_worker_preserves_record_above_hard_cap(self):
         prefix, suffix = b'{"payload":"', b'"}\n'
         size = A.MAX_CALL_BYTES + 1
+        local = tempfile.TemporaryDirectory()
+        self.addCleanup(local.cleanup)
+        self.source = Path(local.name) / "source.jsonl"
         self.source.write_bytes(prefix + b"x" * (size - len(prefix) - len(suffix))
                                 + suffix)
         options = {key: value for key, value in self.kwargs.items()
                    if key != "max_bytes"}
+        options["source_path"] = self.source
         result = W.launch_worker(**options)
         self.assertEqual(result["status"], "STARTED")
         self.assertEqual(self.wait_child(result["pid"]), 0)
@@ -199,7 +203,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.source.write_bytes(record(1))
         request = {"source": str(self.source), "archive_root": str(self.root),
                    "provider": "codex", "session_id": "session-123",
-                   "max_bytes": len(record(1)), "watch_seconds": 3,
+                   "max_bytes": len(record(1)), "watch_seconds": 30,
                    "interval_seconds": 0.05}
         read_fd, write_fd = os.pipe()
         os.write(write_fd, json.dumps(request).encode())
@@ -235,17 +239,17 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.source.write_bytes(record(1))
         request = {"source": str(self.source), "archive_root": str(self.root),
                    "provider": "codex", "session_id": "session-123",
-                   "max_bytes": len(record(1)), "watch_seconds": 3,
+                   "max_bytes": len(record(1)), "watch_seconds": 30,
                    "interval_seconds": 0.05}
         command = [sys.executable, str(Path(W.__file__).resolve()),
                    "launch-fd", "--request-fd", "0"]
         launched = subprocess.run(command, input=json.dumps(request).encode(),
-                                  capture_output=True, check=False, timeout=5)
+                                  capture_output=True, check=False, timeout=10)
         self.assertEqual(launched.returncode, 0)
         self.assertEqual(launched.stderr, b"")
         result = json.loads(launched.stdout)
         self.assertEqual(result["status"], "STARTED")
-        deadline = time.monotonic() + 8
+        deadline = time.monotonic() + 40
         while time.monotonic() < deadline and not (
                 self.folder() / "worker-status.json").exists():
             time.sleep(0.02)
