@@ -155,9 +155,9 @@ def test_recover_from_verified_archive_after_original_is_removed(tmp_path, monke
         kwargs = {"source_path": source,
                   "archive_root": base / ".forseti" / "session_archive",
                   "provider": "codex", "session_id": "source-deletion-test",
-                  "max_bytes": max(map(len, source.read_bytes().splitlines(keepends=True)))}
+                  "max_bytes": 25}
         archive = None
-        for _ in range(12):
+        for _ in range(80):
             archive = sync_source(**kwargs)
             if archive["status"] == "READY":
                 break

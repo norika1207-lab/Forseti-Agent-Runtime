@@ -91,8 +91,14 @@ def _raw_lines(paths: list[Path]):
 
 
 def _archived_lines(manifest_path: str):
+    pending = b""
     for chunk in iter_plaintext_chunks(manifest_path):
-        yield from chunk.splitlines(keepends=True)
+        pieces = (pending + chunk).split(b"\n")
+        for line in pieces[:-1]:
+            yield line + b"\n"
+        pending = pieces[-1]
+    if pending:
+        yield pending
 
 
 def _recover_records(line_factory, source_ref: str, provider: str,

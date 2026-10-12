@@ -80,7 +80,7 @@ class SourceArchiveTest(unittest.TestCase):
         self.source.write_bytes(record(1) * 5000)
         first = self.sync()
         self.assertEqual(first["status"], "IN_PROGRESS")
-        self.assertEqual(first["archived_bytes"], len(record(1)))
+        self.assertEqual(first["archived_bytes"], self.kwargs["max_bytes"])
         self.assertGreater(first["source_bytes"], first["archived_bytes"])
 
     def test_growing_source_resumes_without_truncation(self):
@@ -94,25 +94,33 @@ class SourceArchiveTest(unittest.TestCase):
         _, archived = self.chunks(outcome)
         self.assertTrue(archived == initial + record(2))
 
-    def test_incomplete_final_record_waits_then_resumes(self):
+    def test_partial_final_record_is_preserved_and_resumes(self):
         full = record(1) + record(2)
         self.source.write_bytes(record(1) + record(2)[:-2])
         first = self.sync()
         self.assertEqual(first["status"], "IN_PROGRESS")
-        self.assertEqual(first["archived_bytes"], len(record(1)))
-        self.assertEqual(self.sync()["reason"], "awaiting_complete_record")
+        self.assertEqual(first["archived_bytes"], self.kwargs["max_bytes"])
+        self.sync()
         with self.source.open("ab") as output:
             output.write(full[len(record(1) + record(2)[:-2]):])
         self.assertEqual(self.sync()["status"], "IN_PROGRESS")
+        for _ in range(8):
+            result = self.sync()
+            if result["status"] == "READY":
+                break
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(self.chunks(result)[1], full)
 
-    def test_finalized_source_with_incomplete_jsonl_is_unknown(self):
+    def test_finalized_source_with_incomplete_jsonl_is_backed_up_raw(self):
         self.source.write_bytes(record(1) + b'{"n":')
         self.kwargs["source_finalized"] = True
         self.assertEqual(self.sync()["status"], "IN_PROGRESS")
-        bad = self.sync()
-        self.assertEqual(bad["status"], "UNKNOWN")
-        self.assertEqual(bad["reason"], "corrupt_source_jsonl")
-        self.assertIsNone(bad["archive_path"])
+        for _ in range(8):
+            result = self.sync()
+            if result["status"] == "READY":
+                break
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(self.chunks(result)[1], record(1) + b'{"n":')
 
     def test_finalized_empty_source_is_unknown(self):
         self.source.write_bytes(b"")
@@ -144,7 +152,7 @@ class SourceArchiveTest(unittest.TestCase):
         prefix = record(1)
         self.source.write_bytes(prefix + b'{"n": 2')
         first = self.sync()
-        self.assertEqual(first["archived_bytes"], len(prefix))
+        self.assertEqual(first["archived_bytes"], self.kwargs["max_bytes"])
         with self.source.open("r+b") as source:
             source.truncate(len(prefix))
         bad = self.sync()
@@ -199,14 +207,20 @@ class SourceArchiveTest(unittest.TestCase):
         _, archived = self.chunks(ready)
         self.assertTrue(archived == initial + oversized_for_old_default)
 
-    def test_record_above_hard_cap_fails_closed(self):
+    def test_record_above_hard_cap_is_split_and_preserved(self):
         self.source.write_bytes(large_record(A.MAX_CALL_BYTES + 1))
         result = A.sync_source(
             source_path=self.source, archive_root=self.root,
             provider="codex", session_id="session-123")
-        self.assertEqual(result["status"], "UNKNOWN")
-        self.assertEqual(result["reason"], "record_exceeds_budget")
-        self.assertFalse(result["auto_inject"])
+        self.assertEqual(result["status"], "IN_PROGRESS")
+        for _ in range(5):
+            result = A.sync_source(
+                source_path=self.source, archive_root=self.root,
+                provider="codex", session_id="session-123")
+            if result["status"] == "READY":
+                break
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(self.chunks(result)[1], self.source.read_bytes())
 
     def test_tamper_after_ready_revokes_status(self):
         self.source.write_bytes(record(1))
@@ -461,7 +475,8 @@ class SourceArchiveTest(unittest.TestCase):
         part = Path(second["archive_path"]) / manifest["chunks"][1]["name"]
         reader = A.iter_plaintext_chunks(second["manifest_path"])
         try:
-            self.assertTrue(next(reader) == record(1))
+            self.assertTrue(next(reader) == (record(1) + record(2))[:
+                self.kwargs["max_bytes"]])
             corrupted = bytearray(part.read_bytes())
             corrupted[-1] ^= 1
             part.write_bytes(corrupted)

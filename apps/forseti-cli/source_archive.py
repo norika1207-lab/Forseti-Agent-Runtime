@@ -357,27 +357,10 @@ def _chain(previous: str, offset: int, size: int, digest: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-def _complete_lines(payload: bytes) -> bool:
-    # The raw layer preserves source bytes even if a provider wrote a bad row.
-    # Semantic recovery validates JSON separately and must fail closed there.
-    return bool(payload) and payload.endswith(b"\n")
-
-
 def _read_chunk(source, offset: int, source_size: int, budget: int,
                 source_finalized: bool) -> bytes:
     source.seek(offset)
-    payload = bytearray()
-    while offset + len(payload) < source_size and len(payload) < budget:
-        remaining = min(source_size - offset - len(payload), budget - len(payload))
-        line = source.readline(remaining)
-        if not line.endswith(b"\n"):
-            if source_size - offset - len(payload) > remaining and not payload:
-                raise _Failure("record_exceeds_budget")
-            if source_finalized and source_size - offset - len(payload) <= remaining:
-                raise _Failure("corrupt_source_jsonl")
-            break
-        payload.extend(line)
-    return bytes(payload)
+    return source.read(min(source_size - offset, budget))
 
 
 def _read_manifest(path: Path, source: Path | None, provider: str | None,
@@ -501,7 +484,7 @@ def _verify_part(path: Path, source, offset: int, expected: dict | None,
         raise _Failure("chunk_exceeds_budget")
     if expected and (expected["size"] != size or expected["sha256"] != digest):
         raise _Failure("corrupt_archive_chunk")
-    if not _complete_lines(payload):
+    if not payload:
         raise _Failure("corrupt_archive_chunk")
     source.seek(offset)
     if source.read(size) != payload:
@@ -738,7 +721,7 @@ def _read_encrypted_part(folder: Path, chunk: dict, key: bytes,
             != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
         raise _Failure("corrupt_archive_chunk")
     plaintext = _decrypt(key, ciphertext, provider, session_id, chunk["offset"])
-    if len(plaintext) != chunk["size"] or not _complete_lines(plaintext):
+    if len(plaintext) != chunk["size"] or not plaintext:
         raise _Failure("corrupt_archive_chunk")
     return plaintext
 

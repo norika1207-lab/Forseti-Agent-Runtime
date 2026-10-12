@@ -86,7 +86,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertFalse(result["auto_inject"])
 
     def test_duplicate_launch_has_one_live_worker(self):
-        self.source.write_bytes(record(1)[:-1])
+        self.source.write_bytes(b"")
         options = dict(self.kwargs, watch_seconds=0.4)
         first = W.launch_worker(**options)
         self.assertEqual(first["status"], "STARTED")
@@ -178,7 +178,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         verified = A.verified_chunks(self.folder() / "manifest.enc")
         self.assertEqual(verified["archived_bytes"], size)
 
-    def test_default_worker_fails_closed_above_hard_cap(self):
+    def test_default_worker_preserves_record_above_hard_cap(self):
         prefix, suffix = b'{"payload":"', b'"}\n'
         size = A.MAX_CALL_BYTES + 1
         self.source.write_bytes(prefix + b"x" * (size - len(prefix) - len(suffix))
@@ -187,10 +187,9 @@ class ArchiveWorkerTest(unittest.TestCase):
                    if key != "max_bytes"}
         result = W.launch_worker(**options)
         self.assertEqual(result["status"], "STARTED")
-        self.assertEqual(self.wait_child(result["pid"]), 2)
+        self.assertEqual(self.wait_child(result["pid"]), 0)
         receipt = self.receipt()
-        self.assertEqual(receipt["status"], "UNKNOWN")
-        self.assertEqual(receipt["reason"], "record_exceeds_budget")
+        self.assertEqual(receipt["status"], "READY")
 
     def test_launch_fd_stdin_contract_and_child_argv_privacy(self):
         self.source.write_bytes(record(1))
