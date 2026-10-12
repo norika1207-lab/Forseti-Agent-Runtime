@@ -240,11 +240,22 @@ class ExpandedPagesMatchData(unittest.TestCase):
         真實資料上這四格都有東西，所以這裡直接釘住有列。
         哪天真的變成 0，這條會紅，然後由人去看是資料沒了還是畫面死了。
         """
-        dom = RC.strip_fixture(_shot_x().dom)
-        for _k, cls, row_cls, _lk, zh in RC.EXPANDED_BOXES:
+        shot = _shot_x()
+        dom = RC.strip_fixture(shot.dom)
+        for key, cls, row_cls, list_key, zh in RC.EXPANDED_BOXES:
             with self.subTest(cls=cls):
                 frag = RC._box_html(dom, cls)
                 self.assertIsNotNone(frag, f"「{zh}」那一格不在")
+                data = RC._expanded_data(shot, key)
+                rows = data.get(list_key) if data else None
+                if key == "workflow" and not rows:
+                    self.assertEqual(RC._count_class(frag, row_cls), 0)
+                    self.assertTrue(
+                        "沒有在跑的 workflow" in frag
+                        or RC._count_class(frag, "none") > 0,
+                        "沒有 workflow 時應顯示明確空狀態",
+                    )
+                    continue
                 self.assertGreater(
                     RC._count_class(frag, row_cls), 0,
                     f"「{zh}」那一格在，可是一列都沒有")
