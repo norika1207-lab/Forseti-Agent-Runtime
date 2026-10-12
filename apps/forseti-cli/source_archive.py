@@ -579,7 +579,8 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
                 if info.st_size < data["source_size_seen"]:
                     raise _Failure("source_truncated")
                 if (info.st_size == data["source_size_seen"]
-                        and data["source_mtime_ns"] not in (0, info.st_mtime_ns)):
+                        and data["source_mtime_ns"] not in (0, info.st_mtime_ns)
+                        and data["archived_bytes"] != info.st_size):
                     raise _Failure("source_modified")
                 offset = data["archived_bytes"]
                 part = folder / _chunk_name(key, folder, offset)

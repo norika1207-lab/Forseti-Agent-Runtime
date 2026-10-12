@@ -152,6 +152,45 @@ class SourceArchiveTest(unittest.TestCase):
         self.assertIn(bad["reason"], ("source_modified", "source_identity_changed",
                                      "archive_source_prefix_mismatch"))
 
+    def test_same_bytes_new_mtime_are_reaudited(self):
+        original = record(1) + record(2)
+        local = tempfile.TemporaryDirectory()
+        self.addCleanup(local.cleanup)
+        self.source = Path(local.name) / "source.jsonl"
+        self.kwargs["source_path"] = self.source
+        self.kwargs["max_bytes"] = len(original)
+        self.source.write_bytes(original)
+        self.sync()
+        self.assertEqual(self.sync()["status"], "READY")
+        stat_before = self.source.stat()
+        os.utime(self.source, ns=(stat_before.st_atime_ns,
+                                  stat_before.st_mtime_ns + 1_000_000_000))
+        result = self.sync()
+        for _ in range(8):
+            if result["status"] == "READY":
+                break
+            result = self.sync()
+        self.assertEqual(result["status"], "READY")
+        self.assertEqual(self.chunks(result)[1], original)
+
+    def test_same_size_changed_bytes_still_fail_reaudit(self):
+        original = record(1) + record(2)
+        local = tempfile.TemporaryDirectory()
+        self.addCleanup(local.cleanup)
+        self.source = Path(local.name) / "source.jsonl"
+        self.kwargs["source_path"] = self.source
+        self.kwargs["max_bytes"] = len(original)
+        self.source.write_bytes(original)
+        self.sync()
+        self.assertEqual(self.sync()["status"], "READY")
+        stat_before = self.source.stat()
+        self.source.write_bytes(record(9) + record(2))
+        os.utime(self.source, ns=(stat_before.st_atime_ns,
+                                  stat_before.st_mtime_ns + 1_000_000_000))
+        result = self.sync()
+        self.assertEqual(result["status"], "UNKNOWN")
+        self.assertEqual(result["reason"], "archive_source_prefix_mismatch")
+
     def test_truncated_unarchived_tail_is_unknown(self):
         prefix = record(1)
         self.source.write_bytes(prefix + b'{"n": 2')
