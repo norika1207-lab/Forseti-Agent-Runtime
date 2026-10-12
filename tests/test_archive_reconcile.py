@@ -19,6 +19,7 @@ class ArchiveReconcileTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.receipt = Path(self.temp.name) / "receipt.json"
+        self.lock = Path(self.temp.name) / "backfill.lock"
 
     def test_success_receipt_is_aggregate_only(self):
         result = {"inventory": 2, "next_index": 2,
@@ -27,7 +28,7 @@ class ArchiveReconcileTest(unittest.TestCase):
                   "scan_complete": True, "batch_all_ready": True}
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "import_batch", return_value=result)):
-            self.assertEqual(R.run_once(receipt=self.receipt), 0)
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 0)
         payload = json.loads(self.receipt.read_text())
         self.assertEqual(payload["status"], "READY")
         self.assertEqual(payload["scanned"], 2)
@@ -42,7 +43,7 @@ class ArchiveReconcileTest(unittest.TestCase):
                   "scan_complete": False, "batch_all_ready": False}
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "import_batch", return_value=result)):
-            self.assertEqual(R.run_once(receipt=self.receipt), 2)
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
         payload = self.receipt.read_text()
         self.assertNotIn("PRIVATE-ID", payload)
         self.assertEqual(json.loads(payload)["status"], "UNKNOWN")
@@ -51,7 +52,15 @@ class ArchiveReconcileTest(unittest.TestCase):
         with (mock.patch.object(R, "_check_archive_access",
                                 side_effect=PermissionError(1, "denied")),
               mock.patch.object(R.archive_backfill, "import_batch") as scan):
-            self.assertEqual(R.run_once(receipt=self.receipt), 2)
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
         scan.assert_not_called()
         payload = json.loads(self.receipt.read_text())
         self.assertEqual(payload["reason"], "newdrive_permission_denied")
+
+    def test_second_reconciler_does_not_overlap_or_replace_receipt(self):
+        self.receipt.write_text("older receipt")
+        with (mock.patch.object(R.fcntl, "flock", side_effect=BlockingIOError),
+              mock.patch.object(R.archive_backfill, "import_batch") as scan):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 3)
+        scan.assert_not_called()
+        self.assertEqual(self.receipt.read_text(), "older receipt")

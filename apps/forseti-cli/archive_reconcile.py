@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import os
 import secrets
 import sys
@@ -15,6 +16,7 @@ import source_archive
 
 
 RECEIPT = source_archive._ANCHOR_DIR / "backfill-status.json"
+LOCK = source_archive._ANCHOR_DIR / "backfill.lock"
 MAX_SECONDS = 360
 MAX_SOURCES = 1000000
 
@@ -47,26 +49,35 @@ def _write_receipt(path: Path, result: dict) -> None:
 def run_once(*, home: Path = Path.home(),
              archive_root: Path = archive_backfill.DEFAULT_ROOT,
              receipt: Path = RECEIPT, seconds: float = MAX_SECONDS,
-             limit: int = MAX_SOURCES) -> int:
+             limit: int = MAX_SOURCES, lock: Path = LOCK) -> int:
     source_archive._local_apfs()
+    source_archive._secure_local_dir(lock.parent)
+    lock_fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
-        _check_archive_access(archive_root)
-        result = archive_backfill.import_batch(
-            home=home, archive_root=archive_root, start=0, limit=limit,
-            seconds=seconds)
-        ready = result["scan_complete"] and result["batch_all_ready"]
-        summary = {"status": "READY" if ready else "UNKNOWN",
-                   "at": int(time.time()), "inventory": result["inventory"],
-                   "scanned": result["next_index"],
-                   "counts": result["counts"],
-                   "unknown_reasons": result["unknown_reasons"]}
-    except Exception as exc:
-        ready = False
-        summary = {"status": "UNKNOWN", "at": int(time.time()),
-                   "reason": ("newdrive_permission_denied" if isinstance(exc, PermissionError)
-                              else "reconcile_" + type(exc).__name__.lower())}
-    _write_receipt(receipt, summary)
-    return 0 if ready else 2
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 3
+        try:
+            _check_archive_access(archive_root)
+            result = archive_backfill.import_batch(
+                home=home, archive_root=archive_root, start=0, limit=limit,
+                seconds=seconds)
+            ready = result["scan_complete"] and result["batch_all_ready"]
+            summary = {"status": "READY" if ready else "UNKNOWN",
+                       "at": int(time.time()), "inventory": result["inventory"],
+                       "scanned": result["next_index"],
+                       "counts": result["counts"],
+                       "unknown_reasons": result["unknown_reasons"]}
+        except Exception as exc:
+            ready = False
+            summary = {"status": "UNKNOWN", "at": int(time.time()),
+                       "reason": ("newdrive_permission_denied" if isinstance(exc, PermissionError)
+                                  else "reconcile_" + type(exc).__name__.lower())}
+        _write_receipt(receipt, summary)
+        return 0 if ready else 2
+    finally:
+        os.close(lock_fd)
 
 
 if __name__ == "__main__":

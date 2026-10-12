@@ -278,6 +278,44 @@ fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_i
     }
 }
 
+fn spawn_archive_reconciler() {
+    let contents = std::env::current_exe().ok().and_then(|exe| {
+        exe.parent()?.parent().map(Path::to_path_buf)
+    });
+    let Some(script) = contents.map(|path| path.join(
+        "Resources/forseti-cli/archive_reconcile.py")) else { return };
+    if !script.is_file() { return; }
+    let Some(py) = find_python() else { return };
+    let Some(home) = std::env::var_os("HOME") else { return };
+    std::thread::spawn(move || loop {
+        if let Ok(mut child) = Command::new(&py)
+            .arg("-B").arg(&script)
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin")
+            .env("LANG", "en_US.UTF-8")
+            .env("PYTHONDONTWRITEBYTECODE", "1")
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn() {
+            let started = Instant::now();
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if started.elapsed() < Duration::from_secs(420) => {
+                        std::thread::sleep(Duration::from_secs(1));
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_secs(900));
+    });
+}
+
 fn transcript_session_id(path: &Path) -> Option<String> {
     let stem = path.file_stem()?.to_str()?;
     let bytes = stem.as_bytes();
@@ -1156,6 +1194,7 @@ fn main() {
         })
         .setup(|app| {
             spawn_watcher(app.handle().clone());
+            spawn_archive_reconciler();
             spawn_codex_focus_watcher(app.handle().clone());
             spawn_provider_focus_watcher(app.handle().clone());
 
