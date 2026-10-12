@@ -1,4 +1,4 @@
-"""The scheduled archive receipt contains counts, never transcript content."""
+"""The periodic receipt is aggregate-only; progress is private and authenticated."""
 
 import json
 import os
@@ -18,118 +18,119 @@ class ArchiveReconcileTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.receipt = Path(self.temp.name) / "receipt.json"
-        self.lock = Path(self.temp.name) / "backfill.lock"
-        self.inventory = [("codex", "one", Path("/one")),
-                          ("claude", "two", Path("/two"))]
+        base = Path(self.temp.name)
+        self.receipt = base / "receipt.json"
+        self.lock = base / "backfill.lock"
+        self.one = base / "one.jsonl"
+        self.two = base / "two.jsonl"
+        self.one.write_bytes(b"private one\n")
+        self.two.write_bytes(b"private two\n")
+        self.inventory = [("codex", "PRIVATE-ONE", self.one),
+                          ("claude", "PRIVATE-TWO", self.two)]
 
-    def test_success_receipt_is_aggregate_only(self):
-        result = {"inventory": 2, "next_index": 2,
-                  "counts": {"READY": 2, "UNKNOWN": 0, "IN_PROGRESS": 0},
-                  "unknown_reasons": {}, "unknown_items": [],
-                  "scan_complete": True, "batch_all_ready": True}
+    def sync_ready(self, **kwargs):
+        return {"status": "READY", "reason": "caught_up",
+                "source_bytes": Path(kwargs["source_path"]).stat().st_size}
+
+    def run_with(self, *, limit=R.MAX_SOURCES):
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
-              mock.patch.object(R.archive_backfill, "import_batch", return_value=result)):
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 0)
-        payload = json.loads(self.receipt.read_text())
-        self.assertEqual(payload["status"], "READY")
-        self.assertEqual(payload["scanned"], 2)
-        self.assertNotIn("unknown_items", payload)
-        self.assertEqual(stat.S_IMODE(self.receipt.stat().st_mode), 0o600)
+              mock.patch.object(R.source_archive, "sync_source", side_effect=self.sync_ready) as sync):
+            code = R.run_once(receipt=self.receipt, lock=self.lock, limit=limit)
+        return code, sync
 
-    def test_partial_run_exits_nonzero_without_source_identity(self):
-        result = {"inventory": 2, "next_index": 1,
-                  "counts": {"READY": 0, "UNKNOWN": 1, "IN_PROGRESS": 0},
-                  "unknown_reasons": {"source_modified": 1},
-                  "unknown_items": [{"session_id": "PRIVATE-ID"}],
-                  "scan_complete": False, "batch_all_ready": False}
+    def test_full_receipt_and_authenticated_progress_hide_source_identity(self):
+        code, sync = self.run_with()
+        self.assertEqual(code, 0)
+        self.assertEqual(sync.call_count, 2)
+        summary = json.loads(self.receipt.read_text())
+        self.assertEqual(summary["status"], "READY")
+        self.assertEqual(summary["counts"]["READY"], 2)
+        self.assertEqual(summary["remaining"], 0)
+        self.assertNotIn("PRIVATE", self.receipt.read_text())
+        progress = self.receipt.with_name("backfill-progress.json")
+        self.assertNotIn("PRIVATE", progress.read_text())
+        self.assertEqual(stat.S_IMODE(progress.stat().st_mode), 0o600)
+
+    def test_inserted_source_keeps_done_work(self):
+        code, sync = self.run_with(limit=1)
+        self.assertEqual(code, 2)
+        self.assertEqual(Path(sync.call_args.kwargs["source_path"]), self.one)
+        extra = Path(self.temp.name) / "new.jsonl"
+        extra.write_bytes(b"private new\n")
+        self.inventory.insert(0, ("claude", "PRIVATE-NEW", extra))
+        code, sync = self.run_with(limit=1)
+        self.assertEqual(code, 2)
+        self.assertEqual(Path(sync.call_args.kwargs["source_path"]), extra)
+        self.assertEqual(json.loads(self.receipt.read_text())["counts"]["READY"], 2)
+        code, sync = self.run_with(limit=1)
+        self.assertEqual(code, 0)
+        self.assertEqual(Path(sync.call_args.kwargs["source_path"]), self.two)
+
+    def test_changed_source_is_rechecked_without_rescanning_other(self):
+        self.assertEqual(self.run_with()[0], 0)
+        with self.one.open("ab") as output:
+            output.write(b"next line\n")
+        code, sync = self.run_with()
+        self.assertEqual(code, 0)
+        self.assertEqual(sync.call_count, 1)
+        self.assertEqual(Path(sync.call_args.kwargs["source_path"]), self.one)
+
+    def test_source_changed_during_sync_is_not_marked_ready(self):
+        def change_source(**kwargs):
+            result = self.sync_ready(**kwargs)
+            if Path(kwargs["source_path"]) == self.one:
+                self.one.write_bytes(b"changed one\n")
+                before = self.one.stat()
+                os.utime(self.one, ns=(before.st_atime_ns, before.st_mtime_ns + 1000000000))
+            return result
+
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
-              mock.patch.object(R.archive_backfill, "import_batch", return_value=result)):
+              mock.patch.object(R.source_archive, "sync_source", side_effect=change_source)):
             self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-        payload = self.receipt.read_text()
-        self.assertNotIn("PRIVATE-ID", payload)
-        self.assertEqual(json.loads(payload)["status"], "IN_PROGRESS")
+        summary = json.loads(self.receipt.read_text())
+        self.assertEqual(summary["status"], "IN_PROGRESS")
+        self.assertEqual(summary["counts"]["READY"], 1)
+        self.assertEqual(summary["remaining"], 1)
 
-    def test_next_batch_resumes_without_double_counting(self):
-        first = {"inventory": 2, "next_index": 1,
-                 "counts": {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 0},
-                 "unknown_reasons": {}, "scan_complete": False,
-                 "batch_all_ready": True}
-        second = {"inventory": 2, "next_index": 2,
-                  "counts": {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 0},
-                  "unknown_reasons": {}, "scan_complete": True,
-                  "batch_all_ready": True}
-        with (mock.patch.object(R, "_check_archive_access"),
-              mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
-              mock.patch.object(R.archive_backfill, "import_batch", side_effect=[first, second]) as scan):
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 0)
-        self.assertEqual([call.kwargs["start"] for call in scan.call_args_list], [0, 1])
-        payload = json.loads(self.receipt.read_text())
-        self.assertEqual(payload["status"], "READY")
-        self.assertEqual(payload["counts"]["READY"], 2)
+    def test_tampered_progress_cannot_skip_sources(self):
+        self.assertEqual(self.run_with()[0], 0)
+        progress = self.receipt.with_name("backfill-progress.json")
+        data = json.loads(progress.read_text())
+        data["done"].clear()
+        progress.write_text(json.dumps(data))
+        code, sync = self.run_with()
+        self.assertEqual(code, 0)
+        self.assertEqual(sync.call_count, 2)
 
-    def test_new_source_after_cursor_keeps_progress(self):
-        first = {"inventory": 2, "next_index": 1,
-                 "counts": {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 0},
-                 "unknown_reasons": {}, "scan_complete": False,
-                 "batch_all_ready": True}
-        changed = self.inventory + [("codex", "three", Path("/three"))]
-        with (mock.patch.object(R, "_check_archive_access"),
-              mock.patch.object(R.archive_backfill, "sources", side_effect=[self.inventory, changed]),
-              mock.patch.object(R.archive_backfill, "import_batch", side_effect=[first, first]) as scan):
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-        self.assertEqual([call.kwargs["start"] for call in scan.call_args_list], [0, 1])
-
-    def test_new_source_before_cursor_restarts_cycle(self):
-        first = {"inventory": 2, "next_index": 1,
-                 "counts": {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 0},
-                 "unknown_reasons": {}, "scan_complete": False,
-                 "batch_all_ready": True}
-        changed = [("claude", "zero", Path("/zero"))] + self.inventory
-        with (mock.patch.object(R, "_check_archive_access"),
-              mock.patch.object(R.archive_backfill, "sources", side_effect=[self.inventory, changed]),
-              mock.patch.object(R.archive_backfill, "import_batch", side_effect=[first, first]) as scan):
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-        self.assertEqual([call.kwargs["start"] for call in scan.call_args_list], [0, 0])
-
-    def test_running_receipt_is_written_before_batch(self):
-        def inspect(**_kwargs):
+    def test_running_receipt_precedes_source_sync(self):
+        def inspect(**kwargs):
             self.assertEqual(json.loads(self.receipt.read_text())["status"], "RUNNING")
-            raise RuntimeError("failed")
+            return self.sync_ready(**kwargs)
 
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
-              mock.patch.object(R.archive_backfill, "import_batch", side_effect=inspect)):
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-        self.assertEqual(json.loads(self.receipt.read_text())["reason"], "reconcile_runtimeerror")
+              mock.patch.object(R.source_archive, "sync_source", side_effect=inspect)):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 0)
 
-    def test_stage_receipt_identifies_access_check(self):
+    def test_newdrive_denial_fails_before_inventory(self):
         def check(_root):
             stage = self.receipt.with_name("reconcile-stage.json")
             self.assertEqual(json.loads(stage.read_text())["phase"], "check_access")
             raise PermissionError(1, "denied")
 
-        with mock.patch.object(R, "_check_archive_access", side_effect=check):
+        with (mock.patch.object(R, "_check_archive_access", side_effect=check),
+              mock.patch.object(R.archive_backfill, "sources") as sources):
             self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
+        sources.assert_not_called()
+        self.assertEqual(json.loads(self.receipt.read_text())["reason"],
+                         "newdrive_permission_denied")
 
-    def test_newdrive_denial_fails_before_inventory_scan(self):
-        with (mock.patch.object(R, "_check_archive_access",
-                                side_effect=PermissionError(1, "denied")),
-              mock.patch.object(R.archive_backfill, "import_batch") as scan):
-            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
-        scan.assert_not_called()
-        payload = json.loads(self.receipt.read_text())
-        self.assertEqual(payload["reason"], "newdrive_permission_denied")
-
-    def test_second_reconciler_does_not_overlap_or_replace_receipt(self):
+    def test_second_reconciler_does_not_replace_receipt(self):
         self.receipt.write_text("older receipt")
         with (mock.patch.object(R.fcntl, "flock", side_effect=BlockingIOError),
-              mock.patch.object(R.archive_backfill, "import_batch") as scan):
+              mock.patch.object(R.archive_backfill, "sources") as sources):
             self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 3)
-        scan.assert_not_called()
+        sources.assert_not_called()
         self.assertEqual(self.receipt.read_text(), "older receipt")

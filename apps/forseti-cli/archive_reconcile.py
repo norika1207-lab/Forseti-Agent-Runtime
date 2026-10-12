@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import secrets
+import stat
 import sys
 import time
 from pathlib import Path
@@ -20,6 +22,7 @@ RECEIPT = source_archive._ANCHOR_DIR / "backfill-status.json"
 LOCK = source_archive._ANCHOR_DIR / "backfill.lock"
 MAX_SECONDS = 300
 MAX_SOURCES = 500
+PROGRESS_VERSION = 1
 
 
 def _check_archive_access(root: Path) -> None:
@@ -56,28 +59,56 @@ def _inventory_digest(inventory: list[tuple[str, str, Path]]) -> str:
     return digest.hexdigest()
 
 
-def _resume(receipt: Path, digest: str,
-            inventory: list[tuple[str, str, Path]]) -> tuple[int, dict, dict, int]:
-    empty = {"READY": 0, "UNKNOWN": 0, "IN_PROGRESS": 0}
+def _source_key(provider: str, session_id: str, path: Path) -> str:
+    return hashlib.sha256((provider + "\0" + session_id + "\0" + str(path)).encode()).hexdigest()
+
+
+def _source_version(path: Path) -> list[int]:
+    info = path.stat()
+    return [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
+
+
+def _state_mac(done: dict[str, list[int]]) -> str:
+    payload = json.dumps({"version": PROGRESS_VERSION, "done": done},
+                         sort_keys=True, separators=(",", ":")).encode()
+    return hmac.new(source_archive._key(), b"reconcile-progress-v1\0" + payload,
+                    hashlib.sha256).hexdigest()
+
+
+def _load_progress(path: Path) -> dict[str, list[int]]:
     try:
-        if receipt.is_symlink() or receipt.stat().st_size > 65536:
-            return 0, empty, {}, int(time.time())
-        previous = json.loads(receipt.read_text())
-        cursor = previous.get("cursor")
-        counts = previous.get("counts")
-        reasons = previous.get("unknown_reasons")
-        if (type(cursor) is not int or not 0 <= cursor < len(inventory)
-                or (previous.get("inventory_sha256") != digest
-                    and previous.get("prefix_sha256") != _inventory_digest(inventory[:cursor]))
-                or not isinstance(counts, dict) or not isinstance(reasons, dict)
-                or any(type(counts.get(status)) is not int or counts[status] < 0
-                       for status in empty)
-                or counts["READY"] + counts["UNKNOWN"] != cursor
-                or any(type(value) is not int or value < 0 for value in reasons.values())):
-            return 0, empty, {}, int(time.time())
-        return cursor, {**counts, "IN_PROGRESS": 0}, reasons, previous.get("started_at", int(time.time()))
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 2000000:
+            return {}
+        data = json.loads(path.read_text())
+        done = data.get("done")
+        if (data.get("version") != PROGRESS_VERSION or not isinstance(done, dict)
+                or len(done) > 100000
+                or any(not isinstance(key, str) or len(key) != 64
+                       or not isinstance(value, list) or len(value) != 4
+                       or any(type(part) is not int or part < 0 for part in value)
+                       for key, value in done.items())
+                or not hmac.compare_digest(data.get("mac", ""), _state_mac(done))):
+            return {}
+        return done
     except (OSError, ValueError, TypeError):
-        return 0, empty, {}, int(time.time())
+        return {}
+
+
+def _write_progress(path: Path, done: dict[str, list[int]]) -> None:
+    _write_receipt(path, {"version": PROGRESS_VERSION, "done": done,
+                          "mac": _state_mac(done)})
+
+
+def _ready_count(inventory: list[tuple[str, str, Path]],
+                 done: dict[str, list[int]]) -> int:
+    count = 0
+    for provider, session_id, path in inventory:
+        try:
+            count += done.get(_source_key(provider, session_id, path)) == _source_version(path)
+        except OSError:
+            pass
+    return count
 
 
 def run_once(*, home: Path = Path.home(),
@@ -93,6 +124,7 @@ def run_once(*, home: Path = Path.home(),
         except BlockingIOError:
             return 3
         stage = receipt.with_name("reconcile-stage.json")
+        progress = receipt.with_name("backfill-progress.json")
         try:
             _write_receipt(stage, {"phase": "check_access", "at": int(time.time())})
             _check_archive_access(archive_root)
@@ -100,32 +132,80 @@ def run_once(*, home: Path = Path.home(),
             inventory = archive_backfill.sources(home)
             digest = _inventory_digest(inventory)
             _write_receipt(stage, {"phase": "resume", "at": int(time.time())})
-            cursor, counts, reasons, started_at = _resume(receipt, digest, inventory)
+            done = _load_progress(progress)
+            keys = {_source_key(provider, session_id, path)
+                    for provider, session_id, path in inventory}
+            done = {key: version for key, version in done.items() if key in keys}
+            ready_count = _ready_count(inventory, done)
+            reasons: dict[str, int] = {}
             summary = {"status": "RUNNING", "at": int(time.time()),
-                       "started_at": started_at, "inventory": len(inventory),
-                       "inventory_sha256": digest, "cursor": cursor,
-                       "prefix_sha256": _inventory_digest(inventory[:cursor]),
-                       "scanned": cursor, "counts": counts,
+                       "inventory": len(inventory), "inventory_sha256": digest,
+                       "cursor": ready_count, "scanned": ready_count,
+                       "remaining": len(inventory) - ready_count,
+                       "counts": {"READY": ready_count, "UNKNOWN": 0, "IN_PROGRESS": 0},
                        "unknown_reasons": reasons}
             _write_receipt(receipt, summary)
             _write_receipt(stage, {"phase": "batch", "at": int(time.time()),
-                                   "cursor": cursor, "inventory": len(inventory)})
-            result = archive_backfill.import_batch(
-                home=home, archive_root=archive_root, start=cursor, limit=limit,
-                seconds=seconds, inventory=inventory)
-            counts = {"READY": counts["READY"] + result["counts"]["READY"],
-                      "UNKNOWN": counts["UNKNOWN"] + result["counts"]["UNKNOWN"],
-                      "IN_PROGRESS": result["counts"]["IN_PROGRESS"]}
-            for reason, count in result["unknown_reasons"].items():
-                reasons[reason] = reasons.get(reason, 0) + count
-            cursor = result["next_index"]
-            ready = result["scan_complete"] and counts["UNKNOWN"] == 0 and counts["IN_PROGRESS"] == 0
-            summary.update(status="READY" if ready else "UNKNOWN" if result["scan_complete"] else "IN_PROGRESS",
-                           at=int(time.time()), cursor=cursor, scanned=cursor,
-                           prefix_sha256=_inventory_digest(inventory[:cursor]),
-                           counts=counts, unknown_reasons=reasons)
+                                   "cursor": ready_count, "inventory": len(inventory)})
+            begun = time.monotonic()
+            attempted = 0
+            incomplete = 0
+            for provider, session_id, path in inventory:
+                key = _source_key(provider, session_id, path)
+                try:
+                    version_before = _source_version(path)
+                    if done.get(key) == version_before:
+                        continue
+                except OSError:
+                    reasons["missing_source"] = reasons.get("missing_source", 0) + 1
+                    continue
+                if attempted >= limit or time.monotonic() - begun >= seconds:
+                    break
+                attempted += 1
+                while True:
+                    result = source_archive.sync_source(
+                        source_path=path, archive_root=archive_root,
+                        provider=provider, session_id=session_id,
+                        source_finalized=True)
+                    if result["status"] != "IN_PROGRESS" or time.monotonic() - begun >= seconds:
+                        break
+                if result["status"] == "READY":
+                    try:
+                        version = _source_version(path)
+                        if version == version_before and version[2] == result["source_bytes"]:
+                            done[key] = version
+                            ready_count += 1
+                        else:
+                            incomplete += 1
+                    except OSError:
+                        incomplete += 1
+                elif result["status"] == "UNKNOWN":
+                    reason = result["reason"]
+                    reasons[reason] = reasons.get(reason, 0) + 1
+                else:
+                    incomplete += 1
+                if attempted % 100 == 0 or time.monotonic() - begun >= seconds:
+                    _write_progress(progress, done)
+                    summary.update(at=int(time.time()), cursor=ready_count,
+                                   scanned=ready_count,
+                                   remaining=len(inventory) - ready_count,
+                                   counts={"READY": ready_count,
+                                           "UNKNOWN": sum(reasons.values()),
+                                           "IN_PROGRESS": incomplete},
+                                   unknown_reasons=reasons)
+                    _write_receipt(receipt, summary)
+                if time.monotonic() - begun >= seconds:
+                    break
+            _write_progress(progress, done)
+            ready_count = _ready_count(inventory, done)
+            ready = ready_count == len(inventory) and not reasons and not incomplete
+            summary.update(status="READY" if ready else "UNKNOWN" if reasons else "IN_PROGRESS",
+                           at=int(time.time()), cursor=ready_count, scanned=ready_count,
+                           remaining=len(inventory) - ready_count,
+                           counts={"READY": ready_count, "UNKNOWN": sum(reasons.values()),
+                                   "IN_PROGRESS": incomplete}, unknown_reasons=reasons)
             _write_receipt(stage, {"phase": "done", "at": int(time.time()),
-                                   "cursor": cursor, "inventory": len(inventory)})
+                                   "cursor": ready_count, "inventory": len(inventory)})
         except Exception as exc:
             ready = False
             summary = {"status": "UNKNOWN", "at": int(time.time()),
