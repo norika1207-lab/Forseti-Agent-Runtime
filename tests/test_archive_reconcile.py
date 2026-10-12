@@ -96,6 +96,25 @@ class ArchiveReconcileTest(unittest.TestCase):
         self.assertEqual(summary["counts"]["READY"], 1)
         self.assertEqual(summary["remaining"], 1)
 
+    def test_long_active_source_does_not_starve_later_sources(self):
+        def sync(**kwargs):
+            if Path(kwargs["source_path"]) == self.one:
+                time.sleep(0.003)
+                return {"status": "IN_PROGRESS", "reason": "auditing"}
+            return self.sync_ready(**kwargs)
+
+        with (mock.patch.object(R, "_check_archive_access"),
+              mock.patch.object(R, "MAX_SOURCE_SECONDS", 0.001),
+              mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
+              mock.patch.object(R.source_archive, "sync_source", side_effect=sync) as called):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
+        self.assertEqual([Path(call.kwargs["source_path"]) for call in called.call_args_list],
+                         [self.one, self.two])
+        summary = json.loads(self.receipt.read_text())
+        self.assertEqual(summary["status"], "IN_PROGRESS")
+        self.assertEqual(summary["counts"],
+                         {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 1})
+
     def test_tampered_progress_cannot_skip_sources(self):
         self.assertEqual(self.run_with()[0], 0)
         progress = self.receipt.with_name("backfill-progress.json")

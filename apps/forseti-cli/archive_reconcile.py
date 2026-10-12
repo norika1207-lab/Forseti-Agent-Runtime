@@ -22,6 +22,7 @@ RECEIPT = source_archive._ANCHOR_DIR / "backfill-status.json"
 LOCK = source_archive._ANCHOR_DIR / "backfill.lock"
 MAX_SECONDS = 300
 MAX_SOURCES = 500
+MAX_SOURCE_SECONDS = 10
 PROGRESS_VERSION = 1
 MAX_PROGRESS_BYTES = 32 * 1024 * 1024
 
@@ -174,12 +175,15 @@ def run_once(*, home: Path = Path.home(),
                 if attempted >= limit or time.monotonic() - begun >= seconds:
                     break
                 attempted += 1
+                source_begun = time.monotonic()
                 while True:
                     result = source_archive.sync_source(
                         source_path=path, archive_root=archive_root,
                         provider=provider, session_id=session_id,
                         source_finalized=True)
-                    if result["status"] != "IN_PROGRESS" or time.monotonic() - begun >= seconds:
+                    if (result["status"] != "IN_PROGRESS"
+                            or time.monotonic() - begun >= seconds
+                            or time.monotonic() - source_begun >= MAX_SOURCE_SECONDS):
                         break
                 if result["status"] == "READY":
                     try:
