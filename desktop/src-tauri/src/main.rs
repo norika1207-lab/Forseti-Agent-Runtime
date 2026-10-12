@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{mpsc::channel, Mutex, OnceLock};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::Manager;
 
 use notify::{RecursiveMode, Watcher};
@@ -262,6 +262,87 @@ fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_i
     }
 }
 
+fn transcript_session_id(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let bytes = stem.as_bytes();
+    let id = bytes.get(bytes.len().checked_sub(36)?..)?;
+    if id.iter().enumerate().all(|(index, byte)| {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            *byte == b'-'
+        } else {
+            byte.is_ascii_hexdigit()
+        }
+    }) {
+        String::from_utf8(id.to_vec()).ok()
+    } else {
+        None
+    }
+}
+
+fn changed_transcript(
+    path: &Path,
+    roots: &[(PathBuf, &'static str)],
+) -> Option<(PathBuf, &'static str, String)> {
+    if path.extension().and_then(|value| value.to_str()) != Some("jsonl") {
+        return None;
+    }
+    let source = path.canonicalize().ok()?;
+    if !source.is_file() { return None; }
+    if let Ok(age) = SystemTime::now().duration_since(source.metadata().ok()?.modified().ok()?) {
+        if age > Duration::from_secs(600) { return None; }
+    }
+    let session_id = transcript_session_id(&source)?;
+    roots.iter().find_map(|(root, provider)| {
+        source.starts_with(root).then(|| (source.clone(), *provider, session_id.clone()))
+    })
+}
+
+#[cfg(test)]
+mod archive_watcher_tests {
+    use super::{changed_transcript, transcript_session_id};
+    use std::path::Path;
+
+    #[test]
+    fn codex_and_claude_transcript_names_yield_their_session_ids() {
+        let id = "01a0c213-35e3-7053-95fc-36a449c5d676";
+        assert_eq!(transcript_session_id(Path::new(&format!("{id}.jsonl"))), Some(id.into()));
+        assert_eq!(transcript_session_id(Path::new(&format!(
+            "rollout-2026-09-21T11-47-14-{id}.jsonl"
+        ))), Some(id.into()));
+    }
+
+    #[test]
+    fn unrelated_jsonl_is_not_archived_as_a_session() {
+        assert_eq!(transcript_session_id(Path::new("audit.jsonl")), None);
+        assert_eq!(transcript_session_id(Path::new(
+            "rollout-2026-09-21T11-47-14-01a0c213-35e3-7053-95fc-36a449c5d67x.jsonl"
+        )), None);
+    }
+
+    #[test]
+    fn changed_transcript_requires_a_canonical_file_under_a_provider_root() {
+        let base = std::env::temp_dir().join(format!(
+            "forseti-archive-watcher-{}", std::process::id()
+        ));
+        let codex = base.join("codex");
+        let outside = base.join("outside");
+        std::fs::create_dir_all(&codex).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let id = "01a0c213-35e3-7053-95fc-36a449c5d676";
+        let valid = codex.join(format!("rollout-2026-09-21T11-47-14-{id}.jsonl"));
+        let invalid = outside.join(format!("{id}.jsonl"));
+        std::fs::write(&valid, b"{}\n").unwrap();
+        std::fs::write(&invalid, b"{}\n").unwrap();
+        let roots = vec![(codex.canonicalize().unwrap(), "codex")];
+        let found = changed_transcript(&valid, &roots).unwrap();
+        assert_eq!(found.0, valid.canonicalize().unwrap());
+        assert_eq!(found.1, "codex");
+        assert_eq!(found.2, id);
+        assert!(changed_transcript(&invalid, &roots).is_none());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+}
+
 static LAST_PROVIDER: OnceLock<Mutex<String>> = OnceLock::new();
 
 #[cfg(target_os = "macos")]
@@ -342,15 +423,23 @@ fn spawn_watcher(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let Some(repo) = find_repo() else { return };
         let mut targets = vec![repo.join(".forseti")];
+        let mut transcript_roots = Vec::new();
         if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
-            targets.push(home.join(".claude/projects"));
+            transcript_roots.push((home.join(".claude/projects"), "claude"));
+            transcript_roots.push((home.join(
+                "Library/Application Support/Claude/local-agent-mode-sessions"), "claude"));
             targets.push(home.join("Library/Application Support/Claude/claude-code-sessions"));
-            targets.push(home.join(".codex/sessions"));
+            transcript_roots.push((home.join(".codex/sessions"), "codex"));
             // Codex records a task switch in its desktop log even when the
             // selected transcript itself is idle.  Watching JSONL alone can
             // refresh content, but it cannot follow the owner's selection.
             targets.push(home.join("Library/Logs/com.openai.codex"));
         }
+        transcript_roots.retain(|(root, _)| root.is_dir());
+        transcript_roots = transcript_roots.into_iter().filter_map(|(root, provider)| {
+            root.canonicalize().ok().map(|root| (root, provider))
+        }).collect();
+        targets.extend(transcript_roots.iter().map(|(root, _)| root.clone()));
         targets.retain(|target| target.is_dir());
         if targets.is_empty() { return; }
         let (tx, rx) = channel();
@@ -365,6 +454,9 @@ fn spawn_watcher(app: tauri::AppHandle) {
             }
         }
         if watched == 0 { return; }
+        let contents = std::env::current_exe().ok().and_then(|exe| {
+            exe.parent()?.parent().map(Path::to_path_buf)
+        });
         // 合併短時間內的連續變化，但不能等整棵 Session 目錄安靜。
         // owner 同時跑多個 Session 時，總會有某一份 JSONL 在寫；舊版
         // 只有 recv_timeout 才 emit，結果目前視窗可以數十分鐘收不到更新。
@@ -375,7 +467,17 @@ fn spawn_watcher(app: tauri::AppHandle) {
         let mut last_emit = std::time::Instant::now() - interval;
         loop {
             match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(_) => {
+                Ok(Ok(event)) => {
+                    if let Some(contents) = &contents {
+                        for path in &event.paths {
+                            if let Some((source, provider, session_id)) =
+                                changed_transcript(path, &transcript_roots) {
+                                if let Some(source) = source.to_str() {
+                                    schedule_raw_archive(contents, source, provider, &session_id);
+                                }
+                            }
+                        }
+                    }
                     pending = true;
                     if last_emit.elapsed() >= interval {
                         pending = false;
@@ -383,6 +485,7 @@ fn spawn_watcher(app: tauri::AppHandle) {
                         let _ = app.emit("forseti://changed", ());
                     }
                 }
+                Ok(Err(_)) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     if pending && last_emit.elapsed() >= interval {
                         pending = false;
