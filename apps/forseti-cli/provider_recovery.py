@@ -186,4 +186,5 @@ def _recover_records(line_factory, source_ref: str, provider: str,
         result["reason"] = "conversation_text_complete_pre_anchor"
         result["scope"] = "owner_and_ai_text_not_tool_payloads"
         result["compaction_source_ref"] = f"{source_ref}:{cutoff}"
+        result["recovered_end_round"] = rows[-1]["n"]
     return result

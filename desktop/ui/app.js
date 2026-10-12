@@ -2252,7 +2252,9 @@ function markerEvidence(s, kind, index = 0, event = null) {
       body: `發生於第 ${s.n} 輪；普通對話輪次沒有因這筆事件重新編號。`,
       evidence: [`原始紀錄第 ${event.line} 行`,
         event.at ? `時間：${hhmmss(event.at)}` : "時間未提供",
-        `來源 size：${event.size ?? "未知"}`].join("\n")};
+        `來源 size：${event.size ?? "未知"}`].join("\n"),
+      ordinal: Number(event.ordinal), roundNumber: Number(s.n),
+      expectedLine: Number(event.line)};
   }
   if (kind === "white") {
     const b = (s.betrayals || [])[index] || {};
@@ -2307,12 +2309,14 @@ function markerEvidence(s, kind, index = 0, event = null) {
 }
 
 let pendingNodeMarker = null;
+let nodeOpenSequence = 0;
 function openNodeWithMarker(s, marker) {
   pendingNodeMarker = marker;
   openNode(s);
 }
 
 function openNode(s) {
+  const openSequence = ++nodeOpenSequence;
   const marker = pendingNodeMarker;
   pendingNodeMarker = null;
   nodeN = s.n;
@@ -2333,6 +2337,57 @@ function openNode(s) {
       catch { copy.textContent = "無法複製"; }
     };
     copy.textContent = "複製校正提問";
+  }
+  const recover = $("nodeMarkerRecover");
+  const recovery = $("nodeMarkerRecovery");
+  recovery.hidden = true;
+  recovery.replaceChildren();
+  recover.hidden = marker?.kind !== "compaction";
+  recover.disabled = false;
+  recover.textContent = "取回壓縮前原文";
+  if (marker?.kind === "compaction") {
+    const sourcePath = lastSnap?._archive_source_path;
+    const provider = lastSnap?.provider;
+    const session = lastSnap?.session;
+    recover.onclick = async () => {
+      recovery.hidden = false;
+      recovery.textContent = "正在讀取原始對話…";
+      recover.disabled = true;
+      if (!sourcePath || !["codex", "claude"].includes(provider)) {
+        recovery.textContent = "UNKNOWN：目前沒有可驗證的原生對話來源。";
+        return;
+      }
+      try {
+        const result = JSON.parse(await invoke("recover_context", {
+          sourcePath, provider, sessionId: session, ordinal: marker.ordinal,
+          roundNumber: marker.roundNumber, expectedLine: marker.expectedLine,
+        }));
+        if (openSequence !== nodeOpenSequence || lastSnap?.session !== session) return;
+        if (result.status !== "READY" || !result.packet) {
+          recovery.textContent = `UNKNOWN：${result.reason || "原文無法驗證"}`;
+          return;
+        }
+        recovery.replaceChildren();
+        const heading = document.createElement("b");
+        heading.textContent = `原文第 ${result.recovered_start_round} 輪起 · 僅含對話文字，不含工具內容`;
+        recovery.appendChild(heading);
+        for (const fragment of result.packet.original_fragments || []) {
+          const article = document.createElement("article");
+          const ref = document.createElement("small");
+          ref.textContent = fragment.provenance;
+          const body = document.createElement("pre");
+          body.textContent = fragment.text;
+          article.append(ref, body);
+          recovery.appendChild(article);
+        }
+      } catch (error) {
+        if (openSequence !== nodeOpenSequence || lastSnap?.session !== session) return;
+        recovery.textContent = `UNKNOWN：${String(error)}`;
+      } finally {
+        if (openSequence === nodeOpenSequence && lastSnap?.session === session)
+          recover.disabled = false;
+      }
+    };
   }
   $("nodeSaid").textContent = flat(s.owner_text).slice(0, 160) || "(沒有文字)";
   const activity = s.activity || [];
@@ -2432,7 +2487,12 @@ async function saveNote() {
   }
   btn.disabled = false;
 }
-function closeNode() { nodeSheet.hidden = true; }
+function closeNode() {
+  ++nodeOpenSequence;
+  nodeSheet.hidden = true;
+  $("nodeMarkerRecovery").hidden = true;
+  $("nodeMarkerRecovery").replaceChildren();
+}
 
 // 先乾跑。**預設絕不寫檔** ——
 // 一個手滑就產生檔案的按鈕，遲早會在沒人打算 fork 的時候產生檔案。
@@ -3705,6 +3765,7 @@ function renderPicker() {
 }
 
 function choose(id) {
+  closeNode();
   picked = id;
   visibleTail = 180;
   loadingOlder = false;
@@ -3844,6 +3905,8 @@ async function tick() {
     const raw = await invoke("strands", { session: picked, tail: visibleTail });
     const d = JSON.parse(raw);
     if (d.error) throw new Error(d.error);
+    if (lastSnap && (lastSnap.session !== d.session || lastSnap.provider !== d.provider))
+      closeNode();
     rows = d.rows || [];
     // 它在看哪一個，以及憑什麼是那一個。
     //

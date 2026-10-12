@@ -26,9 +26,12 @@ BASE_HARNESS = RC._load_harness()
 class IsolatedHarness:
     """Browser shell with synthetic data only; never calls desktop_api.strands."""
 
-    def __init__(self, snap: dict, click_selector: str | None = None) -> None:
+    def __init__(self, snap: dict, click_selector: str | None = None,
+                 recover: bool = False, switch_session: bool = False) -> None:
         self.snap = snap
         self.click_selector = click_selector
+        self.recover = recover
+        self.switch_session = switch_session
 
     def build(self, out: Path, fake: bool, session: str = "") -> None:
         ui = ROOT / "desktop" / "ui"
@@ -37,6 +40,12 @@ class IsolatedHarness:
         fixture = {"strands": self.snap,
                    "snapshot": {}, "sessions": [], "work": {}, "machine": {},
                    "features": {}, "selftest": {}, "audit": {}, "fork": {"error": "test"}}
+        if self.recover:
+            fixture["recover_context"] = {
+                "status": "READY", "recovered_start_round": 2,
+                "packet": {"original_fragments": [{
+                    "provenance": "/native/source.jsonl:101-103#2:owner_text",
+                    "text": "壓縮前的完整原文；不是卡片摘要"}]}}
         (out / "fixture.json").write_text(json.dumps(fixture, ensure_ascii=False),
                                           encoding="utf-8")
         html = (ui / "index.html").read_text(encoding="utf-8")
@@ -44,6 +53,10 @@ class IsolatedHarness:
             '<script src="app.js"></script>',
             '<script>window.__TAURI__.event = {listen: async () => () => {}};</script>'
             '<script src="app.js"></script>')
+        if self.switch_session:
+            stub = stub.replace('const v = FIX[cmd];',
+                'const v = FIX[cmd]; if (cmd === "recover_context") '
+                'await new Promise(resolve => setTimeout(resolve, 350));')
         html = html.replace('<script src="app.js"></script>', stub)
         if self.click_selector:
             selector = json.dumps(self.click_selector)
@@ -51,8 +64,12 @@ class IsolatedHarness:
                 '<script>const pointClick = new MutationObserver(() => {'
                 f'const point = document.querySelector({selector});'
                 'if (point) { pointClick.disconnect(); '
-                'point.dispatchEvent(new MouseEvent("click", {bubbles:true})); }'
-                '}); pointClick.observe(document, {childList:true, subtree:true});</script>')
+                'point.dispatchEvent(new MouseEvent("click", {bubbles:true}));'
+                + ('setTimeout(() => document.querySelector("#nodeMarkerRecover").click(), 50);'
+                   if self.recover else '')
+                + ('setTimeout(() => choose("another-session"), 100);'
+                   if self.switch_session else '')
+                + ' }}); pointClick.observe(document, {childList:true, subtree:true});</script>')
             html = html.replace('</body>', click_script + '</body>')
         blob = json.dumps(fixture, ensure_ascii=False).replace("<", "\\u003c")
         html = html.replace("</head>",
@@ -100,9 +117,10 @@ class PathPointClick(unittest.TestCase):
             "excluded": ["owner change checked"], "prompt": "Review current goal"}
         self.snap["rows"][1]["notes"] = [{"text": "Owner note for this turn", "at": 2}]
 
-    def shot(self, selector=None, snap=None):
+    def shot(self, selector=None, snap=None, recover=False, switch_session=False):
         with tempfile.TemporaryDirectory(prefix="forseti-point-test-", dir=ROOT.parent) as tmp:
-            with patch.object(RC, "_load_harness", return_value=IsolatedHarness(snap or self.snap, selector)):
+            with patch.object(RC, "_load_harness", return_value=IsolatedHarness(
+                    snap or self.snap, selector, recover, switch_session)):
                 result = RC.render(fake=False, outdir=Path(tmp),
                                    budget_ms=7000)
             self.assertFalse(any("Uncaught" in line for line in result.console), result.console)
@@ -186,6 +204,23 @@ class PathPointClick(unittest.TestCase):
         self.assertIn("第 2 次 · 對話壓縮", second)
         self.assertIn("原始紀錄第 205 行", second)
         self.assertNotIn("原始紀錄第 101 行", second)
+
+    def test_compaction_click_can_show_original_text_with_source_ref(self):
+        self.snap.update({"provider": "codex", "_archive_source_path": "/native/source.jsonl"})
+        self.snap["compaction_events"] = [
+            {"ordinal": 1, "n": 2, "line": 104, "at": 1000, "label": "對話壓縮"}]
+        dom = marker(self.shot('.st[data-n="2"] .eventMark.compaction', recover=True))
+        self.assertIn("壓縮前的完整原文；不是卡片摘要", dom)
+        self.assertIn("/native/source.jsonl:101-103#2:owner_text", dom)
+
+    def test_old_recovery_cannot_fill_panel_after_session_switch(self):
+        self.snap.update({"provider": "codex", "_archive_source_path": "/native/source.jsonl"})
+        self.snap["compaction_events"] = [
+            {"ordinal": 1, "n": 2, "line": 104, "at": 1000, "label": "對話壓縮"}]
+        dom = self.shot('.st[data-n="2"] .eventMark.compaction',
+                        recover=True, switch_session=True)
+        self.assertIn('id="nodeSheet" hidden', dom)
+        self.assertNotIn("壓縮前的完整原文；不是卡片摘要</pre>", dom)
 
     def test_compaction_marks_are_not_inferred_from_row_or_tool_dots(self):
         self.snap["rows"][1]["dots"] = [{"label": "對話壓縮", "count": 2}]

@@ -656,6 +656,15 @@ button{font:inherit;cursor:pointer;color:inherit}
 #nodeMarkerCopy{margin-top:9px;padding:5px 9px;border:1px solid var(--hair);
   border-radius:4px;background:var(--surface);color:var(--ink);cursor:pointer}
 #nodeMarkerCopy[hidden]{display:none}
+#nodeMarkerRecover{margin-top:9px;padding:5px 9px;border:1px solid var(--hair);
+  border-radius:4px;background:var(--surface);color:var(--ink);cursor:pointer}
+#nodeMarkerRecover[hidden],.nodeMarkerRecovery[hidden]{display:none}
+.nodeMarkerRecovery{margin-top:10px;border-top:1px solid var(--hair);padding-top:8px;
+  max-height:42vh;overflow:auto;font-size:11px;line-height:1.5}
+.nodeMarkerRecovery article{padding:8px 0;border-top:1px solid var(--hair)}
+.nodeMarkerRecovery article:first-of-type{border-top:0}
+.nodeMarkerRecovery small{display:block;color:var(--ink-3);overflow-wrap:anywhere}
+.nodeMarkerRecovery pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:5px 0 0}
 .nodeVerdict{margin:0 0 14px;padding:11px 13px;border-radius:var(--r-md);
   border:.5px solid var(--hair);font-size:11px;color:var(--ink-3)}
 .nodeVerdict b{font-size:12px;color:var(--ink);margin-right:8px}

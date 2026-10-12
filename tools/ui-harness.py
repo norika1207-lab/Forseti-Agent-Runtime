@@ -128,6 +128,9 @@ def build(out: Path, fake: bool, session: str = "") -> None:
 
     fixture = {"strands": data, "snapshot": D.snapshot(),
                "blast_detail": blast_rows,
+               "recover_context": {"status": "UNKNOWN",
+                                   "reason": "browser_harness_has_no_native_source",
+                                   "packet": None, "auto_inject": False},
                "sessions": D.sessions(), "work": D.work(),
                "north_star_change": {"state": "UNAVAILABLE",
                                      "why": "read-only UI harness"},
