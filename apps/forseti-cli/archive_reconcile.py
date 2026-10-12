@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Periodic, bounded reconciliation of native session files into the archive."""
+"""Periodic reconciliation with cooperative per-batch and per-source budgets.
+
+Filesystem calls are not preempted here. The desktop process separately kills a
+child that exceeds its 420-second supervision window.
+"""
 
 from __future__ import annotations
 
@@ -151,6 +155,7 @@ def run_once(*, home: Path = Path.home(),
             ready_count = _ready_count(inventory, done)
             reasons: dict[str, int] = {}
             summary = {"status": "RUNNING", "at": int(time.time()),
+                       "budget_type": "cooperative",
                        "inventory": len(inventory), "inventory_sha256": digest,
                        "cursor": ready_count, "scanned": ready_count,
                        "remaining": len(inventory) - ready_count,
@@ -246,6 +251,7 @@ def run_once(*, home: Path = Path.home(),
         except Exception as exc:
             ready = False
             summary = {"status": "UNKNOWN", "at": int(time.time()),
+                       "budget_type": "cooperative",
                        "reason": ("newdrive_permission_denied" if isinstance(exc, PermissionError)
                                   else "reconcile_" + type(exc).__name__.lower())}
         _write_receipt(receipt, summary)

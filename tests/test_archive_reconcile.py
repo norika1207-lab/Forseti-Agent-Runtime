@@ -47,6 +47,7 @@ class ArchiveReconcileTest(unittest.TestCase):
         self.assertEqual(sync.call_count, 2)
         summary = json.loads(self.receipt.read_text())
         self.assertEqual(summary["status"], "READY")
+        self.assertEqual(summary["budget_type"], "cooperative")
         self.assertEqual(summary["counts"]["READY"], 2)
         self.assertEqual(summary["remaining"], 0)
         self.assertNotIn("PRIVATE", self.receipt.read_text())

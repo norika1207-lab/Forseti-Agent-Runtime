@@ -200,6 +200,7 @@ is only a candidate interpretation.
 - **Still under construction.** Precise cross-session causality, support-to-parent links, the full Goal Acceptance Contract, native E2E for every view, and calibration reports are not complete.
 - **Local-data caution.** The UI reads local records; the public screenshot uses synthetic data. Review any real transcript, token, or path before sharing it.
 - **Archive security gate: pending.** Encrypted-at-rest code, source-deletion recovery tests, and an installed-app reconciliation run exist. Active sources have not reached a stable full-inventory receipt, and independent security acceptance remains open. Do not rely on this development path as a secure backup yet.
+- **Reconciliation time budget is cooperative.** The Python worker checks its 300-second batch and 10-second per-source budgets between filesystem operations. The installed desktop supervises the child with a separate 420-second kill threshold; a blocked filesystem call is not guaranteed to finish within either Python budget. A `RUNNING` or `IN_PROGRESS` receipt is not full-inventory acceptance.
 
 ## Development and verification
 
