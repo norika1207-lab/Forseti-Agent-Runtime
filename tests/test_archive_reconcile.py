@@ -71,12 +71,25 @@ class ArchiveReconcileTest(unittest.TestCase):
         self.assertEqual(payload["status"], "READY")
         self.assertEqual(payload["counts"]["READY"], 2)
 
-    def test_changed_inventory_restarts_cycle(self):
+    def test_new_source_after_cursor_keeps_progress(self):
         first = {"inventory": 2, "next_index": 1,
                  "counts": {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 0},
                  "unknown_reasons": {}, "scan_complete": False,
                  "batch_all_ready": True}
         changed = self.inventory + [("codex", "three", Path("/three"))]
+        with (mock.patch.object(R, "_check_archive_access"),
+              mock.patch.object(R.archive_backfill, "sources", side_effect=[self.inventory, changed]),
+              mock.patch.object(R.archive_backfill, "import_batch", side_effect=[first, first]) as scan):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
+        self.assertEqual([call.kwargs["start"] for call in scan.call_args_list], [0, 1])
+
+    def test_new_source_before_cursor_restarts_cycle(self):
+        first = {"inventory": 2, "next_index": 1,
+                 "counts": {"READY": 1, "UNKNOWN": 0, "IN_PROGRESS": 0},
+                 "unknown_reasons": {}, "scan_complete": False,
+                 "batch_all_ready": True}
+        changed = [("claude", "zero", Path("/zero"))] + self.inventory
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "sources", side_effect=[self.inventory, changed]),
               mock.patch.object(R.archive_backfill, "import_batch", side_effect=[first, first]) as scan):

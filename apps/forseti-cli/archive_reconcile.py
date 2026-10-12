@@ -56,7 +56,8 @@ def _inventory_digest(inventory: list[tuple[str, str, Path]]) -> str:
     return digest.hexdigest()
 
 
-def _resume(receipt: Path, digest: str, size: int) -> tuple[int, dict, dict, int]:
+def _resume(receipt: Path, digest: str,
+            inventory: list[tuple[str, str, Path]]) -> tuple[int, dict, dict, int]:
     empty = {"READY": 0, "UNKNOWN": 0, "IN_PROGRESS": 0}
     try:
         if receipt.is_symlink() or receipt.stat().st_size > 65536:
@@ -65,8 +66,9 @@ def _resume(receipt: Path, digest: str, size: int) -> tuple[int, dict, dict, int
         cursor = previous.get("cursor")
         counts = previous.get("counts")
         reasons = previous.get("unknown_reasons")
-        if (previous.get("inventory_sha256") != digest
-                or type(cursor) is not int or not 0 <= cursor < size
+        if (type(cursor) is not int or not 0 <= cursor < len(inventory)
+                or (previous.get("inventory_sha256") != digest
+                    and previous.get("prefix_sha256") != _inventory_digest(inventory[:cursor]))
                 or not isinstance(counts, dict) or not isinstance(reasons, dict)
                 or any(type(counts.get(status)) is not int or counts[status] < 0
                        for status in empty)
@@ -98,10 +100,11 @@ def run_once(*, home: Path = Path.home(),
             inventory = archive_backfill.sources(home)
             digest = _inventory_digest(inventory)
             _write_receipt(stage, {"phase": "resume", "at": int(time.time())})
-            cursor, counts, reasons, started_at = _resume(receipt, digest, len(inventory))
+            cursor, counts, reasons, started_at = _resume(receipt, digest, inventory)
             summary = {"status": "RUNNING", "at": int(time.time()),
                        "started_at": started_at, "inventory": len(inventory),
                        "inventory_sha256": digest, "cursor": cursor,
+                       "prefix_sha256": _inventory_digest(inventory[:cursor]),
                        "scanned": cursor, "counts": counts,
                        "unknown_reasons": reasons}
             _write_receipt(receipt, summary)
@@ -119,6 +122,7 @@ def run_once(*, home: Path = Path.home(),
             ready = result["scan_complete"] and counts["UNKNOWN"] == 0 and counts["IN_PROGRESS"] == 0
             summary.update(status="READY" if ready else "UNKNOWN" if result["scan_complete"] else "IN_PROGRESS",
                            at=int(time.time()), cursor=cursor, scanned=cursor,
+                           prefix_sha256=_inventory_digest(inventory[:cursor]),
                            counts=counts, unknown_reasons=reasons)
             _write_receipt(stage, {"phase": "done", "at": int(time.time()),
                                    "cursor": cursor, "inventory": len(inventory)})
