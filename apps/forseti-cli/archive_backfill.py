@@ -20,7 +20,8 @@ DEFAULT_ROOT = Path("/Volumes/NewDrive/AI Project/Forseti/.forseti/session_archi
 def sources(home: Path) -> list[tuple[str, str, Path]]:
     found = []
     for provider, root in (("codex", home / ".codex/sessions"),
-                           ("claude", home / ".claude/projects")):
+                           ("claude", home / ".claude/projects"),
+                           ("grok", home / ".grok/sessions")):
         if not root.is_dir():
             continue
         for path in root.rglob("*.jsonl"):
@@ -35,8 +36,9 @@ def sources(home: Path) -> list[tuple[str, str, Path]]:
     unique = []
     for provider, session_id, path in found:
         if (provider, session_id) in seen:
-            root = home / (".codex/sessions" if provider == "codex"
-                           else ".claude/projects")
+            root = home / {"codex": ".codex/sessions",
+                           "claude": ".claude/projects",
+                           "grok": ".grok/sessions"}[provider]
             session_id = "file-" + hashlib.sha256(
                 (provider + ":" + str(path.relative_to(root))).encode()).hexdigest()
         seen.add((provider, session_id))

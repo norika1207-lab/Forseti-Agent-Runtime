@@ -13,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "apps", "forseti-cli"))
 import source_archive as A  # noqa: E402
+import archive_reconcile as R  # noqa: E402
 
 
 def record(n):
@@ -38,13 +39,14 @@ class SourceArchiveTest(unittest.TestCase):
 
     def cleanup_anchor(self):
         try:
-            anchor = A._anchor_path(A._key(), self.root.resolve(), "codex",
-                                    "session-123")
-            anchor.unlink(missing_ok=True)
-            folder = A._archive_folder(self.root.resolve(), A._key(),
-                                       "codex", "session-123")
-            for kind in ("archive", "worker"):
-                A._local_lock_path(folder, kind).unlink(missing_ok=True)
+            for provider in ("codex", "grok"):
+                anchor = A._anchor_path(A._key(), self.root.resolve(), provider,
+                                        "session-123")
+                anchor.unlink(missing_ok=True)
+                folder = A._archive_folder(self.root.resolve(), A._key(),
+                                           provider, "session-123")
+                for kind in ("archive", "worker"):
+                    A._local_lock_path(folder, kind).unlink(missing_ok=True)
         except A.ArchiveReadError:
             pass
 
@@ -548,6 +550,43 @@ class SourceArchiveTest(unittest.TestCase):
                         == original)
         self.assertNotIn("chunk_paths", read)
         self.assertNotIn("private transcript content", str(read))
+
+    def test_grok_raw_session_is_encrypted_and_restorable(self):
+        original = record(1) + record(2)
+        self.source.write_bytes(original)
+        self.kwargs["provider"] = "grok"
+        result = self.sync()
+        for _ in range(5):
+            if result["status"] == "READY":
+                break
+            result = self.sync()
+        self.assertEqual(result["status"], "READY")
+        self.source.unlink()
+        verified = A.verified_chunks(result["manifest_path"])
+        self.assertEqual(verified["status"], "READY")
+        self.assertEqual(verified["provider"], "grok")
+        self.assertEqual(b"".join(A.iter_plaintext_chunks(result["manifest_path"])), original)
+
+    def test_reconciler_rejects_corrupted_ciphertext(self):
+        self.source.write_bytes(record(1) + record(2))
+        result = self.sync()
+        for _ in range(5):
+            if result["status"] == "READY":
+                break
+            result = self.sync()
+        self.assertEqual(result["status"], "READY")
+        info = self.source.stat()
+        version = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns]
+        key = A._archive_key(self.root.resolve())
+        self.assertTrue(R._verify_done_archive(self.root.resolve(), key,
+                                                "codex", "session-123", version))
+        part = next(path for path in Path(result["archive_path"]).glob("*.enc")
+                    if path.name != "manifest.enc" and not path.name.startswith("._"))
+        damaged = bytearray(part.read_bytes())
+        damaged[-1] ^= 1
+        part.write_bytes(damaged)
+        self.assertFalse(R._verify_done_archive(self.root.resolve(), key,
+                                                 "codex", "session-123", version))
 
     def test_verified_chunks_reject_incomplete_archive_without_source(self):
         self.source.write_bytes(record(1) + record(2))

@@ -382,7 +382,7 @@ def _read_manifest(path: Path, source: Path | None, provider: str | None,
     if isinstance(data, dict) and data.get("format_version") == 1:
         raise _Failure("legacy_unencrypted_archive")
     if (not isinstance(data, dict) or data.get("format_version") != 3
-            or data.get("provider") not in ("codex", "claude")
+            or data.get("provider") not in ("codex", "claude", "grok")
             or not isinstance(data.get("session_id"), str)
             or not _ID.fullmatch(data["session_id"])
             or (provider is not None and data["provider"] != provider)
@@ -519,7 +519,7 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
     no transcript text and never authorize AI injection.
     """
     try:
-        if (provider not in ("codex", "claude") or not isinstance(session_id, str)
+        if (provider not in ("codex", "claude", "grok") or not isinstance(session_id, str)
                 or not _ID.fullmatch(session_id)):
             raise _Failure("invalid_identity")
         if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_CALL_BYTES:

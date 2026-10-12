@@ -5,6 +5,7 @@ import os
 import stat
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -35,6 +36,7 @@ class ArchiveReconcileTest(unittest.TestCase):
     def run_with(self, *, limit=R.MAX_SOURCES):
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
+              mock.patch.object(R, "_verify_done_archive", return_value=True),
               mock.patch.object(R.source_archive, "sync_source", side_effect=self.sync_ready) as sync):
             code = R.run_once(receipt=self.receipt, lock=self.lock, limit=limit)
         return code, sync
@@ -104,6 +106,39 @@ class ArchiveReconcileTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(sync.call_count, 2)
 
+    def test_corrupt_archive_revokes_cached_ready(self):
+        self.assertEqual(self.run_with()[0], 0)
+        with (mock.patch.object(R, "_check_archive_access"),
+              mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
+              mock.patch.object(R, "_verify_done_archive", return_value=False),
+              mock.patch.object(R.source_archive, "sync_source") as sync):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
+        sync.assert_not_called()
+        summary = json.loads(self.receipt.read_text())
+        self.assertEqual(summary["status"], "UNKNOWN")
+        self.assertEqual(summary["counts"]["READY"], 0)
+        self.assertEqual(summary["unknown_reasons"], {"archive_or_source_changed": 2})
+
+    def test_large_authenticated_progress_remains_loadable(self):
+        progress = self.receipt.with_name("backfill-progress.json")
+        done = {f"{n:064x}": [1, 2, 3, 4] for n in range(30000)}
+        R._write_progress(progress, done)
+        self.assertGreater(progress.stat().st_size, 2000000)
+        self.assertEqual(R._load_progress(progress), done)
+
+    def test_inventory_time_counts_against_budget(self):
+        def slow_inventory(_home):
+            time.sleep(0.02)
+            return self.inventory
+
+        with (mock.patch.object(R, "_check_archive_access"),
+              mock.patch.object(R.archive_backfill, "sources", side_effect=slow_inventory),
+              mock.patch.object(R.source_archive, "sync_source") as sync):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock,
+                                        seconds=0.001), 2)
+        sync.assert_not_called()
+        self.assertEqual(json.loads(self.receipt.read_text())["status"], "IN_PROGRESS")
+
     def test_running_receipt_precedes_source_sync(self):
         def inspect(**kwargs):
             self.assertEqual(json.loads(self.receipt.read_text())["status"], "RUNNING")
@@ -111,6 +146,7 @@ class ArchiveReconcileTest(unittest.TestCase):
 
         with (mock.patch.object(R, "_check_archive_access"),
               mock.patch.object(R.archive_backfill, "sources", return_value=self.inventory),
+              mock.patch.object(R, "_verify_done_archive", return_value=True),
               mock.patch.object(R.source_archive, "sync_source", side_effect=inspect)):
             self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 0)
 

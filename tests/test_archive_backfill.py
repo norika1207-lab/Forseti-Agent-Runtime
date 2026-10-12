@@ -17,14 +17,22 @@ def test_sources_include_native_transcripts_and_non_uuid_agent_logs(tmp_path):
     another = tmp_path / ".claude/projects/z-project"
     another.mkdir()
     (another / f"{claude_id}.jsonl").write_text("{}\n")
+    grok = tmp_path / ".grok/sessions/project" / codex_id
+    grok.mkdir(parents=True)
+    (grok / "chat_history.jsonl").write_text("{}\n")
+    (grok / "updates.jsonl").write_text("{}\n")
+    (grok / "chat_history.jsonl.lock").write_text("not a transcript")
     rows = archive_backfill.sources(tmp_path)
     assert [(provider, session_id) for provider, session_id, _ in rows if
             session_id in {claude_id, codex_id}] == [
                 ("claude", claude_id), ("codex", codex_id)]
-    assert len(rows) == 4
+    assert len(rows) == 6
     assert rows[1][1].startswith("file-")
     assert rows[2][1].startswith("file-")
     assert rows[1][1] != rows[2][1]
+    assert {path.name for provider, _, path in rows if provider == "grok"} == {
+        "chat_history.jsonl", "updates.jsonl"}
+    assert len({session_id for provider, session_id, _ in rows if provider == "grok"}) == 2
 
 
 def test_batch_retries_same_source_after_time_budget():

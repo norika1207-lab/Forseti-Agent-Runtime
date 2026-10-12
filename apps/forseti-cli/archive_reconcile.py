@@ -23,6 +23,7 @@ LOCK = source_archive._ANCHOR_DIR / "backfill.lock"
 MAX_SECONDS = 300
 MAX_SOURCES = 500
 PROGRESS_VERSION = 1
+MAX_PROGRESS_BYTES = 32 * 1024 * 1024
 
 
 def _check_archive_access(root: Path) -> None:
@@ -78,7 +79,7 @@ def _state_mac(done: dict[str, list[int]]) -> str:
 def _load_progress(path: Path) -> dict[str, list[int]]:
     try:
         info = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > 2000000:
+        if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o077 or info.st_size > MAX_PROGRESS_BYTES:
             return {}
         data = json.loads(path.read_text())
         done = data.get("done")
@@ -111,6 +112,15 @@ def _ready_count(inventory: list[tuple[str, str, Path]],
     return count
 
 
+def _verify_done_archive(root: Path, archive_key: bytes, provider: str, session_id: str,
+                         version: list[int]) -> bool:
+    manifest = source_archive._archive_folder(root, archive_key, provider, session_id) / "manifest.enc"
+    result = source_archive.verified_chunks(manifest)
+    return (result["status"] == "READY" and result["provider"] == provider
+            and result["session_id"] == session_id
+            and result["archived_bytes"] == version[2])
+
+
 def run_once(*, home: Path = Path.home(),
              archive_root: Path = archive_backfill.DEFAULT_ROOT,
              receipt: Path = RECEIPT, seconds: float = MAX_SECONDS,
@@ -123,6 +133,7 @@ def run_once(*, home: Path = Path.home(),
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 3
+        begun = time.monotonic()
         stage = receipt.with_name("reconcile-stage.json")
         progress = receipt.with_name("backfill-progress.json")
         try:
@@ -147,10 +158,11 @@ def run_once(*, home: Path = Path.home(),
             _write_receipt(receipt, summary)
             _write_receipt(stage, {"phase": "batch", "at": int(time.time()),
                                    "cursor": ready_count, "inventory": len(inventory)})
-            begun = time.monotonic()
             attempted = 0
             incomplete = 0
             for provider, session_id, path in inventory:
+                if time.monotonic() - begun >= seconds:
+                    break
                 key = _source_key(provider, session_id, path)
                 try:
                     version_before = _source_version(path)
@@ -198,7 +210,28 @@ def run_once(*, home: Path = Path.home(),
                     break
             _write_progress(progress, done)
             ready_count = _ready_count(inventory, done)
-            ready = ready_count == len(inventory) and not reasons and not incomplete
+            if ready_count == len(inventory) and not reasons and not incomplete:
+                archive_key = source_archive._archive_key(archive_root)
+                for provider, session_id, path in inventory:
+                    if time.monotonic() - begun >= seconds:
+                        incomplete += 1
+                        break
+                    key = _source_key(provider, session_id, path)
+                    version = done[key]
+                    try:
+                        current = _source_version(path)
+                    except OSError:
+                        current = None
+                    if (not _verify_done_archive(archive_root, archive_key,
+                                                 provider, session_id, version)
+                            or current != version):
+                        done.pop(key, None)
+                        reasons["archive_or_source_changed"] = (
+                            reasons.get("archive_or_source_changed", 0) + 1)
+                _write_progress(progress, done)
+                ready_count = _ready_count(inventory, done)
+            ready = (ready_count == len(inventory) and not reasons and not incomplete
+                     and time.monotonic() - begun < seconds)
             summary.update(status="READY" if ready else "UNKNOWN" if reasons else "IN_PROGRESS",
                            at=int(time.time()), cursor=ready_count, scanned=ready_count,
                            remaining=len(inventory) - ready_count,
