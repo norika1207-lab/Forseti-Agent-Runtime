@@ -284,6 +284,12 @@ class ChecksThemselvesCatchThings(unittest.TestCase):
                         "snapshot": {}})
         self.assertEqual(RC.check_temperature(r), [])
 
+    def test_證據覆蓋率半點依前端規則進位(self):
+        r = self._fake('<span id="vTemp">36.9</span><span id="vBand">安靜　證據 87%</span>',
+                       {"strands": {"temp": {"c": 36.9, "coverage": 0.865}},
+                        "snapshot": {}})
+        self.assertEqual(RC.check_temperature(r), [])
+
     def test_算不出溫度卻給了數字會紅(self):
         r = self._fake('<span id="vTemp">36.9</span><span id="vBand"></span>',
                        {"strands": {"temp": {"c": None}}, "snapshot": {}})

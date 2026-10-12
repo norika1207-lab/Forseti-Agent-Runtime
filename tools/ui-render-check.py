@@ -711,7 +711,9 @@ def check_temperature(r: Render) -> list[Finding]:
         cov = temp.get("coverage")
         if cov is not None:
             band = _tag_text(dom, "vBand") or ""
-            want_cov = f"證據 {round(float(cov) * 100)}%"
+            # JavaScript Math.round rounds positive half values upward; Python
+            # round uses ties-to-even and disagrees at 86.5%, for example.
+            want_cov = f"證據 {int(float(cov) * 100 + 0.5)}%"
             if want_cov not in band:
                 out.append(Finding(
                     where="#vBand",
