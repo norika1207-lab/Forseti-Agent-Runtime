@@ -45,8 +45,10 @@ def sources(home: Path) -> list[tuple[str, str, Path]]:
 
 
 def import_batch(*, home: Path, archive_root: Path, start: int,
-                 limit: int, seconds: float) -> dict:
-    inventory = sources(home)
+                 limit: int, seconds: float,
+                 inventory: list[tuple[str, str, Path]] | None = None) -> dict:
+    if inventory is None:
+        inventory = sources(home)
     begun = time.monotonic()
     next_index = start
     counts = {"READY": 0, "UNKNOWN": 0, "IN_PROGRESS": 0}

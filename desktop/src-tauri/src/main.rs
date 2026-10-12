@@ -288,6 +288,7 @@ fn spawn_archive_reconciler() {
     let Some(py) = find_python() else { return };
     let Some(home) = std::env::var_os("HOME") else { return };
     std::thread::spawn(move || loop {
+        let mut delay = Duration::from_secs(60);
         if let Ok(mut child) = Command::new(&py)
             .arg("-B").arg(&script)
             .env_clear()
@@ -300,7 +301,14 @@ fn spawn_archive_reconciler() {
             let started = Instant::now();
             loop {
                 match child.try_wait() {
-                    Ok(Some(_)) => break,
+                    Ok(Some(status)) => {
+                        delay = if status.success() {
+                            Duration::from_secs(900)
+                        } else {
+                            Duration::from_secs(5)
+                        };
+                        break;
+                    }
                     Ok(None) if started.elapsed() < Duration::from_secs(420) => {
                         std::thread::sleep(Duration::from_secs(1));
                     }
@@ -312,7 +320,7 @@ fn spawn_archive_reconciler() {
                 }
             }
         }
-        std::thread::sleep(Duration::from_secs(900));
+        std::thread::sleep(delay);
     });
 }
 

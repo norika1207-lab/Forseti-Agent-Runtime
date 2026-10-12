@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
-import json
 import fcntl
+import hashlib
+import json
 import os
 import secrets
 import sys
@@ -17,8 +18,8 @@ import source_archive
 
 RECEIPT = source_archive._ANCHOR_DIR / "backfill-status.json"
 LOCK = source_archive._ANCHOR_DIR / "backfill.lock"
-MAX_SECONDS = 360
-MAX_SOURCES = 1000000
+MAX_SECONDS = 300
+MAX_SOURCES = 500
 
 
 def _check_archive_access(root: Path) -> None:
@@ -46,6 +47,37 @@ def _write_receipt(path: Path, result: dict) -> None:
         temp.unlink(missing_ok=True)
 
 
+def _inventory_digest(inventory: list[tuple[str, str, Path]]) -> str:
+    digest = hashlib.sha256()
+    for provider, session_id, path in inventory:
+        for value in (provider, session_id, str(path)):
+            digest.update(value.encode())
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _resume(receipt: Path, digest: str, size: int) -> tuple[int, dict, dict, int]:
+    empty = {"READY": 0, "UNKNOWN": 0, "IN_PROGRESS": 0}
+    try:
+        if receipt.is_symlink() or receipt.stat().st_size > 65536:
+            return 0, empty, {}, int(time.time())
+        previous = json.loads(receipt.read_text())
+        cursor = previous.get("cursor")
+        counts = previous.get("counts")
+        reasons = previous.get("unknown_reasons")
+        if (previous.get("inventory_sha256") != digest
+                or type(cursor) is not int or not 0 <= cursor < size
+                or not isinstance(counts, dict) or not isinstance(reasons, dict)
+                or any(type(counts.get(status)) is not int or counts[status] < 0
+                       for status in empty)
+                or counts["READY"] + counts["UNKNOWN"] != cursor
+                or any(type(value) is not int or value < 0 for value in reasons.values())):
+            return 0, empty, {}, int(time.time())
+        return cursor, {**counts, "IN_PROGRESS": 0}, reasons, previous.get("started_at", int(time.time()))
+    except (OSError, ValueError, TypeError):
+        return 0, empty, {}, int(time.time())
+
+
 def run_once(*, home: Path = Path.home(),
              archive_root: Path = archive_backfill.DEFAULT_ROOT,
              receipt: Path = RECEIPT, seconds: float = MAX_SECONDS,
@@ -60,15 +92,28 @@ def run_once(*, home: Path = Path.home(),
             return 3
         try:
             _check_archive_access(archive_root)
+            inventory = archive_backfill.sources(home)
+            digest = _inventory_digest(inventory)
+            cursor, counts, reasons, started_at = _resume(receipt, digest, len(inventory))
+            summary = {"status": "RUNNING", "at": int(time.time()),
+                       "started_at": started_at, "inventory": len(inventory),
+                       "inventory_sha256": digest, "cursor": cursor,
+                       "scanned": cursor, "counts": counts,
+                       "unknown_reasons": reasons}
+            _write_receipt(receipt, summary)
             result = archive_backfill.import_batch(
-                home=home, archive_root=archive_root, start=0, limit=limit,
-                seconds=seconds)
-            ready = result["scan_complete"] and result["batch_all_ready"]
-            summary = {"status": "READY" if ready else "UNKNOWN",
-                       "at": int(time.time()), "inventory": result["inventory"],
-                       "scanned": result["next_index"],
-                       "counts": result["counts"],
-                       "unknown_reasons": result["unknown_reasons"]}
+                home=home, archive_root=archive_root, start=cursor, limit=limit,
+                seconds=seconds, inventory=inventory)
+            counts = {"READY": counts["READY"] + result["counts"]["READY"],
+                      "UNKNOWN": counts["UNKNOWN"] + result["counts"]["UNKNOWN"],
+                      "IN_PROGRESS": result["counts"]["IN_PROGRESS"]}
+            for reason, count in result["unknown_reasons"].items():
+                reasons[reason] = reasons.get(reason, 0) + count
+            cursor = result["next_index"]
+            ready = result["scan_complete"] and counts["UNKNOWN"] == 0 and counts["IN_PROGRESS"] == 0
+            summary.update(status="READY" if ready else "UNKNOWN" if result["scan_complete"] else "IN_PROGRESS",
+                           at=int(time.time()), cursor=cursor, scanned=cursor,
+                           counts=counts, unknown_reasons=reasons)
         except Exception as exc:
             ready = False
             summary = {"status": "UNKNOWN", "at": int(time.time()),
