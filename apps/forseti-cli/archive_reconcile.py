@@ -90,10 +90,14 @@ def run_once(*, home: Path = Path.home(),
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 3
+        stage = receipt.with_name("reconcile-stage.json")
         try:
+            _write_receipt(stage, {"phase": "check_access", "at": int(time.time())})
             _check_archive_access(archive_root)
+            _write_receipt(stage, {"phase": "inventory", "at": int(time.time())})
             inventory = archive_backfill.sources(home)
             digest = _inventory_digest(inventory)
+            _write_receipt(stage, {"phase": "resume", "at": int(time.time())})
             cursor, counts, reasons, started_at = _resume(receipt, digest, len(inventory))
             summary = {"status": "RUNNING", "at": int(time.time()),
                        "started_at": started_at, "inventory": len(inventory),
@@ -101,6 +105,8 @@ def run_once(*, home: Path = Path.home(),
                        "scanned": cursor, "counts": counts,
                        "unknown_reasons": reasons}
             _write_receipt(receipt, summary)
+            _write_receipt(stage, {"phase": "batch", "at": int(time.time()),
+                                   "cursor": cursor, "inventory": len(inventory)})
             result = archive_backfill.import_batch(
                 home=home, archive_root=archive_root, start=cursor, limit=limit,
                 seconds=seconds, inventory=inventory)
@@ -114,6 +120,8 @@ def run_once(*, home: Path = Path.home(),
             summary.update(status="READY" if ready else "UNKNOWN" if result["scan_complete"] else "IN_PROGRESS",
                            at=int(time.time()), cursor=cursor, scanned=cursor,
                            counts=counts, unknown_reasons=reasons)
+            _write_receipt(stage, {"phase": "done", "at": int(time.time()),
+                                   "cursor": cursor, "inventory": len(inventory)})
         except Exception as exc:
             ready = False
             summary = {"status": "UNKNOWN", "at": int(time.time()),

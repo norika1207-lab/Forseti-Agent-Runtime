@@ -95,6 +95,15 @@ class ArchiveReconcileTest(unittest.TestCase):
             self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
         self.assertEqual(json.loads(self.receipt.read_text())["reason"], "reconcile_runtimeerror")
 
+    def test_stage_receipt_identifies_access_check(self):
+        def check(_root):
+            stage = self.receipt.with_name("reconcile-stage.json")
+            self.assertEqual(json.loads(stage.read_text())["phase"], "check_access")
+            raise PermissionError(1, "denied")
+
+        with mock.patch.object(R, "_check_archive_access", side_effect=check):
+            self.assertEqual(R.run_once(receipt=self.receipt, lock=self.lock), 2)
+
     def test_newdrive_denial_fails_before_inventory_scan(self):
         with (mock.patch.object(R, "_check_archive_access",
                                 side_effect=PermissionError(1, "denied")),
