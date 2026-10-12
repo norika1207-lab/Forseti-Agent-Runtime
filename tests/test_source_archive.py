@@ -41,6 +41,10 @@ class SourceArchiveTest(unittest.TestCase):
             anchor = A._anchor_path(A._key(), self.root.resolve(), "codex",
                                     "session-123")
             anchor.unlink(missing_ok=True)
+            folder = A._archive_folder(self.root.resolve(), A._key(),
+                                       "codex", "session-123")
+            for kind in ("archive", "worker"):
+                A._local_lock_path(folder, kind).unlink(missing_ok=True)
         except A.ArchiveReadError:
             pass
 
@@ -266,7 +270,7 @@ class SourceArchiveTest(unittest.TestCase):
         for directory in (self.root, Path(result["archive_path"])):
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode) & 0o077, 0)
         for path in (Path(result["manifest_path"]),
-                     Path(result["archive_path"]) / "archive.lock",
+                     A._local_lock_path(Path(result["archive_path"]), "archive"),
                      Path(result["archive_path"]) / manifest["chunks"][0]["name"]):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode) & 0o077, 0)
         anchor = A._anchor_path(A._key(), self.root.resolve(), "codex",

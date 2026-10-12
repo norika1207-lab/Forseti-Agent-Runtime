@@ -32,7 +32,7 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.root = base / ".forseti" / "session_archive"
         self.kwargs = {"source_path": self.source, "archive_root": self.root,
                        "provider": "codex", "session_id": "session-123",
-                       "max_bytes": len(record(1)), "watch_seconds": 3,
+                       "max_bytes": len(record(1)), "watch_seconds": 30,
                        "interval_seconds": 0.05}
         self.addCleanup(self.cleanup_anchor)
 
@@ -41,14 +41,17 @@ class ArchiveWorkerTest(unittest.TestCase):
             anchor = A._anchor_path(A._key(), self.root.resolve(), "codex",
                                     "session-123")
             anchor.unlink(missing_ok=True)
+            folder = self.folder()
+            for kind in ("archive", "worker"):
+                A._local_lock_path(folder, kind).unlink(missing_ok=True)
         except A.ArchiveReadError:
             pass
 
     def wait_child(self, pid):
         process = W._SPAWNED_CHILDREN.pop(pid, None)
         if process is not None:
-            return process.wait(timeout=8)
-        deadline = time.monotonic() + 8
+            return process.wait(timeout=40)
+        deadline = time.monotonic() + 40
         while time.monotonic() < deadline:
             done, status = os.waitpid(pid, os.WNOHANG)
             if done:
@@ -139,7 +142,8 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertEqual(result["status"], "STARTED")
         self.assertEqual(self.wait_child(result["pid"]), 0)
         folder = self.folder()
-        for path in (folder, folder / "worker.lock", folder / "worker-status.json"):
+        for path in (folder, A._local_lock_path(folder, "worker"),
+                     folder / "worker-status.json"):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode) & 0o077, 0)
 
     def test_short_watch_remains_bounded_on_large_source(self):

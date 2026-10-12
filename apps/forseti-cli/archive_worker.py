@@ -148,7 +148,7 @@ def launch_worker(*, source_path: str | Path, archive_root: str | Path,
                          source_finalized)
         source, root, folder = _validated_paths(
             source_path, archive_root, provider, session_id)
-        lock_path = folder / "worker.lock"
+        lock_path = source_archive._local_lock_path(folder, "worker")
         fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             _secure_file(lock_path)
@@ -197,7 +197,7 @@ def _run_worker(args) -> int:
                          args.interval_seconds, args.source_finalized)
         source, root, folder = _validated_paths(
             args.source, args.archive_root, args.provider, args.session_id)
-        lock_path = folder / "worker.lock"
+        lock_path = source_archive._local_lock_path(folder, "worker")
         _secure_file(lock_path)
         lock_info = os.fstat(args.lock_fd)
         if (not stat.S_ISREG(lock_info.st_mode)

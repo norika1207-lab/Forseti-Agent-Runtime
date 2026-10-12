@@ -255,6 +255,14 @@ def _anchor_path(key: bytes, root: Path, provider: str, session_id: str) -> Path
     return _ANCHOR_DIR / (_mac(key, b"anchor-name-v2\0", identity) + ".json")
 
 
+def _local_lock_path(folder: Path, kind: str) -> Path:
+    if kind not in {"archive", "worker"} or not re.fullmatch(r"[0-9a-f]{64}", folder.name):
+        raise _Failure("invalid_lock_path")
+    _local_apfs()
+    _secure_local_dir(_ANCHOR_DIR)
+    return _ANCHOR_DIR / f"{kind}-{folder.name}.lock"
+
+
 def _seal_manifest(data: dict, key: bytes) -> dict:
     unsigned = {name: value for name, value in data.items() if name != "hmac"}
     return {**unsigned, "hmac": _mac(key, b"manifest-v2\0", _canonical(unsigned))}
@@ -544,7 +552,7 @@ def sync_source(*, source_path: str | Path, archive_root: str | Path,
             raise _Failure("legacy_unencrypted_archive")
         manifest_path = folder / "manifest.enc"
         anchor = _anchor_path(key, root, provider, session_id)
-        lock_path = folder / "archive.lock"
+        lock_path = _local_lock_path(folder, "archive")
         lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             _secure_file(lock_path)
@@ -678,11 +686,11 @@ def _locked_archive(manifest_path: str | Path):
     if any(folder.glob("*.jsonl")):
         raise _Failure("legacy_unencrypted_archive")
     _secure_file(path)
-    lock = folder / "archive.lock"
-    _secure_file(lock)
     key = _key()
-    lock_fd = os.open(lock, os.O_RDONLY | os.O_NOFOLLOW)
+    lock = _local_lock_path(folder, "archive")
+    lock_fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     try:
+        _secure_file(lock)
         fcntl.flock(lock_fd, fcntl.LOCK_SH)
         data = _read_manifest(path, None, None, None, key, None)
         if data is None:
