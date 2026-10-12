@@ -31,7 +31,17 @@ def sources(home: Path) -> list[tuple[str, str, Path]]:
                 (provider + ":" + str(path.relative_to(root))).encode()).hexdigest()
             found.append((provider, session_id, path))
     found.sort(key=lambda row: (row[0], str(row[2])))
-    return found
+    seen = set()
+    unique = []
+    for provider, session_id, path in found:
+        if (provider, session_id) in seen:
+            root = home / (".codex/sessions" if provider == "codex"
+                           else ".claude/projects")
+            session_id = "file-" + hashlib.sha256(
+                (provider + ":" + str(path.relative_to(root))).encode()).hexdigest()
+        seen.add((provider, session_id))
+        unique.append((provider, session_id, path))
+    return unique
 
 
 def import_batch(*, home: Path, archive_root: Path, start: int,
@@ -41,6 +51,7 @@ def import_batch(*, home: Path, archive_root: Path, start: int,
     next_index = start
     counts = {"READY": 0, "UNKNOWN": 0, "IN_PROGRESS": 0}
     reasons: dict[str, int] = {}
+    unknown_items = []
     while next_index < len(inventory) and next_index - start < limit:
         if time.monotonic() - begun >= seconds:
             break
@@ -59,12 +70,14 @@ def import_batch(*, home: Path, archive_root: Path, start: int,
         if status == "UNKNOWN":
             reason = result["reason"]
             reasons[reason] = reasons.get(reason, 0) + 1
+            unknown_items.append({"index": next_index, "provider": provider,
+                                  "session_id": session_id, "reason": reason})
         if status == "IN_PROGRESS":
             break
         next_index += 1
     return {"inventory": len(inventory), "start": start,
             "next_index": next_index, "counts": counts,
-            "unknown_reasons": reasons,
+            "unknown_reasons": reasons, "unknown_items": unknown_items,
             "scan_complete": next_index == len(inventory),
             "batch_all_ready": counts["UNKNOWN"] == 0
             and counts["IN_PROGRESS"] == 0}

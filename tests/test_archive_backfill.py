@@ -14,12 +14,17 @@ def test_sources_include_native_transcripts_and_non_uuid_agent_logs(tmp_path):
     (codex / f"rollout-2026-10-12T01-00-00-{codex_id}.jsonl").write_text("{}\n")
     (claude / f"{claude_id}.jsonl").write_text("{}\n")
     (claude / "audit.jsonl").write_text("{}\n")
+    another = tmp_path / ".claude/projects/z-project"
+    another.mkdir()
+    (another / f"{claude_id}.jsonl").write_text("{}\n")
     rows = archive_backfill.sources(tmp_path)
     assert [(provider, session_id) for provider, session_id, _ in rows if
             session_id in {claude_id, codex_id}] == [
                 ("claude", claude_id), ("codex", codex_id)]
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert rows[1][1].startswith("file-")
+    assert rows[2][1].startswith("file-")
+    assert rows[1][1] != rows[2][1]
 
 
 def test_batch_retries_same_source_after_time_budget():
@@ -50,3 +55,7 @@ def test_batch_advances_after_ready_and_records_unknown():
     assert result["batch_all_ready"] is False
     assert result["counts"]["READY"] == 1
     assert result["unknown_reasons"] == {"source_modified": 1}
+    assert result["unknown_items"] == [{
+        "index": 1, "provider": "codex",
+        "session_id": "01a0c213-35e3-7053-95fc-36a449c5d676",
+        "reason": "source_modified"}]
