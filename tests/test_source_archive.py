@@ -119,13 +119,15 @@ class SourceArchiveTest(unittest.TestCase):
         self.kwargs["source_finalized"] = True
         self.assertEqual(self.sync()["reason"], "empty_source")
 
-    def test_missing_and_corrupt_source_fail_closed(self):
+    def test_missing_source_fails_but_malformed_row_is_preserved_byte_exact(self):
         self.assertEqual(self.sync()["reason"], "missing_source")
         self.source.write_bytes(b"not-json\n")
-        bad = self.sync()
-        self.assertEqual(bad["status"], "UNKNOWN")
-        self.assertEqual(bad["reason"], "corrupt_source_jsonl")
-        self.assertIsNone(bad["archive_path"])
+        first = self.sync()
+        self.assertEqual(first["status"], "IN_PROGRESS")
+        self.assertEqual(self.sync()["status"], "READY")
+        _, archived = self.chunks(first)
+        self.assertEqual(archived, b"not-json\n")
+        self.assertEqual(A.verified_chunks(first["manifest_path"])["status"], "READY")
 
     def test_changed_prefix_detected_by_bounded_audit(self):
         initial = record(1) + record(2)

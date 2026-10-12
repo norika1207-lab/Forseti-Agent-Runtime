@@ -357,16 +357,10 @@ def _chain(previous: str, offset: int, size: int, digest: str) -> str:
     return hashlib.sha256(material).hexdigest()
 
 
-def _valid_jsonl(payload: bytes) -> bool:
-    if not payload or not payload.endswith(b"\n"):
-        return False
-    for line in payload.splitlines(keepends=True):
-        try:
-            if not isinstance(json.loads(line.decode("utf-8")), dict):
-                return False
-        except (UnicodeError, ValueError, RecursionError):
-            return False
-    return True
+def _complete_lines(payload: bytes) -> bool:
+    # The raw layer preserves source bytes even if a provider wrote a bad row.
+    # Semantic recovery validates JSON separately and must fail closed there.
+    return bool(payload) and payload.endswith(b"\n")
 
 
 def _read_chunk(source, offset: int, source_size: int, budget: int,
@@ -382,11 +376,6 @@ def _read_chunk(source, offset: int, source_size: int, budget: int,
             if source_finalized and source_size - offset - len(payload) <= remaining:
                 raise _Failure("corrupt_source_jsonl")
             break
-        try:
-            if not isinstance(json.loads(line.decode("utf-8")), dict):
-                raise _Failure("corrupt_source_jsonl")
-        except (UnicodeError, ValueError, RecursionError) as exc:
-            raise _Failure("corrupt_source_jsonl") from exc
         payload.extend(line)
     return bytes(payload)
 
@@ -512,7 +501,7 @@ def _verify_part(path: Path, source, offset: int, expected: dict | None,
         raise _Failure("chunk_exceeds_budget")
     if expected and (expected["size"] != size or expected["sha256"] != digest):
         raise _Failure("corrupt_archive_chunk")
-    if not _valid_jsonl(payload):
+    if not _complete_lines(payload):
         raise _Failure("corrupt_archive_chunk")
     source.seek(offset)
     if source.read(size) != payload:
@@ -749,7 +738,7 @@ def _read_encrypted_part(folder: Path, chunk: dict, key: bytes,
             != (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
         raise _Failure("corrupt_archive_chunk")
     plaintext = _decrypt(key, ciphertext, provider, session_id, chunk["offset"])
-    if len(plaintext) != chunk["size"] or not _valid_jsonl(plaintext):
+    if len(plaintext) != chunk["size"] or not _complete_lines(plaintext):
         raise _Failure("corrupt_archive_chunk")
     return plaintext
 

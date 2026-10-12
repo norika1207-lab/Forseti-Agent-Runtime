@@ -153,13 +153,13 @@ class ArchiveWorkerTest(unittest.TestCase):
         self.assertNotIn("archived_bytes", receipt)
         self.assertNotIn("source", receipt)
 
-    def test_corrupt_source_fails_without_exposing_content(self):
+    def test_malformed_source_is_backed_up_without_exposing_content(self):
         self.source.write_bytes(b"PRIVATE-SENTINEL-DO-NOT-LOG\n")
         result = W.launch_worker(**dict(self.kwargs, source_finalized=True))
         self.assertEqual(result["status"], "STARTED")
-        self.assertEqual(self.wait_child(result["pid"]), 2)
+        self.assertEqual(self.wait_child(result["pid"]), 0)
         receipt = self.receipt()
-        self.assertEqual(receipt["status"], "UNKNOWN")
+        self.assertEqual(receipt["status"], "READY")
         self.assertNotIn("PRIVATE-SENTINEL", json.dumps(receipt))
 
     def test_default_worker_budget_accepts_record_above_four_mib(self):
