@@ -46,7 +46,8 @@ def _reply(status: str, reason: str, pid: int | None = None) -> dict:
 def _secure_dir(path: Path) -> None:
     if path.is_symlink():
         raise _WorkerFailure("archive_path_escape")
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not path.is_dir():
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
     info = path.stat()
     if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
         raise _WorkerFailure("insecure_archive_permissions")

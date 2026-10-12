@@ -222,26 +222,32 @@ fn run_session_surface(session: Option<String>, tail: Option<u32>) -> Result<Str
     serde_json::to_string(&snapshot).map_err(|e| format!("Session JSON 無法序列化:{e}"))
 }
 
-static ARCHIVE_LAUNCHES: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
+static ARCHIVE_LAUNCHES: OnceLock<Mutex<HashMap<String, (Instant, bool)>>> = OnceLock::new();
 
-fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_id: &str) {
+fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_id: &str) -> bool {
     if !matches!(provider, "codex" | "claude") || session_id.is_empty() {
-        return;
+        return false;
     }
     let key = format!("{provider}:{session_id}");
     let launches = ARCHIVE_LAUNCHES.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut seen) = launches.lock() else { return };
-    if seen.get(&key).is_some_and(|at| at.elapsed() < Duration::from_secs(20)) {
-        return;
+    let Ok(mut seen) = launches.lock() else { return false };
+    if seen.get(&key).is_some_and(|(at, running)|
+        *running || at.elapsed() < Duration::from_secs(20)) {
+        return true;
     }
+    if seen.values().filter(|(_, running)| *running).count() >= 2 { return false; }
     let script = contents.join("Resources/forseti-cli/archive_worker.py");
-    if !script.is_file() { return; }
-    let Some(py) = find_python() else { return };
+    if !script.is_file() { return false; }
+    let Some(py) = find_python() else { return false };
+    let Some(home) = std::env::var_os("HOME") else { return false };
     let archive_root = "/Volumes/NewDrive/AI Project/Forseti/.forseti/session_archive";
     let spawned = Command::new(py)
         .arg("-B").arg(script).arg("launch-fd")
         .arg("--request-fd").arg("0")
-        .env_remove("__CFBundleIdentifier")
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", "/usr/bin:/bin:/opt/homebrew/bin")
+        .env("LANG", "en_US.UTF-8")
         .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null())
         .spawn();
@@ -254,11 +260,21 @@ fn schedule_raw_archive(contents: &Path, source: &str, provider: &str, session_i
             serde_json::to_vec(&request).is_ok_and(|payload| stdin.write_all(&payload).is_ok())
         });
         if sent {
-            seen.insert(key, Instant::now());
+            seen.insert(key.clone(), (Instant::now(), true));
         } else {
             let _ = child.kill();
         }
-        std::thread::spawn(move || { let _ = child.wait(); });
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            if let Ok(mut seen) = launches.lock() {
+                if let Some(state) = seen.get_mut(&key) {
+                    *state = (Instant::now(), false);
+                }
+            }
+        });
+        sent
+    } else {
+        false
     }
 }
 
@@ -297,9 +313,40 @@ fn changed_transcript(
     })
 }
 
+fn recent_transcripts(
+    roots: &[(PathBuf, &'static str)],
+) -> Vec<(PathBuf, &'static str, String, u64, SystemTime)> {
+    let mut pending = roots.iter().map(|(root, _)| (root.clone(), 0usize)).collect::<Vec<_>>();
+    let mut recent = Vec::new();
+    while let Some((dir, depth)) = pending.pop() {
+        if depth > 10 { continue; }
+        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else { continue; };
+            let path = entry.path();
+            if kind.is_dir() {
+                pending.push((path, depth + 1));
+            } else if kind.is_file() && path.extension().is_some_and(|ext| ext == "jsonl") {
+                let Ok(meta) = entry.metadata() else { continue; };
+                let Ok(modified) = meta.modified() else { continue; };
+                if SystemTime::now().duration_since(modified)
+                    .is_ok_and(|age| age > Duration::from_secs(600)) {
+                    continue;
+                }
+                if let Some((source, provider, session_id)) = changed_transcript(&path, roots) {
+                    recent.push((source, provider, session_id, meta.len(), modified));
+                }
+            }
+        }
+    }
+    recent.sort_unstable_by(|a, b| b.4.cmp(&a.4));
+    recent.truncate(32);
+    recent
+}
+
 #[cfg(test)]
 mod archive_watcher_tests {
-    use super::{changed_transcript, transcript_session_id};
+    use super::{changed_transcript, recent_transcripts, transcript_session_id};
     use std::path::Path;
 
     #[test]
@@ -339,6 +386,26 @@ mod archive_watcher_tests {
         assert_eq!(found.1, "codex");
         assert_eq!(found.2, id);
         assert!(changed_transcript(&invalid, &roots).is_none());
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn reconciliation_finds_changed_transcripts_without_notify_events() {
+        let base = std::env::temp_dir().join(format!(
+            "forseti-archive-reconcile-{}", std::process::id()
+        ));
+        let root = base.join("codex");
+        std::fs::create_dir_all(root.join("2026/09/21")).unwrap();
+        let id = "01a0c213-35e3-7053-95fc-36a449c5d676";
+        let file = root.join(format!("2026/09/21/rollout-2026-09-21T11-47-14-{id}.jsonl"));
+        std::fs::write(&file, b"{}\n").unwrap();
+        std::fs::write(root.join("audit.jsonl"), b"{}\n").unwrap();
+        let roots = vec![(root.canonicalize().unwrap(), "codex")];
+        let found = recent_transcripts(&roots);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].0, file.canonicalize().unwrap());
+        assert_eq!(found[0].2, id);
+        assert_eq!(found[0].3, 3);
         std::fs::remove_dir_all(&base).unwrap();
     }
 }
@@ -465,7 +532,35 @@ fn spawn_watcher(app: tauri::AppHandle) {
         let mut pending = false;
         let interval = Duration::from_millis(700);
         let mut last_emit = std::time::Instant::now() - interval;
+        let mut last_reconcile = std::time::Instant::now() - Duration::from_secs(60);
+        let mut archived_versions: HashMap<PathBuf, (u64, SystemTime, Instant)> = HashMap::new();
         loop {
+            // FSEvents may drop a write burst on a long-lived transcript. A
+            // bounded reconciliation catches changed native sources without
+            // requiring the owner to focus or reopen that session.
+            if last_reconcile.elapsed() >= Duration::from_secs(60) {
+                last_reconcile = std::time::Instant::now();
+                if let Some(contents) = &contents {
+                    let mut current = HashMap::new();
+                    for (source, provider, session_id, size, modified) in
+                        recent_transcripts(&transcript_roots) {
+                        let version = (size, modified);
+                        let accepted = archived_versions.get(&source).is_some_and(|old|
+                            old.0 == size && old.1 == modified
+                                && old.2.elapsed() < Duration::from_secs(300))
+                            || source.to_str().is_some_and(|path|
+                                schedule_raw_archive(contents, path, provider, &session_id));
+                        if accepted {
+                            let last = archived_versions.get(&source).filter(|old|
+                                old.0 == size && old.1 == modified
+                                    && old.2.elapsed() < Duration::from_secs(300))
+                                .map(|old| old.2).unwrap_or_else(Instant::now);
+                            current.insert(source, (version.0, version.1, last));
+                        }
+                    }
+                    archived_versions = current;
+                }
+            }
             match rx.recv_timeout(Duration::from_millis(100)) {
                 Ok(Ok(event)) => {
                     if let Some(contents) = &contents {

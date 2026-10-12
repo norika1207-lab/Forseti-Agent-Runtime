@@ -306,7 +306,8 @@ class SourceArchiveTest(unittest.TestCase):
         (self.root / ".DS_Store").write_bytes(b"metadata")
         with tempfile.TemporaryDirectory() as local:
             anchor_dir = Path(local) / "anchors"
-            with mock.patch.object(A, "_ANCHOR_DIR", anchor_dir):
+            with mock.patch.object(A, "_ANCHOR_DIR", anchor_dir), \
+                    mock.patch.object(A, "_KEY_PATH", Path(local) / "missing-key"):
                 with mock.patch.object(A, "_key", return_value=b"k" * 32) as key:
                     A._archive_key(self.root)
                     self.assertTrue(key.call_args.kwargs["create"])
@@ -318,6 +319,16 @@ class SourceArchiveTest(unittest.TestCase):
                     (anchor_dir / "old-anchor").write_bytes(b"evidence")
                     A._archive_key(self.root)
                     self.assertFalse(key.call_args.kwargs["create"])
+
+    def test_existing_key_does_not_rescan_archive_root(self):
+        with tempfile.TemporaryDirectory() as local:
+            key_path = Path(local) / "archive-key"
+            key_path.write_bytes(b"k" * 32)
+            with mock.patch.object(A, "_KEY_PATH", key_path), \
+                    mock.patch.object(A, "_key", return_value=b"k" * 32) as key, \
+                    mock.patch.object(Path, "iterdir", side_effect=AssertionError("rescan")):
+                self.assertEqual(A._archive_key(self.root), b"k" * 32)
+                key.assert_called_once_with(create=False)
 
     def test_old_manifest_is_rejected_after_anchor_advances(self):
         self.source.write_bytes(record(1))

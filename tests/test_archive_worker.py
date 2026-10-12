@@ -64,6 +64,11 @@ class ArchiveWorkerTest(unittest.TestCase):
         return A._archive_folder(self.root.resolve(), A._key(),
                                  "codex", "session-123")
 
+    def test_existing_secure_directory_is_not_created_again(self):
+        self.root.mkdir(parents=True, mode=0o700)
+        with mock.patch.object(Path, "mkdir", side_effect=AssertionError("mkdir")):
+            W._secure_dir(self.root)
+
     def test_launch_is_nonblocking_and_archive_is_byte_exact(self):
         original = record(1) + record(2) + record(3)
         self.source.write_bytes(original)

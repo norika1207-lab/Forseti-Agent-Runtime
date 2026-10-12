@@ -167,6 +167,8 @@ def _key(*, create: bool = False) -> bytes:
 
 def _archive_key(root: Path) -> bytes:
     """Create a first-use key only with no archive or local anchor evidence."""
+    if _KEY_PATH.is_file() and not _KEY_PATH.is_symlink():
+        return _key(create=False)
     benign = {".DS_Store", ".Spotlight-V100", ".Trashes", ".fseventsd"}
     evidence = any(child.name not in benign and not child.name.startswith("._")
                    for child in root.iterdir())
