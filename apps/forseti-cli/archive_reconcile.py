@@ -19,6 +19,11 @@ MAX_SECONDS = 360
 MAX_SOURCES = 1000000
 
 
+def _check_archive_access(root: Path) -> None:
+    fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    os.close(fd)
+
+
 def _write_receipt(path: Path, result: dict) -> None:
     source_archive._secure_local_dir(path.parent)
     temp = path.parent / f".{path.name}.{secrets.token_hex(8)}.tmp"
@@ -45,6 +50,7 @@ def run_once(*, home: Path = Path.home(),
              limit: int = MAX_SOURCES) -> int:
     source_archive._local_apfs()
     try:
+        _check_archive_access(archive_root)
         result = archive_backfill.import_batch(
             home=home, archive_root=archive_root, start=0, limit=limit,
             seconds=seconds)
@@ -57,7 +63,8 @@ def run_once(*, home: Path = Path.home(),
     except Exception as exc:
         ready = False
         summary = {"status": "UNKNOWN", "at": int(time.time()),
-                   "reason": "reconcile_" + type(exc).__name__.lower()}
+                   "reason": ("newdrive_permission_denied" if isinstance(exc, PermissionError)
+                              else "reconcile_" + type(exc).__name__.lower())}
     _write_receipt(receipt, summary)
     return 0 if ready else 2
 

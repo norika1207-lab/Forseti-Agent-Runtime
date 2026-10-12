@@ -25,7 +25,8 @@ class ArchiveReconcileTest(unittest.TestCase):
                   "counts": {"READY": 2, "UNKNOWN": 0, "IN_PROGRESS": 0},
                   "unknown_reasons": {}, "unknown_items": [],
                   "scan_complete": True, "batch_all_ready": True}
-        with mock.patch.object(R.archive_backfill, "import_batch", return_value=result):
+        with (mock.patch.object(R, "_check_archive_access"),
+              mock.patch.object(R.archive_backfill, "import_batch", return_value=result)):
             self.assertEqual(R.run_once(receipt=self.receipt), 0)
         payload = json.loads(self.receipt.read_text())
         self.assertEqual(payload["status"], "READY")
@@ -39,8 +40,18 @@ class ArchiveReconcileTest(unittest.TestCase):
                   "unknown_reasons": {"source_modified": 1},
                   "unknown_items": [{"session_id": "PRIVATE-ID"}],
                   "scan_complete": False, "batch_all_ready": False}
-        with mock.patch.object(R.archive_backfill, "import_batch", return_value=result):
+        with (mock.patch.object(R, "_check_archive_access"),
+              mock.patch.object(R.archive_backfill, "import_batch", return_value=result)):
             self.assertEqual(R.run_once(receipt=self.receipt), 2)
         payload = self.receipt.read_text()
         self.assertNotIn("PRIVATE-ID", payload)
         self.assertEqual(json.loads(payload)["status"], "UNKNOWN")
+
+    def test_newdrive_denial_fails_before_inventory_scan(self):
+        with (mock.patch.object(R, "_check_archive_access",
+                                side_effect=PermissionError(1, "denied")),
+              mock.patch.object(R.archive_backfill, "import_batch") as scan):
+            self.assertEqual(R.run_once(receipt=self.receipt), 2)
+        scan.assert_not_called()
+        payload = json.loads(self.receipt.read_text())
+        self.assertEqual(payload["reason"], "newdrive_permission_denied")
