@@ -568,6 +568,13 @@ class TabsMatchData(unittest.TestCase):
             r = _tab_shot(tab.view)
             lane = RC._id_html(RC.strip_fixture(r.dom), "lane")
             self.assertIsNotNone(lane, tab.view)
+            if tab.view == "work" and r.fixture["work"].get("ok") and not (
+                r.fixture["work"].get("tasks") or r.fixture["work"].get("active_rows")
+            ):
+                self.assertIn('class="aHead"', lane)
+                self.assertIn("件還沒做完", lane)
+                self.assertIn("進行中", lane)
+                continue
             self.assertGreater(len(lane.strip()), 200,
                                f"{tab.zh} 那一頁 lane 幾乎是空的")
 
