@@ -63,6 +63,28 @@ def test_archive_metadata_is_internal_only(tmp_path, monkeypatch, capsys):
     assert 'schedule_raw_archive(&contents, &source, provider, session_id)' in rust
 
 
+def test_owner_correction_reaches_session_issue_lane(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sid = "88f5fa15-b2a4-42b2-b99f-916a97e51113"
+    transcript = tmp_path / ".claude" / "projects" / "demo" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    records = [
+        {"type": "user", "message": {"content": "先完成 A"}},
+        {"type": "assistant", "message": {"content": [
+            {"type": "text", "text": "我完成了 B"}]}},
+        {"type": "user", "message": {"content": "你做反了，這次要的是 B"}},
+    ]
+    transcript.write_text("\n".join(json.dumps(item, ensure_ascii=False)
+                                    for item in records) + "\n", encoding="utf-8")
+
+    assert session_surface.main(["session_surface.py", sid, "180", "claude"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    correction = next(lane for lane in data["lanes"]["lanes"]
+                      if lane["kind"] == "CORRECTION")
+    assert correction["event_link"] is True
+    assert correction["evidence"] == "你做反了，這次要的是 B"
+
+
 def test_archive_metadata_rejects_unrelated_jsonl(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path))
     transcript = tmp_path / "unrelated.jsonl"
