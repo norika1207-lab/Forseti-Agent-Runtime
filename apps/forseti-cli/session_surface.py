@@ -11,10 +11,14 @@ leave repository audits to explicit background commands.
 from __future__ import annotations
 
 import json
+import os
 import re
+import sqlite3
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
+from urllib.parse import quote
 
 import owner as owner_classifier
 import betrayal
@@ -150,6 +154,23 @@ def claude_session_title(session: str) -> str:
             if title and title != session:
                 return title
     return ""
+
+
+def codex_session_title(session: str, base: Path | None = None) -> str:
+    root = base or Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+    db = root / "state_5.sqlite"
+    if not db.is_file():
+        return ""
+    uri = f"file:{quote(str(db), safe='/')}?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True, timeout=1)) as conn:
+            row = conn.execute(
+                "SELECT name, title FROM threads WHERE id = ?", (session,)
+            ).fetchone()
+    except sqlite3.Error:
+        return ""
+    return next((value for item in (row or ())
+                 if (value := str(item or "").strip())), "")
 
 
 def _claude_record(session: str) -> dict | None:
@@ -312,7 +333,8 @@ def main(argv: list[str]) -> int:
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)
     session = id_match.group(1) if id_match else target.stem
-    session_title = claude_session_title(session) if provider == "claude" else ""
+    session_title = (claude_session_title(session) if provider == "claude"
+                     else codex_session_title(session))
     requested = bool(argv[1].strip()) if len(argv) > 1 else False
     if not requested:
         # A persisted current-session hint is an explicit pin when no

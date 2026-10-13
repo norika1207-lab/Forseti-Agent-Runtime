@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -7,6 +8,42 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "forseti-cli"))
 
 import session_surface  # noqa: E402
+
+
+def test_codex_session_uses_saved_display_name(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.delenv("CODEX_HOME", raising=False)
+    sid = "88f5fa15-b2a4-42b2-b99f-916a97e51113"
+    transcript = tmp_path / ".codex" / "sessions" / f"{sid}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text(json.dumps({"type": "user", "message": {
+        "role": "user", "content": "hello"}}) + "\n", encoding="utf-8")
+    db = tmp_path / ".codex" / "state_5.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT)")
+        conn.execute("INSERT INTO threads VALUES (?, ?, ?)",
+                     (sid, "Initial Codex title", "Renamed Codex session"))
+
+    assert session_surface.main(["session_surface.py", sid, "180", "codex"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["provider"] == "codex"
+    assert data["session_title"] == "Renamed Codex session"
+
+    with sqlite3.connect(db) as conn:
+        conn.execute("UPDATE threads SET name = ? WHERE id = ?", ("  ", sid))
+    assert session_surface.codex_session_title(sid) == "Initial Codex title"
+
+
+def test_codex_title_missing_database_or_session_is_unknown(tmp_path):
+    target = "88f5fa15-b2a4-42b2-b99f-916a97e51113"
+    root = tmp_path / ".codex"
+    assert session_surface.codex_session_title(target, root) == ""
+    root.mkdir()
+    with sqlite3.connect(root / "state_5.sqlite") as conn:
+        conn.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT)")
+        conn.execute("INSERT INTO threads VALUES (?, ?, ?)",
+                     ("another-session", "Another title", "Another name"))
+    assert session_surface.codex_session_title(target, root) == ""
 
 
 def test_auto_session_with_tail_preserves_empty_session_slot(tmp_path, monkeypatch, capsys):
