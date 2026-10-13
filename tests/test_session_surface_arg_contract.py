@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -8,6 +9,81 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "forseti-cli"))
 
 import session_surface  # noqa: E402
+
+
+def test_claude_focus_only_reads_recent_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
+    root.mkdir(parents=True)
+    for index in range(300):
+        path = root / f"local_{index:03}.json"
+        path.write_text(json.dumps({
+            "cliSessionId": f"session-{index}",
+            "title": f"Session {index}",
+            "lastFocusedAt": 1000 if index != 299 else 2000,
+        }), encoding="utf-8")
+        os.utime(path, (index + 1, index + 1))
+    monkeypatch.setattr(session_surface, "_CLAUDE_FOCUS_CACHE", (-1e9, ("", 0.0)))
+
+    assert session_surface.latest_claude_focused_session()[0] == "session-299"
+    assert session_surface.claude_session_title("session-299") == "Session 299"
+    assert len(session_surface._CLAUDE_TITLE_CACHE) == 256
+
+
+def test_auto_follow_skips_unavailable_claude_and_pin_overrides_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    claude = "9aa8c99e-b2a4-42b2-b99f-916a97e51113"
+    missing = "77f5fa15-b2a4-42b2-b99f-916a97e51113"
+    codex = "88f5fa15-b2a4-42b2-b99f-916a97e51113"
+    transcript = tmp_path / ".claude" / "projects" / "demo" / f"{claude}.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("{}\n", encoding="utf-8")
+    codex_path = tmp_path / ".codex" / "sessions" / f"{codex}.jsonl"
+    codex_path.parent.mkdir(parents=True)
+    codex_path.write_text("{}\n", encoding="utf-8")
+    metadata = tmp_path / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
+    metadata.mkdir(parents=True)
+    for name, sid, focus in (("stale", missing, 3000), ("current", claude, 2000)):
+        (metadata / f"local_{name}.json").write_text(json.dumps({
+            "cliSessionId": sid, "sessionId": sid, "title": name,
+            "lastFocusedAt": focus * 1000,
+        }), encoding="utf-8")
+    logs = tmp_path / "codex-logs"
+    logs.mkdir()
+    (logs / "main.log").write_text(
+        "2026-10-13T08:00:00Z thread_stream_view_activity_changed "
+        f"active=true conversationId={codex} rendererWindowAppearance=primary "
+        "rendererWindowFocused=true rendererWindowVisible=true\n", encoding="utf-8")
+    monkeypatch.setattr(session_surface, "_CLAUDE_FOCUS_CACHE", (-1e9, ("", 0.0)))
+
+    assert session_surface.resolve_requested("", logs_root=logs, provider_hint="codex") == codex_path
+    assert session_surface.resolve_requested("", logs_root=logs, provider_hint="claude") == transcript
+    assert session_surface.resolve_requested(codex, logs_root=logs, provider_hint="claude") == codex_path
+    assert session_surface.resolve_requested(claude, logs_root=logs, provider_hint="codex") == transcript
+    assert session_surface.resolve_requested("", logs_root=logs, provider_hint="codex") == codex_path
+
+
+def test_one_disappearing_claude_metadata_does_not_erase_all_candidates(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root = tmp_path / "Library" / "Application Support" / "Claude" / "claude-code-sessions"
+    root.mkdir(parents=True)
+    good = root / "local_good.json"
+    good.write_text(json.dumps({
+        "cliSessionId": "good-session", "title": "Current",
+        "lastFocusedAt": 2000,
+    }), encoding="utf-8")
+    gone = root / "local_gone.json"
+    gone.write_text("{}", encoding="utf-8")
+    stat = Path.stat
+
+    def one_missing(path, *args, **kwargs):
+        if path == gone:
+            raise FileNotFoundError(path)
+        return stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", one_missing)
+    monkeypatch.setattr(session_surface, "_CLAUDE_FOCUS_CACHE", (-1e9, ("", 0.0)))
+    assert session_surface.latest_claude_focused_session()[0] == "good-session"
 
 
 def test_codex_session_uses_saved_display_name(tmp_path, monkeypatch, capsys):

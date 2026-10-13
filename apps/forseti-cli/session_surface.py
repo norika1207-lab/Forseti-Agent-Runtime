@@ -28,6 +28,8 @@ import vitals
 from tracker import tracker_for
 
 _CLAUDE_FOCUS_CACHE: tuple[float, tuple[str, float]] = (-1e9, ("", 0.0))
+_CLAUDE_TITLE_CACHE: dict[str, str] = {}
+_CLAUDE_CANDIDATES: list[tuple[str, float, bool]] = []
 
 
 def latest_under(root: Path) -> Path | None:
@@ -107,9 +109,23 @@ def latest_claude_focused_session() -> tuple[str, float]:
     named_best = ("", 0.0)
     focused_best = ("", 0.0)
     if not root.is_dir():
+        _CLAUDE_CANDIDATES.clear()
+        _CLAUDE_TITLE_CACHE.clear()
         _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
         return best
-    for path in root.rglob("local_*.json"):
+    recent = []
+    try:
+        for path in root.rglob("local_*.json"):
+            try:
+                recent.append((path.stat().st_mtime, path))
+            except OSError:
+                continue
+    except OSError:
+        pass
+    recent = sorted(recent, reverse=True)[:256]
+    titles: dict[str, str] = {}
+    candidates: list[tuple[int, float, str, bool]] = []
+    for _, path in recent:
         try:
             raw = path.read_bytes()
             item = json.loads(raw)
@@ -130,16 +146,32 @@ def latest_claude_focused_session() -> tuple[str, float]:
         if candidate_time > best[1]:
             best = (str(item["cliSessionId"]), candidate_time)
         title = str(item.get("title") or "").strip()
+        named = bool(title and title != "Forseti 自動接續")
+        candidates.append((2 if focused else 1 if named else 0,
+                           focused if focused else candidate_time,
+                           str(item["cliSessionId"]), named))
+        if title and title != "Forseti 自動接續":
+            titles.setdefault(str(item["cliSessionId"]), title)
         if title and title != "Forseti 自動接續" and candidate_time > named_best[1]:
             named_best = (str(item["cliSessionId"]), candidate_time)
         if focused > focused_best[1]:
             focused_best = (str(item["cliSessionId"]), focused)
     best = focused_best if focused_best[0] else named_best if named_best[0] else best
+    _CLAUDE_CANDIDATES.clear()
+    seen: set[str] = set()
+    for _, at, session, named in sorted(candidates, reverse=True):
+        if session not in seen:
+            _CLAUDE_CANDIDATES.append((session, at, named))
+            seen.add(session)
+    _CLAUDE_TITLE_CACHE.clear()
+    _CLAUDE_TITLE_CACHE.update(titles)
     _CLAUDE_FOCUS_CACHE = (time.monotonic(), best)
     return best
 
 
 def claude_session_title(session: str) -> str:
+    if session in _CLAUDE_TITLE_CACHE:
+        return _CLAUDE_TITLE_CACHE[session]
     root = (Path.home() / "Library" / "Application Support" / "Claude" /
             "claude-code-sessions")
     if not root.is_dir():
@@ -246,11 +278,12 @@ def resolve_requested(value: str, *, logs_root: Path | None = None,
 
     # Compare both providers before choosing.  Previously this function
     # checked Codex first, so any Codex focus log could permanently mask Claude.
-    claude_id, claude_at = latest_claude_focused_session()
-    if provider_hint == "claude" and claude_id:
-        target = _find_session(claude_id, roots)
-        if target is not None:
-            return target
+    latest_claude_focused_session()
+    if provider_hint == "claude":
+        for session, _, _ in _CLAUDE_CANDIDATES:
+            target = _find_session(session, roots)
+            if target is not None:
+                return target
     codex_id = latest_codex_focused_session(logs_root)
     codex_at = latest_codex_focus_timestamp(logs_root)
     if provider_hint == "codex" and codex_id:
@@ -261,14 +294,11 @@ def resolve_requested(value: str, *, logs_root: Path | None = None,
     # absent, a named active Claude session is still stronger evidence than a
     # stale Codex renderer event; users can explicitly choose Codex from the
     # picker when that is what they want to inspect.
-    if claude_id and claude_session_title(claude_id):
-        target = _find_session(claude_id, roots)
-        if target is not None:
-            return target
-    if claude_id and claude_at >= codex_at:
-        target = _find_session(claude_id, roots)
-        if target is not None:
-            return target
+    for session, at, named in _CLAUDE_CANDIDATES:
+        if named or at >= codex_at:
+            target = _find_session(session, roots)
+            if target is not None:
+                return target
     if codex_id:
         target = _find_session(codex_id, roots)
         if target is not None:
