@@ -1213,6 +1213,20 @@ fn hook_console(w: &tauri::WebviewWindow) {
     });
 }
 
+fn create_main_window(app: &tauri::AppHandle) -> tauri::Result<tauri::WebviewWindow> {
+    tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::default())
+        .title("Forseti")
+        .inner_size(340.0, 860.0)
+        .min_inner_size(280.0, 400.0)
+        .position(40.0, 60.0)
+        .always_on_top(true)
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true)
+        .resizable(true)
+        .initialization_script("document.title='INITSCRIPT_OK';")
+        .build()
+}
+
 fn main() {
     tauri::Builder::default()
         // 【2026-09-18 診斷】頁面到底有沒有載入。
@@ -1279,7 +1293,7 @@ fn main() {
                     let size = w.outer_size().ok();
                     eprintln!("[forseti] 視窗 main 存在 visible={vis} \
                                pos={pos:?} size={size:?}");
-                    let _ = w.show();
+                    w.show()?;
                     let _ = w.unminimize();
                     let _ = w.set_focus();
                     // 【2026-09-18】上面那三行早就在了，而視窗還是看不到。
@@ -1335,37 +1349,12 @@ fn main() {
                 }
                 None => {
                     eprintln!("[forseti] 設定檔沒生出視窗，改用程式建");
-                    match tauri::WebviewWindowBuilder::new(
-                        app, "main", tauri::WebviewUrl::default())
-                        .title("Forseti")
-                        .inner_size(340.0, 860.0)
-                        .min_inner_size(280.0, 400.0)
-                        .position(40.0, 60.0)
-                        .always_on_top(true)
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
-                        .hidden_title(true)
-                        .resizable(true)
-                        // 【走 WKUserScript 這條，不走 evaluateJavaScript】
-                        // eval 那條在任何時機都沒效果。initialization_script
-                        // 是另一個機制（WKUserScript，頁面載入前注入）。
-                        // 兩個都不跑，才能確定是 WKWebView 把 JS 關了;
-                        // 只有 eval 不跑的話，問題在 eval 那條路。
-                        .initialization_script(
-                            "document.title='INITSCRIPT_OK';")
-                        .build()
-                    {
-                        Ok(w) => {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                            eprintln!("[forseti] 視窗建好了（手動路徑）");
-                            #[cfg(target_os = "macos")]
-                            force_enable_javascript(&w);
-                            // 手動這條路跟 config 那條走不同程式碼。
-                            // 行為不同的話，範圍就縮到 config 上。
-                            // 同上：正式視窗不啟用會阻塞 AX 的診斷 hook。
-                        }
-                        Err(e) => eprintln!("[forseti] 視窗建不起來：{e}"),
-                    }
+                    let w = create_main_window(app.handle())?;
+                    w.show()?;
+                    let _ = w.set_focus();
+                    eprintln!("[forseti] 視窗建好了（手動路徑）");
+                    #[cfg(target_os = "macos")]
+                    force_enable_javascript(&w);
                 }
             }
             Ok(())
@@ -1373,6 +1362,29 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             snapshot, strands, recover_context, sessions, timeline, repo_path, open_session, fork, act, north_star_change, note_add, work, machine, selftest, features, audit, spec_reading, block_reading, sufficiency, blast_detail
         ])
-        .run(tauri::generate_context!())
-        .expect("Forseti 啟動失敗");
+        .build(tauri::generate_context!())
+        .expect("Forseti 啟動失敗")
+        .run(|app, event| {
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event {
+                let result = match app.get_webview_window("main") {
+                    Some(w) => w.show().map(|_| {
+                        let _ = w.unminimize();
+                        let _ = w.set_focus();
+                    }),
+                    None => create_main_window(app).and_then(|w| {
+                        w.show()?;
+                        let _ = w.set_focus();
+                        force_enable_javascript(&w);
+                        Ok(())
+                    }),
+                };
+                if let Err(e) = result {
+                    eprintln!("[forseti] 無法重新開啟主視窗：{e}");
+                    app.exit(1);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }

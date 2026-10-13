@@ -23,6 +23,18 @@ JS = (UI / "app.js").read_text(encoding="utf-8")
 CSS = (UI / "app.css").read_text(encoding="utf-8")
 HTML = (UI / "index.html").read_text(encoding="utf-8")
 
+
+def test_main_window_lifecycle_with_no_configured_windows():
+    root = UI.parent / "src-tauri"
+    config = json.loads((root / "tauri.conf.json").read_text(encoding="utf-8"))
+    rust = (root / "src" / "main.rs").read_text(encoding="utf-8")
+    assert config["app"]["windows"] == []
+    assert "let w = create_main_window(app.handle())?;" in rust
+    assert "tauri::RunEvent::Reopen { .. }" in rust
+    assert "None => create_main_window(app)" in rust
+    assert ".build(tauri::generate_context!())" in rust
+    assert ".run(|app, event|" in rust
+
 DECLARED = set(re.findall(r"(--[a-zA-Z0-9-]+)\s*:", CSS))
 
 # 只抓「沒有後備值」的引用。
