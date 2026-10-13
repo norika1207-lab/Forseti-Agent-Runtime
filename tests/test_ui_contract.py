@@ -1183,14 +1183,32 @@ class SheetRenderersAreActuallyCalled(unittest.TestCase):
         m = re.search(r"\nasync function openPicker\(\) \{(.*?)\n\}\n",
                       JS, re.S)
         self.assertIsNotNone(m, "找不到 openPicker 的函式本體")
-        self.assertIn("renderPicker()", m.group(1),
-                      "openPicker 沒有叫 renderPicker，那份清單會永遠"
-                      "停在「讀取中」")
-        # 上面那句症狀成立的前提：openPicker 自己先寫了「讀取中」。
-        # 哪天這句話改掉，錯誤訊息就會指錯方向。
-        self.assertIn("讀取中", m.group(1),
-                      "openPicker 不再寫「讀取中」了，上面那條的錯誤"
-                      "訊息要跟著改")
+        body = m.group(1)
+        self.assertLess(body.index("renderPicker()"),
+                        body.index('await invoke("sessions", {})'),
+                        "清單請求完成前須先畫出自動跟隨入口")
+        self.assertGreater(body.rindex("renderPicker()"),
+                           body.index('await invoke("sessions", {})'),
+                           "清單請求完成後須重畫 session 列表")
+        self.assertIn("讀取中", JS,
+                      "讀取清單時應顯示載入狀態")
+
+    def test_側邊清單舊請求不可覆蓋新清單(self):
+        m = re.search(r"\nasync function openPicker\(\) \{(.*?)\n\}\n",
+                      JS, re.S)
+        self.assertIsNotNone(m)
+        body = m.group(1)
+        self.assertIn("const requestId = ++pickerRequestId", body)
+        self.assertEqual(body.count("requestId !== pickerRequestId"), 2,
+                         "成功與失敗回應都要忽略過時請求")
+
+    def test_側邊清單失敗只顯示錯誤不顯示空結果(self):
+        m = re.search(r"\nfunction renderPicker\(\) \{(.*?)\n\}\n",
+                      JS, re.S)
+        self.assertIsNotNone(m)
+        self.assertIn("sessionsError ? `讀不到 session 清單：${sessionsError}`",
+                      m.group(1))
+        self.assertIn('sessionsError = String(e)', JS)
 
     def test_搜尋框打字有接上renderPicker(self):
         self.assertRegex(

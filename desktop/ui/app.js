@@ -3734,6 +3734,9 @@ try {
 } catch (e) { /* localStorage may be unavailable */ }
 
 let allSessions = [];
+let sessionsLoading = false;
+let sessionsError = "";
+let pickerRequestId = 0;
 const picker = $("picker");
 
 function timeAgo(ts) {
@@ -3780,7 +3783,12 @@ function renderPicker() {
       direct.addEventListener("click", () => choose(q));
       box.appendChild(direct);
     } else {
-      box.insertAdjacentHTML("beforeend", '<div class="pkNone">沒有符合的</div>');
+      const empty = document.createElement("div");
+      empty.className = "pkNone";
+      empty.textContent = sessionsLoading ? "讀取中"
+        : sessionsError ? `讀不到 session 清單：${sessionsError}`
+        : "沒有符合的";
+      box.appendChild(empty);
     }
     return;
   }
@@ -3828,16 +3836,24 @@ function choose(id) {
 async function openPicker() {
   picker.hidden = false;
   $("pickQuery").value = "";
-  $("pickList").innerHTML = '<div class="pkNone">讀取中</div>';
+  allSessions = [];
+  sessionsLoading = true;
+  sessionsError = "";
+  const requestId = ++pickerRequestId;
+  renderPicker();
   try {
     const raw = await invoke("sessions", {});
+    if (requestId !== pickerRequestId) return;
     allSessions = (JSON.parse(raw).sessions) || [];
   } catch (e) {
+    if (requestId !== pickerRequestId) return;
     allSessions = [];
-    $("pickList").innerHTML =
-      `<div class="pkNone">讀不到 session 清單：${esc(String(e))}</div>`;
+    sessionsLoading = false;
+    sessionsError = String(e);
+    renderPicker();
     return;
   }
+  sessionsLoading = false;
   renderPicker();
 }
 function closePicker() { picker.hidden = true; }
