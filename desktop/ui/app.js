@@ -49,6 +49,8 @@ let follow = true;
 let view = "tree";
 /* 最後一次 snapshot。drill-down 展開時不必再打一次後端。 */
 let lastSnap = null;
+let lanePage = 0;
+let lanePageSession = "";
 let dismissed = new Set();      // 關掉的卡片，§5.1 留點可以重開
 let lastCount = 0;
 // 輪次編號只在 session 內唯一；不能讓上一條線的「不用」污染下一條線。
@@ -1638,12 +1640,16 @@ function drawDrift() {
   const lane = $("lane");
   if (!lane) return;
   lane.querySelector(".drift")?.remove();
+  const pager = $("lanePageBtn");
+  if (pager) pager.hidden = true;
   const guts = [...lane.querySelectorAll(".st .gut")];
   if (guts.length < 2) return;
 
   const NS = "http://www.w3.org/2000/svg";
   const MAIN = 10;
   const GAP = 8;
+  const laneWidth = guts[0].getBoundingClientRect().width;
+  const visibleSlots = Math.max(1, Math.floor((laneWidth - MAIN - 7) / GAP));
   const laneTop = lane.getBoundingClientRect().top;
   const semanticByN = new Map((rows || []).map((row) => [Number(row.n), row.path_semantics || {}]));
 
@@ -1667,12 +1673,14 @@ function drawDrift() {
 
   const svg = document.createElementNS(NS, "svg");
   svg.setAttribute("class", "drift");
+  svg.setAttribute("width", String(laneWidth));
   svg.setAttribute("height", String(lane.scrollHeight));
   const add = (el, cls) => { el.setAttribute("class", cls); svg.appendChild(el); return el; };
   const addHit = (visible, info) => {
     const hit = visible.cloneNode(false);
     hit.removeAttribute("style");
     hit.removeAttribute("stroke");
+    hit.removeAttribute("data-rail-x");
     lineTip(hit, info);
     add(hit, "lineHit");
     return hit;
@@ -1687,11 +1695,28 @@ function drawDrift() {
     }))
     .sort((p, q) => p.from_n - q.from_n);
   const packed = packLanes(raw);
+  const slotCount = packed.reduce((max, it) => Math.max(max, it.lane + 1), 0);
+  const pageCount = Math.max(1, Math.ceil(slotCount / visibleSlots));
+  if (lanePageSession !== currentSession) {
+    lanePageSession = currentSession;
+    lanePage = pageCount - 1;
+  }
+  lanePage = Math.min(lanePage, pageCount - 1);
+  if (pager && pageCount > 1) {
+    pager.hidden = false;
+    pager.textContent = `軌道 ${lanePage + 1}/${pageCount}`;
+    pager.setAttribute("aria-label", `查看其他問題軌道，目前第 ${lanePage + 1} 組，共 ${pageCount} 組`);
+    pager.onclick = () => {
+      lanePage = (lanePage + 1) % pageCount;
+      drawDrift();
+    };
+  }
+  const firstSlot = lanePage * visibleSlots;
 
-  packed.forEach((it) => {
+  packed.filter((it) => it.lane >= firstSlot && it.lane < firstSlot + visibleSlots).forEach((it) => {
     const A = yOf.get(it.from_n), B = yOf.get(it.to_n);
     if (!A || !B) return;
-    const x = MAIN + GAP * (it.lane + 1);
+    const x = MAIN + GAP * (it.lane - firstSlot + 1);
     const cls = "lane " + (LANE_CLS[it.kind] || "ld") + (it.open ? " open" : "");
     const laneSpec = ((((lastSnap || {}).source_tree_schema || {}).lanes || {})[it.kind] || {});
     const laneInfo = {
@@ -1705,6 +1730,7 @@ function drawDrift() {
     const bend = 14;
 
     const out = document.createElementNS(NS, "path");
+    out.setAttribute("data-rail-x", String(x));
     out.setAttribute("d",
       `M ${MAIN} ${A.y0} C ${MAIN} ${A.y0 + bend * .6}, ` +
       `${x} ${A.y0 + bend * .4}, ${x} ${A.y0 + bend}`);

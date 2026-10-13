@@ -202,6 +202,25 @@ class PathPointClick(unittest.TestCase):
         self.snap["rows"][1]["path_semantics"]["state"] = "new_direction"
         self.assertIn('data-reference="north-star"', self.shot())
 
+    def test_dense_issue_lanes_stay_inside_gutter_and_offer_pages(self):
+        self.snap["lanes"] = {"lanes": [
+            {"kind": "COMPACT", "from_n": 1, "to_n": 2, "open": True}
+            for _ in range(12)]}
+        dom = self.shot(snap=self.snap)
+        svg = re.search(r'<svg\b[^>]*class="drift"[^>]*>', dom)
+        self.assertIsNotNone(svg)
+        width = float(re.search(r'width="([\d.]+)"', svg.group()).group(1))
+        rail_x = [float(x) for x in re.findall(r'data-rail-x="([\d.]+)"', dom)]
+        self.assertTrue(rail_x)
+        self.assertLess(len(rail_x), 12)
+        self.assertTrue(all(x + 7 <= width for x in rail_x))
+        self.assertRegex(dom, r'id="lanePageBtn"[^>]*>軌道 \d+/\d+</button>')
+        paged = self.shot("#lanePageBtn", snap=self.snap)
+        current = re.search(r'id="lanePageBtn"[^>]*>(軌道 \d+/\d+)</button>', dom)
+        next_page = re.search(r'id="lanePageBtn"[^>]*>(軌道 \d+/\d+)</button>', paged)
+        self.assertIsNotNone(next_page)
+        self.assertNotEqual(current.group(1), next_page.group(1))
+
     def test_each_sideband_compaction_opens_its_own_receipt(self):
         self.snap["compaction_events"] = [
             {"ordinal": 1, "n": 2, "line": 101, "at": 1000,

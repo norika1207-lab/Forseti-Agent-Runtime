@@ -59,7 +59,7 @@
   --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,monospace;
 
   --ease:cubic-bezier(.28,.11,.32,1);   /* Apple 的緩動曲線 */
-  --lane-x:46px;
+  --lane-x:clamp(46px, 12vw, 70px);
 }
 
 /* 時間軸那一區是深的。
@@ -440,6 +440,7 @@ button{font:inherit;cursor:pointer;color:inherit}
   border:0;background:transparent;color:var(--ink-4);letter-spacing:-.005em;
   transition:background .18s var(--ease),color .18s var(--ease)}
 .foot-btn[aria-pressed="true"]{background:rgba(10,132,255,.16);color:var(--blue)}
+#lanePageBtn[hidden]{display:none}
 .sp{flex:1}
 .stat{font:10.5px var(--mono);color:var(--ink-4);letter-spacing:-.03em;
   font-variant-numeric:tabular-nums;max-width:108px;
@@ -944,7 +945,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 
    可見線不攔事件；只有加寬的透明 lineHit 接 hover，點擊仍落在卡片上。 */
 .drift{position:absolute;left:0;top:0;width:var(--lane-x);
-  height:100%;pointer-events:auto;overflow:visible;z-index:1}
+  height:100%;pointer-events:auto;overflow:hidden;z-index:1}
 .drift path{fill:none;stroke-width:2.5;stroke-linecap:round;
   stroke-linejoin:round;pointer-events:none}
 .drift circle{pointer-events:none}
