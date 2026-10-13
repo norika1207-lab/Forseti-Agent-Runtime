@@ -92,10 +92,13 @@ where the source retained it. A bounded recovery path can prepare source-referen
 user and AI text before a compaction anchor. It does not currently recover tool
 payloads into that packet or prove what the model forgot.
 The development desktop offers an explicit **Retrieve original text** action on
-a compaction dot. It checks the selected native session, anchor line, and round,
+a compaction dot; the Claude compaction card also opens that detail panel.
+It checks the selected native session, anchor line, and round,
 then displays an at-most-three-round window with physical source references.
 Oversized or incomplete windows return `UNKNOWN` rather than a truncated claim.
-This UI path has automated tests but still needs installed-app interaction acceptance.
+Automated tests cover both providers. On 2026-10-12 the installed app opened
+the Codex and Claude compaction dots and displayed sourced original text for
+each. Cross-provider foreground switching remains separately unaccepted.
 **A person reviews and pastes the packet; it is not injected into an AI automatically.**
 
 ### A dot is not a card
@@ -146,7 +149,7 @@ causal links, cross-session behavior, or native end-to-end verification.
 | Stalls and recovery hints | See long waits without new evidence | Detection and recovery data exist; Forseti cannot force an external AI product to continue |
 | Support and subagent records | Keep a support worker's work visible beyond one summary | Partial; sidechains can be read, but exact linkage to the initiating turn still needs source evidence |
 | Advice cards | Surface a useful question or verification step | UI entry point and generation logic exist; timing, presentation, and advice quality need real-session acceptance |
-| Reading coverage and context recovery | See what was read and what may be missing after compaction | Partial; an on-demand native-text packet is wired to compaction dots, but tool payloads and automatic AI re-injection are absent, and native interaction acceptance remains open. Coverage is not understanding |
+| Reading coverage and context recovery | See what was read and what may be missing after compaction | Partial; an on-demand native-text packet is wired to compaction dots and passed installed-app interaction checks for Codex and Claude. Cross-provider foreground switching, tool payload recovery, and automatic AI re-injection remain unaccepted or absent. Coverage is not understanding |
 | Independent raw-session archive | Preserve source bytes for later verification and bounded recovery | In development; encrypted chunks, an APFS-local trust anchor, and a bounded reconciler cover discoverable local Codex, Claude, and Grok CLI JSONL. On 2026-10-12 the installed desktop launched the reconciler and produced partial batch receipts, while active files continued to change. The separate LaunchAgent remains disabled after a NewDrive permission denial. Independent security and full native-path acceptance remain pending; do not treat this as an accepted automatic backup |
 | Task ledger and acceptance receipts | Separate assigned, submitted, independently verified, and completed | Engine and views exist; long-running multi-agent dispatch still needs sustained verification |
 | Claude Code project hook | Ask before conflicting writes in the same project | Installed per project; internal errors fail open, so it cannot block every collision |

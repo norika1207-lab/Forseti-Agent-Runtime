@@ -268,6 +268,7 @@ class Tracker:
         # uuid -> 指紋。壓縮前的重播要靠它認出來，見 `_replay_seen()`。
         self._seen: dict[str, str] = {}
         self.replayed = 0                          # 這份檔案裡跳過幾行
+        self._last_compaction_kind = ""
 
     # -- 內部 ---------------------------------------------------------
 
@@ -452,9 +453,13 @@ class Tracker:
             cur = self.strands[-1]
         cur.compaction = True
 
-        # 已經有一顆黑點的話,只補上這一行帶來的資料,不再開新點。
-        existing = next((d for d in cur.dots if d.label == "對話壓縮"), None)
-        if existing is not None:
+        # 只有相鄰的 metadata + summary 是同一次事件；同輪稍後再次
+        # 壓縮，仍須保留獨立的原始行錨點。
+        existing = next((d for d in reversed(cur.dots)
+                         if d.label == "對話壓縮"), None)
+        kind = "metadata" if rec.get("compactMetadata") else "summary"
+        if (existing is not None and line_no == existing.line_no + 1
+                and kind != self._last_compaction_kind):
             if pre and post:
                 existing.detail = detail
                 cur.compaction_meta.update(
@@ -463,6 +468,7 @@ class Tracker:
             # 錨的座標取第一次看到的那一行,不覆蓋 ——
             # 那一行才是壓縮真正發生的位置。
             cur.compaction_meta.setdefault("line", line_no)
+            self._last_compaction_kind = kind
             return
 
         cur.compaction_meta = {"pre_tokens": pre, "post_tokens": post,
@@ -470,6 +476,7 @@ class Tracker:
                                "line": line_no}
         self._add_dot(Dot(at=at, label="對話壓縮", kind=KIND_OTHER,
                           detail=detail, line_no=line_no, size_override=6))
+        self._last_compaction_kind = kind
 
     def _close_tool(self, block: dict, at: float) -> None:
         """tool_result 回來了。失敗的話把對應的點標紅。§4.1
@@ -686,7 +693,13 @@ class Tracker:
         # 這兩個欄位讓下游分得出「沒發生過」與「我看不到」。
         # 不把視窗外的內容搬進來 —— 那是另一件事,而且會讓這份
         # 每 1 到 3 秒送一次的快照變重。
-        comp_ns = [s.n for s in self.strands if s.compaction]
+        compaction_events = [
+            {"ordinal": ordinal, "n": strand.n, "line": dot.line_no,
+             "at": dot.at, "label": dot.label, "size": dot.size}
+            for ordinal, (strand, dot) in enumerate(
+                ((strand, dot) for strand in self.strands
+                 for dot in strand.dots if dot.label == "對話壓縮"), start=1)
+        ]
         support = self._support_records()
         if support and rows:
             # A sidechain belongs to the parent command's latest visible card.
@@ -699,8 +712,10 @@ class Tracker:
             "shown": len(rows),
             "total_dots": total_dots,
             "total_failed": total_failed,
-            "compaction_total": len(comp_ns),
-            "compaction_last_n": comp_ns[-1] if comp_ns else None,
+            "compaction_total": len(compaction_events),
+            "compaction_last_n": (compaction_events[-1]["n"]
+                                   if compaction_events else None),
+            "compaction_events": compaction_events,
             "rows": [s.to_dict() for s in rows],
             "support_total": len(support),
         }

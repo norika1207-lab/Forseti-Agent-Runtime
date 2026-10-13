@@ -45,12 +45,13 @@ BLIND_MIN = 3
 #: 一條軌道至少要跨幾輪才畫。單輪事件是點不是線。
 MIN_SPAN = 1
 
-KINDS = ("COMPACT", "BETRAYAL", "DRIFT", "TOOL_FAIL", "BLIND_WRITE")
+KINDS = ("COMPACT", "BETRAYAL", "DRIFT", "CORRECTION", "TOOL_FAIL", "BLIND_WRITE")
 
 _LABEL = {
     "COMPACT": "對話壓縮，記憶不完整",
     "BETRAYAL": "說了沒做，還沒落地",
     "DRIFT": "偏離目標",
+    "CORRECTION": "使用者指出上一輪問題",
     "TOOL_FAIL": "工具連續失敗",
     "BLIND_WRITE": "一直在找，還沒動手",
 }
@@ -89,9 +90,15 @@ def lanes(rows: list) -> list[dict]:
     for a, b, openish in _runs(rows, lambda r: (r.get("failed") or 0) > 0):
         out.append({"kind": "TOOL_FAIL", "from_n": a, "to_n": b, "open": openish})
 
-    for a, b, openish in _runs(
-            rows, lambda r: ((r.get("goal") or {}).get("distance") or 0) > DRIFT_ON):
-        out.append({"kind": "DRIFT", "from_n": a, "to_n": b, "open": openish})
+    for previous, current in zip(rows, rows[1:]):
+        if current.get("corrected_by_owner"):
+            out.append({
+                "kind": "CORRECTION", "from_n": _n(previous),
+                "to_n": _n(current), "open": False, "event_link": True,
+                "why": "下一輪使用者指出前一輪的問題",
+                "evidence": (current.get("owner_text") or "")[:220],
+                "epistemic": "OBSERVED",
+            })
 
     for a, b, openish in _runs(
             rows,

@@ -64,6 +64,27 @@ def test_claude_original_text_and_line_range(tmp_path):
     assert f"{source.resolve()}:1-2" in serialized
 
 
+def test_claude_two_compactions_in_one_round_keep_physical_boundaries(tmp_path):
+    source = tmp_path / "claude.jsonl"
+    _write(source, [
+        {"type": "user", "timestamp": "2026-10-08T10:00:00Z",
+         "message": {"content": "原始指令"}},
+        {"type": "system", "timestamp": "2026-10-08T10:00:01Z",
+         "compactMetadata": {"preTokens": 100, "postTokens": 10}},
+        {"type": "system", "timestamp": "2026-10-08T10:00:02Z",
+         "compactMetadata": {"preTokens": 120, "postTokens": 20}},
+    ])
+    first = recover_provider_interval(
+        source_path=str(source), provider="claude", start_round=1,
+        compaction_ordinal=1, goal="原始指令", task="回取")
+    second = recover_provider_interval(
+        source_path=str(source), provider="claude", start_round=1,
+        compaction_ordinal=2, goal="原始指令", task="回取")
+    assert first["compaction_source_ref"] == f"{source.resolve()}:2"
+    assert second["status"] == "UNKNOWN"
+    assert second["reason"] == "cross_compaction_boundary"
+
+
 def test_corrupt_native_line_fails_closed(tmp_path):
     source = tmp_path / "codex.jsonl"
     source.write_text('{"type":"response_item"}\n{broken}\n', encoding="utf-8")

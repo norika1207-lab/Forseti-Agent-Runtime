@@ -262,7 +262,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 /* minmax(0,1fr) 不是 1fr。
    grid 的 1fr 最小尺寸是 auto，內容夠寬就撐破欄寬，
    把右邊的時間欄推出畫面 —— 而點列剛好是會變寬的東西。 */
-.st{display:grid;grid-template-columns:var(--lane-x) minmax(0,1fr) 50px;
+.st{display:grid;grid-template-columns:var(--lane-x) minmax(0,1fr);
   gap:10px;padding:0 16px;position:relative}
 
 .gut{position:relative}
@@ -351,10 +351,10 @@ button{font:inherit;cursor:pointer;color:inherit}
   padding:3px 9px;border-radius:var(--r-pill);
   background:rgba(255,159,10,.18)}
 
-.time{font:11px var(--mono);color:var(--ink-3);text-align:right;
-  font-variant-numeric:tabular-nums;padding-top:14px;white-space:nowrap;
-  letter-spacing:-.03em}
-.dur{display:block;font-size:10px;color:var(--ink-4);margin-top:2px}
+.time{display:flex;justify-content:space-between;gap:8px;
+  font:10px var(--mono);color:var(--ink-3);text-align:left;
+  font-variant-numeric:tabular-nums;margin-bottom:8px;white-space:nowrap}
+.dur{display:inline;font-size:10px;color:var(--ink-4)}
 
 /* 還在跑:線往下滴。 */
 .grow::after{content:"";position:absolute;left:23px;bottom:-11px;width:1.5px;
@@ -410,6 +410,8 @@ button{font:inherit;cursor:pointer;color:inherit}
 .card.fatal{margin:20px 16px;border:1px solid rgba(255,69,58,.45)}
 .card.fatal b{color:var(--red)}
 .card.black-note b{color:var(--ink)}
+.card.black-note.openable{cursor:pointer}
+.card.black-note.openable:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
 
 /* ── 底 ─────────────────────────────────────── */
 .bottom{display:flex;align-items:center;gap:10px;padding:11px 16px 13px;
@@ -1350,7 +1352,7 @@ button{font:inherit;cursor:pointer;color:inherit}
 .drift .lane.lc{stroke:var(--ink-3)}     /* 壓縮:中性色,它不是誰的錯 */
 .drift .lane.lb{stroke:var(--red)}       /* 說了沒做 */
 .drift .lane.ld{stroke:var(--amber)}     /* 偏離目標 */
-.drift .lane.lcr{stroke:var(--amber)}    /* 使用者糾正 */
+.drift .lane.lcr{stroke:var(--amber)}    /* 使用者糾正,非目標偏離 */
 .drift .lane.lf{stroke:var(--blue)}      /* 工具失敗:誠實的失敗 */
 .drift .lane.lw{stroke:var(--violet)}    /* 只讀不寫 */
 

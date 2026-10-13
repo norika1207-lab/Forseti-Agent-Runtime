@@ -27,11 +27,14 @@ class IsolatedHarness:
     """Browser shell with synthetic data only; never calls desktop_api.strands."""
 
     def __init__(self, snap: dict, click_selector: str | None = None,
-                 recover: bool = False, switch_session: bool = False) -> None:
+                 recover: bool = False, switch_session: bool = False,
+                 picker_query: str = "", keyboard: bool = False) -> None:
         self.snap = snap
         self.click_selector = click_selector
         self.recover = recover
         self.switch_session = switch_session
+        self.picker_query = picker_query
+        self.keyboard = keyboard
 
     def build(self, out: Path, fake: bool, session: str = "") -> None:
         ui = ROOT / "desktop" / "ui"
@@ -64,13 +67,25 @@ class IsolatedHarness:
                 '<script>const pointClick = new MutationObserver(() => {'
                 f'const point = document.querySelector({selector});'
                 'if (point) { pointClick.disconnect(); '
-                'point.dispatchEvent(new MouseEvent("click", {bubbles:true}));'
+                + ('point.dispatchEvent(new KeyboardEvent("keydown", '
+                   '{key:"Enter",bubbles:true}));' if self.keyboard else
+                   'point.dispatchEvent(new MouseEvent("click", {bubbles:true}));')
                 + ('setTimeout(() => document.querySelector("#nodeMarkerRecover").click(), 50);'
                    if self.recover else '')
                 + ('setTimeout(() => choose("another-session"), 100);'
                    if self.switch_session else '')
                 + ' }}); pointClick.observe(document, {childList:true, subtree:true});</script>')
             html = html.replace('</body>', click_script + '</body>')
+        if self.picker_query:
+            query = json.dumps(self.picker_query)
+            picker_script = (
+                '<script>const pickerProbe = new MutationObserver(() => {'
+                'const button = document.querySelector("#burgerBtn");'
+                'if (button) { pickerProbe.disconnect(); button.click();'
+                f'const field = document.querySelector("#pickQuery"); field.value = {query};'
+                'field.dispatchEvent(new Event("input", {bubbles:true}));'
+                '}}); pickerProbe.observe(document, {childList:true, subtree:true});</script>')
+            html = html.replace('</body>', picker_script + '</body>')
         blob = json.dumps(fixture, ensure_ascii=False).replace("<", "\\u003c")
         html = html.replace("</head>",
                             '<script type="application/json" id="fx">' + blob + '</script>\n</head>')
@@ -117,10 +132,12 @@ class PathPointClick(unittest.TestCase):
             "excluded": ["owner change checked"], "prompt": "Review current goal"}
         self.snap["rows"][1]["notes"] = [{"text": "Owner note for this turn", "at": 2}]
 
-    def shot(self, selector=None, snap=None, recover=False, switch_session=False):
+    def shot(self, selector=None, snap=None, recover=False, switch_session=False,
+             picker_query="", keyboard=False):
         with tempfile.TemporaryDirectory(prefix="forseti-point-test-", dir=ROOT.parent) as tmp:
             with patch.object(RC, "_load_harness", return_value=IsolatedHarness(
-                    snap or self.snap, selector, recover, switch_session)):
+                    snap or self.snap, selector, recover, switch_session,
+                    picker_query, keyboard)):
                 result = RC.render(fake=False, outdir=Path(tmp),
                                    budget_ms=7000)
             self.assertFalse(any("Uncaught" in line for line in result.console), result.console)
@@ -213,6 +230,37 @@ class PathPointClick(unittest.TestCase):
         self.assertIn("壓縮前的完整原文；不是卡片摘要", dom)
         self.assertIn("/native/source.jsonl:101-103#2:owner_text", dom)
 
+    def test_compaction_card_opens_same_recovery_entry(self):
+        self.snap.update({"provider": "claude", "compaction_events": [
+            {"ordinal": 1, "n": 2, "line": 104, "at": 1000,
+             "label": "對話壓縮", "size": 6}]})
+        self.snap["rows"][1].update({"compaction": True,
+                                      "compaction_meta": {"line": 104}})
+        dom = marker(self.shot('.card.black-note.openable'))
+        self.assertIn("第 1 次 · 對話壓縮", dom)
+        self.assertIn("原始紀錄第 104 行", dom)
+
+    def test_compaction_card_close_key_does_not_open_detail(self):
+        self.snap["compaction_events"] = [
+            {"ordinal": 1, "n": 2, "line": 104, "at": 1000,
+             "label": "對話壓縮", "size": 6}]
+        self.snap["rows"][1].update({"compaction": True,
+                                      "compaction_meta": {"line": 104}})
+        dom = self.shot('.card.black-note.openable .x', keyboard=True)
+        self.assertIn('id="nodeSheet" hidden', dom)
+
+    def test_compaction_card_targets_its_displayed_latest_anchor(self):
+        self.snap["compaction_events"] = [
+            {"ordinal": 1, "n": 2, "line": 101, "at": 1000,
+             "label": "對話壓縮", "size": 6},
+            {"ordinal": 2, "n": 2, "line": 205, "at": 2000,
+             "label": "對話壓縮", "size": 6}]
+        self.snap["rows"][1].update({"compaction": True,
+                                      "compaction_meta": {"line": 205}})
+        dom = marker(self.shot('.card.black-note.openable'))
+        self.assertIn("第 2 次 · 對話壓縮", dom)
+        self.assertIn("原始紀錄第 205 行", dom)
+
     def test_old_recovery_cannot_fill_panel_after_session_switch(self):
         self.snap.update({"provider": "codex", "_archive_source_path": "/native/source.jsonl"})
         self.snap["compaction_events"] = [
@@ -221,6 +269,12 @@ class PathPointClick(unittest.TestCase):
                         recover=True, switch_session=True)
         self.assertIn('id="nodeSheet" hidden', dom)
         self.assertNotIn("壓縮前的完整原文；不是卡片摘要</pre>", dom)
+
+    def test_unknown_exact_uuid_offers_direct_open(self):
+        uuid = "01a10a0c-1154-7ef2-ad45-182ed4d25f01"
+        dom = self.shot(picker_query=uuid)
+        self.assertIn("以此 Session ID 開啟", dom)
+        self.assertIn(uuid, dom)
 
     def test_compaction_marks_are_not_inferred_from_row_or_tool_dots(self):
         self.snap["rows"][1]["dots"] = [{"label": "對話壓縮", "count": 2}]
@@ -238,6 +292,14 @@ class PathPointClick(unittest.TestCase):
         row = re.search(r'<div class="st[^>]*data-n="2".*?</div>\s*<button class="body"', dom, re.S)
         self.assertIsNotNone(row)
         self.assertIn('min-height: 1905px', row.group(0))
+
+    def test_time_is_inside_turn_card_not_right_hand_grid_column(self):
+        dom = self.shot()
+        row = re.search(r'<div class="st[^>]*data-n="2".*?</button>', dom, re.S)
+        self.assertIsNotNone(row)
+        self.assertIn('class="time"', row.group(0))
+        css = (ROOT / "desktop" / "ui" / "app.css").read_text()
+        self.assertIn('grid-template-columns:var(--lane-x) minmax(0,1fr);', css)
 
 
 if __name__ == "__main__":

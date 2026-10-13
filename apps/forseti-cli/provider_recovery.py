@@ -129,8 +129,8 @@ def _recover_records(line_factory, source_ref: str, provider: str,
     if provider == "codex":
         boundaries = [event["line"] for event in parser.compaction_events]
     else:
-        boundaries = [strand.compaction_meta["line"]
-                      for strand in parser.strands if strand.compaction]
+        boundaries = [event["line"] for event in
+                      parser.snapshot(tail=1)["compaction_events"]]
     if compaction_ordinal > len(boundaries):
         return unknown("missing_compaction_anchor")
     cutoff = boundaries[compaction_ordinal - 1]

@@ -1695,11 +1695,11 @@ function drawDrift() {
     const cls = "lane " + (LANE_CLS[it.kind] || "ld") + (it.open ? " open" : "");
     const laneSpec = ((((lastSnap || {}).source_tree_schema || {}).lanes || {})[it.kind] || {});
     const laneInfo = {
-      label: it.open ? "尚未解決的問題軌道" : "已收回的問題軌道",
+      label: it.label || (it.open ? "尚未解決的問題軌道" : "已收回的問題軌道"),
       meaning: laneSpec.meaning || "這條旁線表示一段可追蹤的問題。",
-      why: `第 ${it.from_n} 輪開始${it.open ? "，目前仍開著" : `，第 ${it.to_n} 輪收回`}`,
-      evidence: it.kind || "UNKNOWN",
-      epistemic: "OBSERVED",
+      why: it.why || `第 ${it.from_n} 輪開始${it.open ? "，目前仍開著" : `，第 ${it.to_n} 輪收回`}`,
+      evidence: it.evidence || it.kind || "UNKNOWN",
+      epistemic: it.epistemic || "INFERRED",
       round: it.from_n,
     };
     const bend = 14;
@@ -1713,13 +1713,13 @@ function drawDrift() {
 
     if (B.y1 > A.y0 + bend) {
       const run = document.createElementNS(NS, "path");
-      run.setAttribute("d", `M ${x} ${A.y0 + bend} L ${x} ${B.y1 - (it.open ? 0 : bend)}`);
+      run.setAttribute("d", `M ${x} ${A.y0 + bend} L ${x} ${B.y1 - (it.open || it.event_link ? 0 : bend)}`);
       add(run, cls);
       addHit(run, laneInfo);
     }
     // 收回來的才畫回收曲線。一路開著的就讓它走到底 ——
     // 沒解決的問題不會自己回到主線。
-    if (!it.open && B.y1 - bend > A.y0 + bend) {
+    if (!it.open && !it.event_link && B.y1 - bend > A.y0 + bend) {
       const back = document.createElementNS(NS, "path");
       back.setAttribute("d",
         `M ${x} ${B.y1 - bend} C ${x} ${B.y1 - bend * .4}, ` +
@@ -2067,7 +2067,8 @@ function renderTree() {
     time.innerHTML = hhmmss(s.started_at) +
       `<span class="dur">${s.growing ? "長中" : dur(s.duration)}</span>`;
 
-    wrap.append(gut, body, time);
+    body.prepend(time);
+    wrap.append(gut, body);
     const markers = [];
     bts.forEach((_, i) => markers.push(["white", i]));
     const compactions = ((lastSnap || {}).compaction_events || [])
@@ -2159,7 +2160,24 @@ function renderTree() {
         `AI 的記憶從這裡開始不完整。` +
         `<div class="adv">錨在全量紀錄第 <span class="num">${m.line || "?"}</span> 行。` +
         `之後有問題，回頭看這一行之前。</div>`;
-      c.querySelector(".x").addEventListener("click", () => {
+      if (compactions.length) {
+        c.classList.add("openable");
+        c.tabIndex = 0;
+        c.setAttribute("role", "button");
+        c.setAttribute("aria-label", `第 ${s.n} 輪對話壓縮，查看原文`);
+        c.addEventListener("click", () =>
+          openNodeWithMarker(s, markerEvidence(s, "compaction", 0,
+            compactions[compactions.length - 1])));
+        c.addEventListener("keydown", (e) => {
+          if (e.target !== c) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            c.click();
+          }
+        });
+      }
+      c.querySelector(".x").addEventListener("click", (e) => {
+        e.stopPropagation();
         dismissed.add(dismissKey("c", s.n)); renderTree();
       });
       lane.appendChild(c);
@@ -2346,20 +2364,19 @@ function openNode(s) {
   recover.disabled = false;
   recover.textContent = "取回壓縮前原文";
   if (marker?.kind === "compaction") {
-    const sourcePath = lastSnap?._archive_source_path;
     const provider = lastSnap?.provider;
     const session = lastSnap?.session;
     recover.onclick = async () => {
       recovery.hidden = false;
       recovery.textContent = "正在讀取原始對話…";
       recover.disabled = true;
-      if (!sourcePath || !["codex", "claude"].includes(provider)) {
+      if (!session || !["codex", "claude"].includes(provider)) {
         recovery.textContent = "UNKNOWN：目前沒有可驗證的原生對話來源。";
         return;
       }
       try {
         const result = JSON.parse(await invoke("recover_context", {
-          sourcePath, provider, sessionId: session, ordinal: marker.ordinal,
+          provider, sessionId: session, ordinal: marker.ordinal,
           roundNumber: marker.roundNumber, expectedLine: marker.expectedLine,
         }));
         if (openSequence !== nodeOpenSequence || lastSnap?.session !== session) return;
@@ -3730,8 +3747,15 @@ function renderPicker() {
   const rows = allSessions.filter((x) =>
     !q || (x.title || "").toLowerCase().includes(q) || x.id.includes(q));
   if (!rows.length) {
-    box.insertAdjacentHTML("beforeend",
-      '<div class="pkNone">沒有符合的</div>');
+    if (/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(q)) {
+      const direct = document.createElement("button");
+      direct.className = "pk";
+      direct.textContent = "以此 Session ID 開啟";
+      direct.addEventListener("click", () => choose(q));
+      box.appendChild(direct);
+    } else {
+      box.insertAdjacentHTML("beforeend", '<div class="pkNone">沒有符合的</div>');
+    }
     return;
   }
 

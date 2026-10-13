@@ -18,6 +18,7 @@ from pathlib import Path
 
 import owner as owner_classifier
 import betrayal
+import lanes
 import source_tree_schema
 import vitals
 from tracker import tracker_for
@@ -306,6 +307,7 @@ def main(argv: list[str]) -> int:
     snap["dims"] = snap_dims
     snap["temp"] = vitals.temperature(snap_dims)
     snap["progress"] = vitals.progress_layers(rows)
+    snap["lanes"] = lanes.summary(rows)
     source_tree_schema.annotate_rows(rows)
     provider = "codex" if ".codex" in target.parts else "claude"
     id_match = _SESSION_ID_RE.search(target.name)

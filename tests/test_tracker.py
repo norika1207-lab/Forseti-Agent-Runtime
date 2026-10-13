@@ -382,6 +382,10 @@ class TestCompaction(Case):
         self.assertEqual(black[0].size, 6)
         self.assertIn("997,325", black[0].detail)
         self.assertEqual(s.compaction_meta["pre_tokens"], 997325)
+        self.assertEqual(self.tk.snapshot()["compaction_events"], [{
+            "ordinal": 1, "n": 1, "line": 2, "at": black[0].at,
+            "label": "對話壓縮", "size": 6,
+        }])
 
     def test_the_compaction_dot_carries_the_anchor_line(self):
         """§6.1 黑點知道自己在全量紀錄的第幾行,那是錨的座標。"""
@@ -390,6 +394,18 @@ class TestCompaction(Case):
                     "compactMetadata": {"preTokens": 100, "postTokens": 2}})
         self.tk.poll()
         self.assertEqual(self.tk.strands[0].compaction_meta["line"], 2)
+
+    def test_two_metadata_records_in_one_round_keep_separate_anchors(self):
+        self.write(self.owner("做"),
+                   {"type": "system", "timestamp": iso(),
+                    "compactMetadata": {"preTokens": 100, "postTokens": 20}},
+                   {"type": "system", "timestamp": iso(),
+                    "compactMetadata": {"preTokens": 200, "postTokens": 30}})
+        self.tk.poll()
+        events = self.tk.snapshot()["compaction_events"]
+        self.assertEqual([(e["ordinal"], e["line"]) for e in events],
+                         [(1, 2), (2, 3)])
+        self.assertEqual(self.tk.snapshot()["compaction_total"], 2)
 
     def test_compaction_without_a_strand_still_anchors(self):
         """session 一開頭就是續接摘要的情況。

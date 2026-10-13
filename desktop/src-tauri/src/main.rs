@@ -205,7 +205,7 @@ fn run_session_surface(session: Option<String>, tail: Option<u32>) -> Result<Str
         return Err(format!("Session runtime 失敗:{}",
                            String::from_utf8_lossy(&out.stderr)));
     }
-    let snapshot: serde_json::Value = serde_json::from_slice(&out.stdout)
+    let mut snapshot: serde_json::Value = serde_json::from_slice(&out.stdout)
         .map_err(|e| format!("Session runtime 回傳無效 JSON:{e}"))?;
     let source = snapshot.get("_archive_source_path")
         .and_then(serde_json::Value::as_str).map(str::to_owned);
@@ -223,22 +223,25 @@ fn run_session_surface(session: Option<String>, tail: Option<u32>) -> Result<Str
     )));
     let selected = ACTIVE_RECOVERY_SOURCE.get_or_init(|| Mutex::new(None));
     *selected.lock().map_err(|_| "Session 來源鎖無法使用".to_string())? = active;
+    if let Some(object) = snapshot.as_object_mut() {
+        object.remove("_archive_source_path");
+        object.remove("path");
+    }
     serde_json::to_string(&snapshot).map_err(|e| format!("Session JSON 無法序列化:{e}"))
 }
 
 static ACTIVE_RECOVERY_SOURCE: OnceLock<Mutex<Option<(String, String, String)>>> = OnceLock::new();
 
-fn run_recovery_request(source_path: String, provider: String, session_id: String,
+fn run_recovery_request(provider: String, session_id: String,
                         ordinal: u32, round_number: u32,
                         expected_line: u32) -> Result<String, String> {
     let selected = ACTIVE_RECOVERY_SOURCE.get_or_init(|| Mutex::new(None));
-    let is_current = selected.lock()
+    let source_path = selected.lock()
         .map_err(|_| "Session 來源鎖無法使用".to_string())?
-        .as_ref().is_some_and(|(path, kind, id)|
-            path == &source_path && kind == &provider && id == &session_id);
-    if !is_current {
-        return Err("選取的 Session 已變更；請重新點選壓縮點".to_string());
-    }
+        .as_ref().filter(|(_, kind, id)|
+            kind == &provider && id == &session_id)
+        .map(|(path, _, _)| path.clone())
+        .ok_or_else(|| "選取的 Session 已變更；請重新點選壓縮點".to_string())?;
     let py = find_python().ok_or_else(|| "找不到可執行的 Python CLI".to_string())?;
     let exe = std::env::current_exe()
         .map_err(|e| format!("找不到 Forseti 執行檔位置:{e}"))?;
@@ -551,11 +554,11 @@ async fn strands(session: Option<String>, tail: Option<u32>) -> Result<String, S
 }
 
 #[tauri::command]
-async fn recover_context(source_path: String, provider: String, session_id: String,
+async fn recover_context(provider: String, session_id: String,
                          ordinal: u32, round_number: u32,
                          expected_line: u32) -> Result<String, String> {
     run_api_off_main(move || run_recovery_request(
-        source_path, provider, session_id, ordinal, round_number, expected_line)).await
+        provider, session_id, ordinal, round_number, expected_line)).await
 }
 
 #[tauri::command]

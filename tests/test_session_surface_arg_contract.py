@@ -32,6 +32,7 @@ def test_auto_session_with_tail_preserves_empty_session_slot(tmp_path, monkeypat
     assert data["session"] == sid
     assert data["session_title"] == "掃描公司IP中的aiserver遠端登入"
     assert data["window"]["tail"] == 180
+    assert "lanes" in data and "lanes" in data["lanes"]
 
     rust = (ROOT / "desktop" / "src-tauri" / "src" / "main.rs").read_text()
     assert "cmd.arg(session.unwrap_or_default());" in rust
